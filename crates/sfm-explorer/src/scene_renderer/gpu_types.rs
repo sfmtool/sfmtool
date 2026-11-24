@@ -98,13 +98,6 @@ pub(super) struct PointUniforms {
     pub(crate) _pad: [f32; 4],
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub(super) struct EdgeInstance {
-    pub(crate) endpoint_a: [f32; 3],
-    pub(crate) endpoint_b: [f32; 3],
-}
-
 /// Edge instance with per-endpoint width for tapered compass spikes.
 /// The w component of each endpoint is a width multiplier (0.0 = point, 1.0 = full width).
 #[repr(C)]
@@ -116,7 +109,8 @@ pub(super) struct CompassEdgeInstance {
 
 /// One piece of an overlay figure, as the
 /// [overlay ribbon store](super::overlay_ribbons::OverlayRibbons) holds it: a
-/// segment, a ring or a disc of the bench figure or of a drawn measurement.
+/// segment, a ring or a disc of a track ray, of the bench figure or of a drawn
+/// measurement.
 ///
 /// Nothing in it depends on the camera. Its places are homogeneous world
 /// points, `w = 1.0` for a place and `w = 0.0` for a direction, which is drawn
@@ -128,8 +122,9 @@ pub(super) struct CompassEdgeInstance {
 /// writes nothing.
 ///
 /// Wider than [`CompassEdgeInstance`] because the compass is one object in one
-/// colour, while this pass's pieces each carry their own: an observation's
-/// verdict colour, or a measurement's colour and its halo.
+/// colour, while this pass's pieces each carry their own: the track rays'
+/// orange, an observation's verdict colour, or a measurement's colour and its
+/// halo.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct OverlayInstance {
@@ -164,7 +159,8 @@ impl OverlayInstance {
     pub(crate) const DISC: u32 = 2;
 
     /// Behind the scene it is held at `BEHIND_OPACITY`, however far behind,
-    /// as a measurement is and as a highlighted surfel's hidden outline is.
+    /// as a measurement and a track ray are and as a highlighted surfel's
+    /// hidden outline is.
     pub(crate) const HOLD: u32 = 0;
     /// Behind the scene it fades with how far behind it is, down to a floor,
     /// as the bench figure does.

@@ -24,7 +24,7 @@ use sfmtool_core::reconstruction::ObservationSource;
 use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::super::gpu_types::{
-    EdgeInstance, BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS,
+    OverlayInstance, BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS,
     THUMBNAIL_SIZE,
 };
 use super::super::picking::{PickTarget, PICK_TAG_FRUSTUM, PICK_TAG_NONE, PICK_TAG_POINT};
@@ -32,7 +32,7 @@ use super::super::recon::{NodeDisplay, ReconResources};
 use super::super::uniforms::recon_uniforms;
 use super::super::SceneRenderer;
 use super::bg_image::{background_level, level_uv_scale};
-use super::track_rays::track_ray_edges;
+use super::track_rays::{track_ray_instances, TRACK_RAY_COLOR, TRACK_RAY_HALF_WIDTH};
 use super::Uploaded;
 use crate::scene::{ImageRef, NodeTint, PointRef, ReconId, TINT_PALETTE};
 use crate::state::CachedSiftFeatures;
@@ -246,34 +246,6 @@ fn sift_cache(images: usize, features: usize) -> HashMap<ImageRef, CachedSiftFea
             )
         })
         .collect()
-}
-
-/// Bounding-box diagonal of the camera centres, recomputed here independently
-/// of the implementation so the infinity-ray length assertion is a real check
-/// rather than a restatement of the code under test.
-fn camera_cloud_diagonal(recon: &SfmrReconstruction) -> f64 {
-    let centres: Vec<_> = recon
-        .image_set
-        .images
-        .iter()
-        .map(|im| im.camera_center())
-        .collect();
-    let axis_span = |f: fn(&nalgebra::Point3<f64>) -> f64| {
-        let lo = centres.iter().map(f).fold(f64::INFINITY, f64::min);
-        let hi = centres.iter().map(f).fold(f64::NEG_INFINITY, f64::max);
-        hi - lo
-    };
-    let (dx, dy, dz) = (axis_span(|p| p.x), axis_span(|p| p.y), axis_span(|p| p.z));
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-fn edge_length(e: &super::super::gpu_types::EdgeInstance) -> f64 {
-    let d = [
-        (e.endpoint_b[0] - e.endpoint_a[0]) as f64,
-        (e.endpoint_b[1] - e.endpoint_a[1]) as f64,
-        (e.endpoint_b[2] - e.endpoint_a[2]) as f64,
-    ];
-    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
 }
 
 // ── points ──────────────────────────────────────────────────────────────
@@ -1293,37 +1265,203 @@ fn resetting_a_node_transform_puts_its_bounds_back() {
 
 // ── track rays ──────────────────────────────────────────────────────────
 
+/// `p` as a homogeneous point, for comparing against an instance's ends.
+fn homogeneous(p: nalgebra::Point3<f64>, w: f32) -> [f32; 4] {
+    [p.x as f32, p.y as f32, p.z as f32, w]
+}
+
+/// Whether two homogeneous ends agree to within `tolerance` in every
+/// component.
+fn near(a: [f32; 4], b: [f32; 4], tolerance: f32) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tolerance)
+}
+
+/// The place an instance's end names, ignoring its `w`.
+fn place(end: [f32; 4]) -> nalgebra::Point3<f64> {
+    nalgebra::Point3::new(end[0] as f64, end[1] as f64, end[2] as f64)
+}
+
 #[test]
 fn track_rays_are_built_through_the_owning_nodes_transform() {
     let recon = demo(4);
     let cache = sift_cache(recon.image_set.images.len(), 8);
     let t = similarity(2.0);
 
-    let native = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
-    let moved = track_ray_edges(&edited_of(&recon), point(0), &cache, &t);
+    let native = track_ray_instances(&edited_of(&recon), point(0), &cache, &identity());
+    let moved = track_ray_instances(&edited_of(&recon), point(0), &cache, &t);
 
-    // Track rays are drawn from a shared singleton buffer with no per-recon
-    // `model` matrix, so the transform has to be applied on the CPU or the rays
-    // would stay behind when the node they belong to moves.
+    // The store has no per-recon `model` matrix, so the transform has to be
+    // applied on the CPU or the rays would stay behind when the node they
+    // belong to moves. A finite point's rays run between two places, and each
+    // goes through the whole similarity.
+    assert_eq!(native.len(), 2);
     assert_eq!(native.len(), moved.len());
     for (a, b) in native.iter().zip(moved.iter()) {
-        for (raw, mapped) in [(a.endpoint_a, b.endpoint_a), (a.endpoint_b, b.endpoint_b)] {
-            let expected = t.apply_to_point(&nalgebra::Point3::new(
-                raw[0] as f64,
-                raw[1] as f64,
-                raw[2] as f64,
-            ));
-            let d = (nalgebra::Point3::new(mapped[0] as f64, mapped[1] as f64, mapped[2] as f64)
-                - expected)
-                .norm();
-            assert!(d < 1e-4, "endpoint {mapped:?} should be {expected:?}");
+        for (raw, mapped) in [(a.a, b.a), (a.b, b.b)] {
+            assert_eq!((raw[3], mapped[3]), (1.0, 1.0), "both ends are places");
+            let expected = t.apply_to_point(&place(raw));
+            assert!(
+                near(mapped, homogeneous(expected, 1.0), 1e-4),
+                "end {mapped:?} should be {expected:?}"
+            );
+        }
+    }
+}
+
+/// A ray to a finite point runs from the observing camera's centre to the
+/// nearest point on the observation ray to the 3D point, so the gap between
+/// its end and the point is the reprojection error.
+#[test]
+fn a_finite_point_s_rays_end_at_the_nearest_point_to_it() {
+    let recon = demo(4);
+    let cache = sift_cache(recon.image_set.images.len(), 8);
+    let edited = edited_of(&recon);
+    let rays = track_ray_instances(&edited, point(0), &cache, &identity());
+
+    let view = edited.point(0).expect("point 0");
+    let target = view.point().position;
+    let observations = view.observations();
+    assert_eq!(rays.len(), 2);
+    assert_eq!(observations.len(), 2);
+    for (ray, obs) in rays.iter().zip(observations.iter()) {
+        let centre = recon.image_set.images[obs.image_index as usize].camera_center();
+        assert!(near(ray.a, homogeneous(centre, 1.0), 1e-5), "{ray:?}");
+        assert_eq!(ray.b[3], 1.0, "a finite point's ray ends at a place");
+        let end = place(ray.b);
+        let along = end - centre;
+        assert!(along.norm() > 1e-3, "the ray has length");
+        // The nearest point: the gap to the 3D point is square to the ray.
+        let gap = target - end;
+        assert!(
+            gap.dot(&along.normalize()).abs() < 1e-4 * gap.norm().max(1.0),
+            "the end {end:?} is not the nearest point to {target:?}"
+        );
+    }
+}
+
+/// A point at infinity's rays end at the observation direction, `w = 0`,
+/// turned by the node's rotation alone: the similarity's scale and translation
+/// do not move a direction. Nothing stops them at a length.
+#[test]
+fn a_point_at_infinity_s_rays_end_at_a_direction_turned_by_the_rotation_only() {
+    let mut recon = demo(4);
+    recon.point_set.points[0].w = 0.0;
+    assert!(recon.point_set.points[0].is_at_infinity());
+    let cache = sift_cache(recon.image_set.images.len(), 8);
+    let t = similarity(3.0);
+
+    let native = track_ray_instances(&edited_of(&recon), point(0), &cache, &identity());
+    let moved = track_ray_instances(&edited_of(&recon), point(0), &cache, &t);
+
+    assert_eq!(native.len(), 2);
+    for (raw, mapped) in native.iter().zip(&moved) {
+        assert_eq!(raw.a[3], 1.0, "the camera's end is a place");
+        assert_eq!(
+            (raw.b[3], mapped.b[3]),
+            (0.0, 0.0),
+            "the far end is a direction"
+        );
+        let d = place(raw.b).coords;
+        assert!(
+            (d.norm() - 1.0).abs() < 1e-5,
+            "a unit direction, not a length: {d:?}"
+        );
+        let turned = t.rotation.rotate_vector(&d);
+        assert!(
+            near(mapped.b, homogeneous(turned.into(), 0.0), 1e-5),
+            "{:?} should be {turned:?}, the direction turned and neither scaled nor moved",
+            mapped.b
+        );
+        // The camera's end is still a place, through the whole similarity.
+        let centre = t.apply_to_point(&place(raw.a));
+        assert!(near(mapped.a, homogeneous(centre, 1.0), 1e-4));
+    }
+}
+
+/// The direction a ray to a point at infinity ends at projects where that
+/// point's own splat is drawn, through a node transform with all three parts:
+/// the overlay shader's `to_clip` of the direction against the point shader's
+/// `view_proj * (model * vec4(direction, 0))`, with the point at infinity
+/// stored in the direction its first observation sees it in. Both pin the
+/// direction's depth at `INF_DEPTH`.
+#[test]
+fn a_ray_to_a_point_at_infinity_ends_on_the_point_s_splat() {
+    use super::super::bench_track::{bench_track_uniforms, OverlayView};
+    use super::super::uniforms::model_matrix;
+
+    let mut recon = demo(4);
+    let cache = sift_cache(recon.image_set.images.len(), 8);
+    recon.point_set.points[0].w = 0.0;
+    let seen = track_ray_instances(&edited_of(&recon), point(0), &cache, &identity())[0].b;
+    recon.point_set.points[0].position = place(seen);
+    let t = similarity(3.0);
+    let ray = track_ray_instances(&edited_of(&recon), point(0), &cache, &t)[0];
+
+    // A camera somewhere else, looking near the direction the node turns the
+    // point to, so the splat lands on screen but not at its centre.
+    let d = t.rotation.rotate_vector(&place(seen).coords);
+    let position = nalgebra::Point3::new(7.0, -3.0, 2.0);
+    let off = d.cross(&nalgebra::Vector3::z()).normalize() * 0.2;
+    let camera = crate::viewer_3d::ViewportCamera {
+        camera: sfmtool_core::Camera::look_at(position, position + d + off, nalgebra::Vector3::z()),
+        ..Default::default()
+    };
+    let uniforms = bench_track_uniforms(&camera, (800, 600), 1.0, OverlayView::default());
+    let mat = |m: [[f32; 4]; 4]| nalgebra::Matrix4::from_fn(|r, c| m[c][r] as f64);
+    let vec = |v: [f32; 4]| nalgebra::Vector4::from_fn(|r, _| v[r] as f64);
+
+    // bench_track.wgsl: `to_clip(to_view(b, false))`.
+    let ray_clip = mat(uniforms.proj) * (mat(uniforms.view) * vec(ray.b));
+    // points.wgsl: the splat's centre.
+    let stored = homogeneous(recon.point_set.points[0].position, 0.0);
+    let splat_clip = mat(uniforms.view_proj) * (mat(model_matrix(&t)) * vec(stored));
+    assert!(ray_clip.w > 0.0 && splat_clip.w > 0.0, "both in front");
+    let ray_ndc = ray_clip.xy() / ray_clip.w;
+    let splat_ndc = splat_clip.xy() / splat_clip.w;
+    assert!(
+        splat_ndc.norm() > 0.05 && splat_ndc.norm() < 1.0,
+        "on screen, off centre: {splat_ndc:?}"
+    );
+    assert!(
+        (ray_ndc - splat_ndc).norm() < 1e-4,
+        "the ray ends at {ray_ndc:?} and the splat is at {splat_ndc:?}"
+    );
+
+    // Both shaders pin a direction at INF_DEPTH.
+    let bench = include_str!("../../shaders/bench_track.wgsl");
+    let points = include_str!("../../shaders/points.wgsl");
+    assert!(bench
+        .lines()
+        .any(|l| l.trim() == "return vec4<f32>(clip.xy, INF_DEPTH * clip.w, clip.w);"));
+    assert!(points.lines().any(|l| l.trim()
+        == "out.clip_pos = vec4<f32>(ndc_xy * clip_c.w, INF_DEPTH * clip_c.w, clip_c.w);"));
+}
+
+/// Every ray is a segment in the rays' orange and width, held at
+/// `BEHIND_OPACITY` behind the scene and not pulled toward the eye, for a
+/// finite point and for a point at infinity alike.
+#[test]
+fn track_rays_are_held_unpulled_segments_in_the_rays_orange() {
+    let mut recon = demo(4);
+    recon.point_set.points[1].w = 0.0;
+    let cache = sift_cache(recon.image_set.images.len(), 8);
+    for p in [0, 1] {
+        let rays = track_ray_instances(&edited_of(&recon), point(p), &cache, &identity());
+        assert_eq!(rays.len(), 2);
+        for ray in rays {
+            assert_eq!(ray.kind, OverlayInstance::SEGMENT);
+            assert_eq!(ray.flags, OverlayInstance::HOLD, "held, and not pulled");
+            assert_eq!(ray.color, TRACK_RAY_COLOR);
+            assert_eq!(ray.half_width, TRACK_RAY_HALF_WIDTH);
+            assert_eq!((ray.radius, ray.inset), (0.0, [0.0, 0.0]));
         }
     }
 }
 
 #[test]
-fn upload_track_rays_emits_one_ray_per_cached_observation() {
-    let (device, _queue) = device();
+fn upload_track_rays_writes_one_ray_per_cached_observation_into_the_store() {
+    use super::super::overlay_ribbons::{OverlayTarget, ProducerId};
+    let (device, queue) = device();
     let recon = demo(4);
     // Point 3, not 0: demo sets feature_indexes[i] = i, so a non-zero point
     // makes the obs_start + k -> feature_indexes -> cache lookup chain
@@ -1331,37 +1469,36 @@ fn upload_track_rays_emits_one_ray_per_cached_observation() {
     let cache = sift_cache(recon.image_set.images.len(), 8);
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &edited_of(&recon), point(3), &cache, &identity());
+    r.upload_track_rays(
+        &device,
+        &queue,
+        &edited_of(&recon),
+        point(3),
+        &cache,
+        &identity(),
+    );
 
     // Demo gives every point two observations.
-    assert_eq!(r.track_ray_count, 2);
-    assert!(r.track_ray_edge_buffer.is_some());
-}
-
-#[test]
-fn track_rays_for_a_finite_point_stop_near_the_scene() {
-    let recon = demo(4);
-    let cache = sift_cache(recon.image_set.images.len(), 8);
-
-    let edges = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
-
-    // A finite point terminates each ray at the closest approach to it, which
-    // lies inside the camera cloud — decisively shorter than the fixed
-    // 2x-scene-extent an infinity point would produce (asserted below).
-    assert_eq!(edges.len(), 2);
-    let diagonal = camera_cloud_diagonal(&recon);
-    for e in &edges {
-        let len = edge_length(e);
-        assert!(
-            len > 0.0 && len < diagonal,
-            "finite ray length {len} should be inside the scene (diagonal {diagonal})",
-        );
-    }
+    assert_eq!(r.track_ray_count(), 2);
+    assert_eq!(
+        r.track_rays(),
+        track_ray_instances(&edited_of(&recon), point(3), &cache, &identity())
+    );
+    let drawn: Vec<_> = r
+        .overlay_ribbons
+        .draws(OverlayTarget::Scene)
+        .map(|(producer, range)| (producer, range.len()))
+        .collect();
+    assert_eq!(
+        drawn,
+        [(ProducerId::TrackRays, 2)],
+        "drawn on the scene target"
+    );
 }
 
 #[test]
 fn upload_track_rays_skips_observations_with_no_cached_features() {
-    let (device, _queue) = device();
+    let (device, queue) = device();
     let recon = demo(4);
     let mut r = SceneRenderer::new();
 
@@ -1369,37 +1506,45 @@ fn upload_track_rays_skips_observations_with_no_cached_features() {
     // rather than a misleading one.
     r.upload_track_rays(
         &device,
+        &queue,
         &edited_of(&recon),
         point(0),
         &HashMap::new(),
         &identity(),
     );
 
-    assert_eq!(r.track_ray_count, 0);
-    assert!(r.track_ray_edge_buffer.is_none());
+    assert_eq!(r.track_ray_count(), 0);
 }
 
 #[test]
 fn upload_track_rays_skips_feature_indexes_past_a_truncated_cache() {
-    let (device, _queue) = device();
+    let (device, queue) = device();
     let recon = demo(4);
     // Cache present but holding zero features, so every lookup misses.
     let cache = sift_cache(recon.image_set.images.len(), 0);
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &edited_of(&recon), point(0), &cache, &identity());
+    r.upload_track_rays(
+        &device,
+        &queue,
+        &edited_of(&recon),
+        point(0),
+        &cache,
+        &identity(),
+    );
 
-    assert_eq!(r.track_ray_count, 0);
+    assert_eq!(r.track_ray_count(), 0);
 }
 
 #[test]
 fn upload_track_rays_reads_inline_keypoints_without_a_sift_cache() {
-    let (device, _queue) = device();
+    let (device, queue) = device();
     let recon = with_embedded_keypoints(demo(4));
     let mut r = SceneRenderer::new();
 
     r.upload_track_rays(
         &device,
+        &queue,
         &edited_of(&recon),
         point(0),
         &HashMap::new(),
@@ -1408,40 +1553,12 @@ fn upload_track_rays_reads_inline_keypoints_without_a_sift_cache() {
 
     // Embedded-patch reconstructions carry keypoints inline, so no cache is
     // consulted and the rays still build.
-    assert_eq!(r.track_ray_count, 2);
+    assert_eq!(r.track_ray_count(), 2);
 }
 
-#[test]
-fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
-    let mut recon = demo(4);
-    recon.point_set.points[0].w = 0.0;
-    assert!(recon.point_set.points[0].is_at_infinity());
-    let cache = sift_cache(recon.image_set.images.len(), 8);
-
-    let edges = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
-
-    // An infinity point's stored position is a unit direction at the origin,
-    // which would project behind every camera and collapse each ray to zero
-    // length. Instead each ray runs outward along its own bearing to
-    // INFINITY_RAY_SCENE_MULTIPLE (2.0) x the camera-cloud diagonal.
-    assert_eq!(edges.len(), 2);
-    let expected = 2.0 * camera_cloud_diagonal(&recon);
-    assert!(expected > 0.0);
-    for e in &edges {
-        let len = edge_length(e);
-        assert!(
-            (len - expected).abs() < 1e-3 * expected,
-            "infinity ray length {len} should be {expected}",
-        );
-    }
-}
-
-/// The endpoints of one build, in a shape that compares.
-///
-/// `EdgeInstance` is a GPU record and carries no `PartialEq`; what the tests
-/// below are asking about is the two points each ray runs between.
-fn endpoints(edges: &[EdgeInstance]) -> Vec<[[f32; 3]; 2]> {
-    edges.iter().map(|e| [e.endpoint_a, e.endpoint_b]).collect()
+/// The ends of one build, in a shape that compares.
+fn endpoints(rays: &[OverlayInstance]) -> Vec<[[f32; 4]; 2]> {
+    rays.iter().map(|ray| [ray.a, ray.b]).collect()
 }
 
 /// The rays are geometry and not just a gate: a version that moves the selected
@@ -1451,12 +1568,12 @@ fn endpoints(edges: &[EdgeInstance]) -> Vec<[[f32; 3]; 2]> {
 /// the question is about the two things the frame holds together -- the point
 /// and the version it is read out of.
 #[test]
-fn track_ray_edges_follow_the_version_under_the_selection() {
+fn track_rays_follow_the_version_under_the_selection() {
     let (mut state, id) = crate::state::edits::tests::adjustable_state();
     let selected = PointRef::new(id, 0);
     let built = |state: &crate::state::AppState| {
         let node = state.node(id).expect("the node is loaded");
-        endpoints(&track_ray_edges(
+        endpoints(&track_ray_instances(
             node.edited(),
             selected,
             &state.sift_cache,
@@ -1489,14 +1606,14 @@ fn track_ray_edges_follow_the_version_under_the_selection() {
 /// moving it: the rays are built for the index the commit wrote, and the value
 /// they come out of is the one it pushed.
 #[test]
-fn track_ray_edges_follow_a_committed_track_to_its_new_index() {
+fn track_rays_follow_a_committed_track_to_its_new_index() {
     let (mut state, id) = crate::bench::tests::state();
     let label = crate::bench::tests::put_on_bench(&mut state, id);
     let origin = PointRef::new(id, 2);
     state.select_point(origin);
     let built = |state: &crate::state::AppState, point: PointRef| {
         let node = state.node(id).expect("the node is loaded");
-        endpoints(&track_ray_edges(
+        endpoints(&track_ray_instances(
             node.edited(),
             point,
             &state.sift_cache,
@@ -1524,18 +1641,28 @@ fn track_ray_edges_follow_a_committed_track_to_its_new_index() {
 }
 
 #[test]
-fn clear_track_rays_drops_the_buffer() {
-    let (device, _queue) = device();
+fn clear_track_rays_empties_their_region_and_keeps_its_room() {
+    use super::super::overlay_ribbons::{OverlayTarget, ProducerId};
+    let (device, queue) = device();
     let recon = demo(4);
     let cache = sift_cache(recon.image_set.images.len(), 8);
     let mut r = SceneRenderer::new();
-    r.upload_track_rays(&device, &edited_of(&recon), point(0), &cache, &identity());
-    assert_eq!(r.track_ray_count, 2);
+    r.upload_track_rays(
+        &device,
+        &queue,
+        &edited_of(&recon),
+        point(0),
+        &cache,
+        &identity(),
+    );
+    assert_eq!(r.track_ray_count(), 2);
 
-    r.clear_track_rays();
+    r.clear_track_rays(&device, &queue);
 
-    assert_eq!(r.track_ray_count, 0);
-    assert!(r.track_ray_edge_buffer.is_none());
+    assert_eq!(r.track_ray_count(), 0);
+    let region = r.overlay_ribbons.region(ProducerId::TrackRays);
+    assert_eq!(region.map(|(_, _, capacity)| capacity), Some(64));
+    assert_eq!(r.overlay_ribbons.drawn_count(OverlayTarget::Scene), 0);
 }
 
 // ── background image ────────────────────────────────────────────────────
@@ -3636,12 +3763,9 @@ fn track_rays_leave_through_their_image_s_own_intrinsics() {
     let (shared, adjusted, own) = adjusted_triple(demo(4));
     let cache = sift_cache(shared.image_set.images.len(), 8);
     let rays = |recon: &SfmrReconstruction| {
-        let edges = track_ray_edges(&edited_of(recon), point(3), &cache, &identity());
+        let edges = track_ray_instances(&edited_of(recon), point(3), &cache, &identity());
         assert_eq!(edges.len(), 2, "point 3 is observed by images 3 and 4");
-        edges
-            .iter()
-            .map(|e| [e.endpoint_a, e.endpoint_b])
-            .collect::<Vec<_>>()
+        edges.iter().map(|e| [e.a, e.b]).collect::<Vec<_>>()
     };
     let (shared, adjusted, own) = (rays(&shared), rays(&adjusted), rays(&own));
     assert_eq!(adjusted, own);
@@ -3676,7 +3800,7 @@ fn zero_adjustments_draw_exactly_the_shared_camera() {
         );
         let cache = sift_cache(recon.image_set.images.len(), 8);
         let rays = |recon: &SfmrReconstruction| {
-            let edges = track_ray_edges(&edited_of(recon), point(3), &cache, &identity());
+            let edges = track_ray_instances(&edited_of(recon), point(3), &cache, &identity());
             bytemuck::cast_slice::<_, u8>(&edges).to_vec()
         };
         assert_eq!(rays(&listed), rays(&recon));
@@ -3788,12 +3912,9 @@ fn track_rays_leave_through_their_image_s_lens_corrections() {
         let (shared, corrected, own) = corrected_triple(demo(4), scanlines);
         let cache = sift_cache(shared.image_set.images.len(), 8);
         let rays = |recon: &SfmrReconstruction| {
-            let edges = track_ray_edges(&edited_of(recon), point(3), &cache, &identity());
+            let edges = track_ray_instances(&edited_of(recon), point(3), &cache, &identity());
             assert_eq!(edges.len(), 2, "point 3 is observed by images 3 and 4");
-            edges
-                .iter()
-                .map(|e| [e.endpoint_a, e.endpoint_b])
-                .collect::<Vec<_>>()
+            edges.iter().map(|e| [e.a, e.b]).collect::<Vec<_>>()
         };
         let (shared, corrected, own) = (rays(&shared), rays(&corrected), rays(&own));
         assert_eq!(corrected, own);
@@ -3831,7 +3952,7 @@ fn zero_lens_corrections_draw_exactly_the_shared_camera() {
         );
         let cache = sift_cache(recon.image_set.images.len(), 8);
         let rays = |recon: &SfmrReconstruction| {
-            let edges = track_ray_edges(&edited_of(recon), point(3), &cache, &identity());
+            let edges = track_ray_instances(&edited_of(recon), point(3), &cache, &identity());
             bytemuck::cast_slice::<_, u8>(&edges).to_vec()
         };
         assert_eq!(rays(&listed), rays(&recon));

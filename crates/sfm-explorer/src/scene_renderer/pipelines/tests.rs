@@ -38,7 +38,6 @@ fn every_shader_compiles() {
     let image_quad = super::image_quad::create(&device);
     super::patch::create(&device);
     super::target::create(&device);
-    super::track_ray::create(&device);
     super::bench_track::create(&device);
     let bg_image = super::bg_image::create(&device);
     // These two reuse the bind-group layout of the pipeline they extend.

@@ -128,9 +128,7 @@ passed as a uniform to the frustum shader, which boosts brightness in the
 fragment shader. This is zero-cost per frame — no frustum buffer re-upload.
 
 The `hovered_image_index: u32` field is in `FrustumUniforms`. The sentinel
-value `0xFFFFFFFF` means "no hover". The `FrustumUniforms` struct is shared
-with track ray uniforms (`update_track_ray_uniforms`), which always sets
-`hovered_image_index` to `0xFFFFFFFF`.
+value `0xFFFFFFFF` means "no hover".
 
 **Point hover highlight via uniform:** `hovered_point_index: u32` in
 `PointUniforms` follows the existing `selected_point_index` pattern. The

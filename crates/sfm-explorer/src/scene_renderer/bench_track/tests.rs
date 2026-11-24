@@ -14,9 +14,9 @@
 use sfmtool_core::bench::EditableTrack;
 
 use super::super::gpu_types::{
-    mat4_to_cols, BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
+    mat4_to_cols, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
 };
-use super::super::overlay_ribbons::{OverlayRibbons, OverlayTarget, ProducerId};
+use super::super::overlay_ribbons::{OverlayTarget, ProducerId};
 use super::super::SceneRenderer;
 use super::OverlayView;
 use crate::scene::ImageRef;
@@ -232,91 +232,77 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
     let edges = super::figure_instances(&figure);
     // Every kind of piece: a segment, a ring and a disc.
     let measurements = [segment(1.0), ring(), disc()];
-    let disc: Vec<BenchDiscVertex> = figure
-        .disc
-        .iter()
-        .map(|vertex| BenchDiscVertex {
-            position: vertex.at,
-            color: vertex.color,
-        })
-        .collect();
-    let quad = super::super::pipelines::points::create(&device).quad_vertex_buffer;
-    let buffer = |label, contents: &[u8]| {
-        wgpu::util::DeviceExt::create_buffer_init(
-            &device,
-            &wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents,
-                usage: wgpu::BufferUsages::VERTEX,
-            },
-        )
-    };
-    let disc_buffer = buffer("bench track disc", bytemuck::cast_slice(&disc));
-    // Both targets' instances in the one store, the measurements written
-    // first so that the figure's write moves their region along: each pass
-    // then draws a range of the shared buffer, one of them away from its
-    // start.
-    let mut store = OverlayRibbons::default();
-    store.write(
+    // A track ray to a finite point and one to a point at infinity, whose far
+    // end is a direction.
+    let rays = [
+        OverlayInstance::segment(
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0],
+            [1.0, 0.647, 0.0, 0.6],
+            0.75,
+            OverlayInstance::HOLD,
+        ),
+        OverlayInstance::segment(
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.647, 0.0, 0.6],
+            0.75,
+            OverlayInstance::HOLD,
+        ),
+    ];
+
+    // The renderer's own pass, over the pipelines, targets and bind group as
+    // `ensure_pipelines` and `ensure_size` make them.
+    let mut r = SceneRenderer::new();
+    r.bench_track_edge_pipeline = Some(resources.edge_pipeline);
+    r.measurement_pipeline = Some(resources.measurement_pipeline);
+    r.bench_track_disc_pipeline = Some(resources.disc_pipeline);
+    r.quad_vertex_buffer =
+        Some(super::super::pipelines::points::create(&device).quad_vertex_buffer);
+    r.bench_track_bind_group = Some(bind_group);
+    r.edl_output_view = Some(output);
+    r.measurement_layer_view = Some(encoded);
+
+    // All three producers' instances in the one store, the measurements
+    // written first so that the later writes move their region along: each
+    // pass then draws ranges of the shared buffer away from its start.
+    r.upload_measurements(&device, &queue, &measurements);
+    r.upload_bench_track(&device, &queue, Some(&figure));
+    r.overlay_ribbons.write(
         &device,
         &queue,
-        ProducerId::Measurements,
-        OverlayTarget::MeasurementLayer,
-        &measurements,
-    );
-    store.write(
-        &device,
-        &queue,
-        ProducerId::BenchFigure,
+        ProducerId::TrackRays,
         OverlayTarget::Scene,
-        &edges,
+        &rays,
     );
-    let scene: Vec<_> = store.draws(OverlayTarget::Scene).collect();
-    let layer: Vec<_> = store.draws(OverlayTarget::MeasurementLayer).collect();
-    assert_eq!(scene, [(ProducerId::BenchFigure, 0..edges.len() as u32)]);
+    assert!(r.bench_track_disc_count > 0, "the figure's disc is drawn");
+    let scene: Vec<_> = r
+        .overlay_ribbons
+        .draws(OverlayTarget::Scene)
+        .map(|(producer, range)| (producer, range.len()))
+        .collect();
+    assert_eq!(
+        scene,
+        [
+            (ProducerId::TrackRays, rays.len()),
+            (ProducerId::BenchFigure, edges.len())
+        ],
+        "the rays are drawn first, under the figure"
+    );
+    let layer: Vec<_> = r
+        .overlay_ribbons
+        .draws(OverlayTarget::MeasurementLayer)
+        .collect();
     assert_eq!(layer.len(), 1);
-    assert!(layer[0].1.start >= edges.len() as u32, "{layer:?}");
+    assert!(layer[0].1.start > 0, "{layer:?}");
     assert_eq!(layer[0].1.len(), measurements.len());
 
-    let mut encoder = device.create_command_encoder(&Default::default());
-    let begin = |encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView| {
-        encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("bench track pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            })
-            .forget_lifetime()
-    };
-    {
-        let mut pass = begin(&mut encoder, &encoded);
-        pass.set_pipeline(&resources.measurement_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.set_vertex_buffer(0, quad.slice(..));
-        store.draw(&mut pass, OverlayTarget::MeasurementLayer);
+    // With the rays, and with the preview leaving them out.
+    for show_track_rays in [true, false] {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        r.render_bench_track(&mut encoder, show_track_rays);
+        queue.submit([encoder.finish()]);
     }
-    {
-        let mut pass = begin(&mut encoder, &output);
-        pass.set_pipeline(&resources.disc_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.set_vertex_buffer(0, disc_buffer.slice(..));
-        pass.draw(0..disc.len() as u32, 0..1);
-
-        pass.set_pipeline(&resources.edge_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.set_vertex_buffer(0, quad.slice(..));
-        store.draw(&mut pass, OverlayTarget::Scene);
-    }
-    queue.submit([encoder.finish()]);
 
     let error = pollster::block_on(errors.pop());
     assert!(

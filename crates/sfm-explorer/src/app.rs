@@ -780,55 +780,17 @@ impl App {
             self.prev_hidden_image = hidden_image;
         }
 
-        // Upload/clear track ray geometry when what it was built from changes,
-        // or when a transform moved the node the selection lives in. Track rays
-        // are a singleton serving the single selection, built from the node that
-        // owns the selected point — and, having no per-recon `model` matrix of
-        // their own, they are built through that node's transform on the CPU.
-        let ray_source = track_ray_source(&self.state);
-        if ray_source != self.prev_ray_source || transform_changed {
-            self.prev_ray_source = ray_source;
-            // The rays are built through the node's transform on the CPU rather
-            // than by a model matrix on the GPU, so this phase is the build as
-            // much as the upload.
-            let rays = uploads.phase("track rays");
-            let selected = self
-                .state
-                .selected_point
-                .and_then(|p| Some((p, crate::scene::node_by_id(&self.state.scene, p.recon)?)));
-            match selected {
-                // Liveness rather than a bound on the base's rows: a deleted
-                // point draws no rays, and an added one is past that bound.
-                Some((point, node)) if node.edited().point(point.point).is_some() => {
-                    let (id, recon, transform) = (node.id, node.recon(), node.transform().clone());
-                    let edited = node.edited();
-                    // Pre-populate SIFT cache for all images in the track
-                    // (sift_files only; embedded_patches has no `.sift`
-                    // files and reads its keypoints inline).
-                    if recon.feature_indexes().is_some() {
-                        for img_idx in edited.track_image_indices(point.point) {
-                            let read_count =
-                                recon.point_set.max_track_feature_index[img_idx] as usize + 1;
-                            crate::state::ensure_sift_cached(
-                                &mut self.state.sift_cache,
-                                recon,
-                                ImageRef::new(id, img_idx),
-                                read_count,
-                                &rays,
-                            );
-                        }
-                    }
-                    self.scene_renderer.upload_track_rays(
-                        device,
-                        edited,
-                        point,
-                        &self.state.sift_cache,
-                        &transform,
-                    );
-                }
-                _ => self.scene_renderer.clear_track_rays(),
-            }
-        }
+        // Write or empty the track rays' region of the overlay ribbon store when
+        // what they were built from changes, or when a transform moved the node
+        // the selection lives in; any other frame writes nothing for them.
+        sync_track_rays(
+            &mut self.state,
+            &mut self.scene_renderer,
+            &mut self.prev_ray_source,
+            transform_changed,
+            (device, queue),
+            &uploads,
+        );
 
         // The focused item, as the figure the 3D viewer built out of
         // what the dock handed it. Rebuilt and re-uploaded every frame rather
@@ -982,25 +944,19 @@ impl App {
             self.scene_renderer.render_target_indicator(encoder);
         }
 
-        // Render track rays (after target indicator, also post-EDL). While the
-        // proposal's preview has moved the selected point off its stored
-        // position the rays, which end there, are left out.
-        self.scene_renderer
-            .update_track_ray_uniforms(queue, &self.viewer_3d.camera);
-        if !self.state.preview_hides_track_rays() {
-            self.scene_renderer.render_track_rays(encoder);
-        }
-
         // The measurements into their own layer, which the 3D view paints
-        // over the scene texture, and then the focused item, last of the
-        // post-EDL passes onto it: the focused item is the thing being worked
-        // on, so nothing else the scene texture holds is over it.
+        // over the scene texture, and then the track rays and the focused
+        // item, last of the post-EDL passes onto it: the focused item is the
+        // thing being worked on, so nothing else the scene texture holds is
+        // over it. While the proposal's preview has moved the selected point
+        // off its stored position the rays, which end there, are left out.
         self.scene_renderer.update_bench_track_uniforms(
             queue,
             &self.viewer_3d.camera,
             self.viewer_3d.overlay_view,
         );
-        self.scene_renderer.render_bench_track(encoder);
+        self.scene_renderer
+            .render_bench_track(encoder, !self.state.preview_hides_track_rays());
 
         // A region of the pick buffer, when the viewport asked for one last
         // frame. It replaces the 5×5 hover read rather than adding to it: the
@@ -1591,6 +1547,65 @@ fn selected_point_source(
     Some((point, node.history.current_version().serial))
 }
 
+/// Write the track rays' region of the overlay ribbon store when their key
+/// has changed since `prev_ray_source` was recorded: the selected point and the
+/// version it is read out of, its liveness and its node's visibility
+/// ([`track_ray_source`]), or the node's transform (`transform_changed`).
+/// Returns whether it wrote; with the key unchanged it writes nothing.
+///
+/// Track rays are a singleton serving the single selection, built from the
+/// node that owns the selected point — and, the store having no per-recon
+/// `model` matrix, they are built through that node's transform on the CPU, so
+/// this is the build as much as the upload. The observing images' keypoints are
+/// read into the SIFT cache first, on this thread, so a build never waits on
+/// them.
+fn sync_track_rays(
+    state: &mut crate::state::AppState,
+    renderer: &mut crate::scene_renderer::SceneRenderer,
+    prev_ray_source: &mut Option<(crate::scene::PointRef, crate::document::VersionSerial)>,
+    transform_changed: bool,
+    (device, queue): (&wgpu::Device, &wgpu::Queue),
+    uploads: &Progress<'_>,
+) -> bool {
+    let ray_source = track_ray_source(state);
+    if ray_source == *prev_ray_source && !transform_changed {
+        return false;
+    }
+    *prev_ray_source = ray_source;
+    let rays = uploads.phase("track rays");
+    let selected = state
+        .selected_point
+        .and_then(|p| Some((p, crate::scene::node_by_id(&state.scene, p.recon)?)));
+    match selected {
+        // `track_ray_source` is `None` for a node that is not visible and for
+        // a point this version does not have: liveness rather than a bound on
+        // the base's rows, since a deleted point draws no rays and an added
+        // one is past that bound.
+        Some((point, node)) if ray_source.is_some() => {
+            let (id, recon, transform) = (node.id, node.recon(), node.transform().clone());
+            let edited = node.edited();
+            // Pre-populate SIFT cache for all images in the track
+            // (sift_files only; embedded_patches has no `.sift`
+            // files and reads its keypoints inline).
+            if recon.feature_indexes().is_some() {
+                for img_idx in edited.track_image_indices(point.point) {
+                    let read_count = recon.point_set.max_track_feature_index[img_idx] as usize + 1;
+                    crate::state::ensure_sift_cached(
+                        &mut state.sift_cache,
+                        recon,
+                        ImageRef::new(id, img_idx),
+                        read_count,
+                        &rays,
+                    );
+                }
+            }
+            renderer.upload_track_rays(device, queue, edited, point, &state.sift_cache, &transform);
+        }
+        _ => renderer.clear_track_rays(device, queue),
+    }
+    true
+}
+
 /// What the **track rays** are built from: [`selected_point_source`], refused
 /// where there are no rays to draw.
 ///
@@ -1599,7 +1614,7 @@ fn selected_point_source(
 /// any other, so the rays are cleared rather than left where they do not belong.
 ///
 /// Visibility is in here because the rays are a singleton with no node of their
-/// own in the draw loop: `render_track_rays` draws whatever the buffer holds,
+/// own in the draw loop: the scene pass draws whatever their region holds,
 /// so nothing else would stop a hidden node's rays from hanging in the air over
 /// the node that is still shown. The frustum colours need no such rule: they
 /// are the node's own, and a hidden node draws none of them.

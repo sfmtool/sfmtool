@@ -134,7 +134,7 @@ sfmtool/
 │   │       │   │   ├── thumbnails.rs   # Camera thumbnail atlas
 │   │       │   │   ├── patches.rs      # Patch instances + bitmap atlas
 │   │       │   │   ├── bg_image.rs     # Camera-view background image
-│   │       │   │   └── track_rays.rs   # Selected-point observation rays
+│   │       │   │   └── track_rays.rs   # Selected-point observation rays, a producer of the overlay ribbon store
 │   │       │   └── pipelines/    # Per-pass pipeline creation
 │   │       │       ├── mod.rs          # Pipeline module re-exports
 │   │       │       ├── points.rs       # Point splat pipeline
@@ -145,8 +145,7 @@ sfmtool/
 │   │       │       ├── bg_image.rs     # Shared background-image bind group resources (layout, uniform, sampler)
 │   │       │       ├── bg_distorted.rs # Background image pipeline (distorted; the only BG mesh pipeline)
 │   │       │       ├── patch.rs        # Patch/surfel rendering pipeline
-│   │       │       ├── target.rs       # Target indicator pipeline
-│   │       │       └── track_ray.rs    # Track ray pipeline
+│   │       │       └── target.rs       # Target indicator pipeline
 │   │       ├── state.rs              # Shared application state (AppState)
 │   │       └── state/
 │   │           └── ops.rs        # AppState's reconstruction operations (align)
@@ -191,8 +190,7 @@ sfmtool/
 │   │           ├── bg_image_distorted.wgsl # Background image rendering (distorted)
 │   │           ├── patch.wgsl           # Patch/surfel rendering
 │   │           ├── target_indicator.wgsl # Rotating 3D compass / world-up indicator at target
-│   │           ├── bench_track.wgsl     # Bench's focused item in the world: frame, normal, observation marks; and the measurements (post-EDL)
-│   │           └── track_ray.wgsl       # Track ray visualization
+│   │           └── bench_track.wgsl     # The overlay ribbon store's figures: track rays, the bench's focused item, the measurements (post-EDL)
 │   │
 │   ├── sfmtool-colmap/           # COLMAP format read/write
 │   │   └── src/
@@ -314,16 +312,14 @@ Pass 3:  Target indicator (while Alt is held, while the HUD's Target indicator
   Input:  Compass edge instances + star mesh + hw depth (sampled)
   Output: EDL output color (additive blending, reads depth for occlusion)
 
-Pass 4:  Track rays (when a 3D point is selected)
-  Input:  Edge instance buffer (camera center → nearest ray point) + hw depth
-  Output: EDL output color (premultiplied alpha blending, reads depth for occlusion)
-
-Pass 5:  Measurements, then the bench figure (while the 3D viewer draws a
-         measurement or the focused item)
+Pass 4:  Measurements, then the track rays and the bench figure (while the
+         3D viewer draws a measurement, the selected point's track rays or
+         the focused item)
   Input:  The overlay ribbon store's regions for each target (the
-          measurements' segments, rings and discs, then the figure's
-          segments) + the frame's pixels per point and pull toward the eye
-          + the figure's centre disc mesh + hw depth (sampled)
+          measurements' segments, rings and discs; then the track rays'
+          segments, the figure's centre disc mesh and the figure's segments)
+          + the frame's pixels per point and pull toward the eye + hw depth
+          (sampled)
   Output: The measurement layer, a Rgba8Unorm texture of its own cleared
           to transparent every frame; then EDL output color (alpha blending,
           reads depth for occlusion; neither writes a pick ID or depth)
@@ -341,11 +337,12 @@ For detailed specifications of each pass, see:
   image quads, pick buffer
 - [patch-rendering.md](patch-rendering.md) — Patch surfels and the hidden
   outline
-- [scene-graph.md](scene-graph.md) § "Track rays and background image" —
+- § "Track Ray Visualization" below, and
+  [scene-graph.md](scene-graph.md) § "Track rays and background image" —
   Track rays
-- [viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) — The bench figure, and
-  the measurements' pass drawn just before it, both drawn from the overlay
-  ribbon store
+- [viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) — The bench figure, the
+  track rays drawn under it and the measurements' pass drawn just before them,
+  all drawn from the overlay ribbon store
 
 ### GPU Readback
 
@@ -366,16 +363,31 @@ that region read replaces the 5x5 hover read
 ### Track Ray Visualization
 
 When a 3D point is selected, track rays show the observation rays from each
-camera that contributed to that point. Each ray is a semi-transparent orange
-glow line drawn from the camera center to the nearest point on the camera's
-observation ray to the selected 3D point. The gap between the ray endpoint
-and the actual point visualizes reprojection error in 3D space.
+camera that contributed to that point. Each ray is an orange stroke from the
+camera centre along the camera's observation ray:
+- **To a finite point** it ends at the nearest point on that ray to the
+  selected 3D point. The gap between the ray's end and the point shows the
+  reprojection error in 3D space.
+- **To a point at infinity** it ends at the observation direction, a
+  homogeneous end with `w = 0`, which is drawn at its vanishing point: where
+  the direction meets the horizon, which is where the point's own splat is
+  drawn ([point-cloud-rendering.md](point-cloud-rendering.md) § "Points at
+  Infinity"). So every ray of the track reaches the point on screen, the way
+  the rays to a finite point end at or near it.
 
-**Data flow**: `upload_track_rays` computes an `EdgeInstance` per observation —
-it looks up the cached SIFT feature position, unprojects it through the camera
-intrinsics to get a world-space ray direction, then projects the selected 3D
-point onto that ray. Each `EdgeInstance` stores `endpoint_a` (camera center) and
-`endpoint_b` (nearest point on ray).
+**Data flow**: the rays are a producer of the overlay ribbon store
+([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "The overlay ribbon
+store"). `upload/track_rays.rs::track_ray_instances` builds one
+`OverlayInstance` segment per observation: it looks up the observation's
+keypoint (the cached SIFT feature position, or the keypoint stored inline),
+unprojects it through the image's own intrinsics to a world-space direction,
+and puts the camera centre (`a`, `w = 1`) and the far end (`b`) through the
+owning node's transform. The store has no per-node model matrix, so this is
+done on the CPU: a place goes through the whole similarity, and a direction
+through its rotation only, since a similarity's scale and translation do not
+move a direction. An observation whose keypoint cannot be read draws no ray.
+`upload_track_rays` writes the instances into the store's `TrackRays` region,
+and `clear_track_rays` empties it.
 
 **When they are rebuilt**: whenever what they were built from changes, which is
 the selected point *and the version of the node that owns it*, plus that node's
@@ -383,7 +395,11 @@ transform. The point alone is not enough: a bundle adjustment that renumbers
 nothing leaves the selection exactly where it was and replaces every position
 under it, and an undo of one does the same in reverse. A `VersionSerial` is
 minted once and never reused, so holding the last frame's against this one's
-asks whether the rays on screen were built from the value on screen.
+asks whether the rays on screen were built from the value on screen. A frame
+on which none of this has changed writes nothing for the rays
+(`app::sync_track_rays`). The observing images' keypoints are read into the SIFT
+cache on the frame that builds the rays, before the build, so the cache is not
+part of what the rays are keyed on.
 
 That pair -- point and version serial -- is `app::selected_point_source`, and
 everything the frame draws *for the selection* is gated on it, the rays and the
@@ -395,23 +411,26 @@ it is the one the commit pushed.
 **When they are cleared**: whenever there is nothing to draw: no selection, a
 node that has gone, a point this version does not have, or a node that is not
 visible. Visibility belongs here because the rays are a singleton with no node
-of their own in the draw loop: `render_track_rays` draws whatever the buffer
-holds, so nothing else would stop a hidden or solo'd-out node's rays hanging in
-the air over the node still shown.
+of their own in the draw loop: the scene pass draws whatever their region of the
+store holds, so nothing else would stop a hidden or solo'd-out node's rays
+hanging in the air over the node still shown. While the camera model
+proposal's preview moves the selected point, the pass leaves the rays out
+without emptying their region
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "What the
+preview does not change").
 
-**Rendering**: Track rays reuse the shared `QuadVertex` buffer (same as point
-splats). The vertex shader expands each edge instance into a screen-space ribbon
-quad with a configurable pixel width (`line_half_width: 1.5px`), keeping line
-thickness constant regardless of zoom. The fragment shader samples the hardware
-depth texture for per-fragment occlusion against scene geometry, and applies a
-`smoothstep` glow falloff from center to edge at 40% peak opacity with
-premultiplied alpha blending. The orange color (`rgb(1.0, 0.647, 0.0)`) matches
-frustum highlight coloring.
-
-**Pipeline details**: Triangle strip topology, no culling, no depth write. Uses
-`FrustumUniforms` (view-projection matrix, screen size, line half-width). Bind
-group includes the uniform buffer and the hardware depth texture for occlusion
-reads.
+**Rendering**: the rays are drawn by the overlay ribbon store's pass onto the
+scene texture, first, before the bench figure's centre disc and segments, with
+`bench_track.wgsl`. Each is a segment in the rays' orange, `(1.0, 0.647, 0.0)`
+in linear light at alpha 0.6, the orange of the frustum highlights, 0.75 points
+to either side (`TRACK_RAY_HALF_WIDTH`), anti-aliased over about a point as the
+other overlays are. Its flags are `HOLD` with no pull toward the eye: where the
+scene hides it, it is drawn at `BEHIND_OPACITY`, so a ray going into the scene
+shows where it goes. A ray's end at infinity is pinned at `INF_DEPTH`, behind
+every finite thing, so the part of a ray to a point at infinity that finite
+geometry covers is dimmed, and the rest is drawn at full strength. A ray whose
+direction points away from the eye is clipped at the near plane, as every
+segment is, and drawn from the camera centre to the screen's edge.
 
 ### Scene-to-egui Integration
 

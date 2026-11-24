@@ -545,7 +545,7 @@ The EDL shader receives these additional uniforms for the supernova:
 
 The passes that draw the point cloud and its post-processing, in the order the
 renderer records them. The background image before them, and after them the
-track rays and the pass that draws the 3D view's measurements and then the
+pass that draws the 3D view's measurements and then the track rays and the
 bench figure, are in [architecture.md](architecture.md#pass-order) § "Pass
 Order", which lists every pass.
 
@@ -589,7 +589,7 @@ Passes 1a to 1e share one hardware depth buffer, so points, frustums, image
 quads and surfels occlude each other. The passes after the EDL read that buffer
 and none writes it: Pass 2b attaches it read-only and tests against it, and the
 target indicator samples it, which lets it render with depth-aware
-transparency. The track rays and the passes of the measurements and the bench
+transparency. The passes of the measurements, the track rays and the bench
 figure after them sample it the same way, and none of them writes a pick ID,
 so a click picks the scene under a measurement's mark.
 
@@ -643,9 +643,12 @@ holding a unit direction when `w = 0`.
    (unit directions cluster at the origin):
    `sfmtool_core::analysis::scene_scale::compute_scene_bounds` and `compute_auto_point_size`
    skip them (protecting scene center/radius, clip planes, and auto splat
-   size); `upload/track_rays.rs::upload_track_rays` draws infinity observations as
-   fixed-length bearing rays from each camera center (no finite endpoint to
-   converge on); Track View's header (`track_view/body/`) shows the
+   size); `upload/track_rays.rs::track_ray_instances` ends each ray to a point
+   at infinity at its observation direction with `w = 0`, which the overlay
+   shader projects to its vanishing point and pins at the same `INF_DEPTH`, so
+   every ray of the track reaches the point's splat on screen
+   ([architecture.md](architecture.md) § "Track Ray Visualization"); Track
+   View's header (`track_view/body/`) shows the
    **direction** with the ∞ mark and "at infinity" instead of bogus xyz, and
    `metrics.rs` projects it rotation-only (`R·d`, no depth divide); `app.rs` Alt+click does not move the orbit target from an
    infinity-point pick (a point with no location has no pivot — selection and

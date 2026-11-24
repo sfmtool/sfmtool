@@ -457,10 +457,10 @@ and the call-out from the mask word.
 ### The hidden outline
 
 A second pass draws the part of each highlighted surfel's band that the scene
-hides, after the EDL pass and onto its output, as the target indicator, the
-track rays and the bench figure are drawn
-([architecture.md](architecture.md#pass-order) § "Pass Order").
-It runs before those three, so they stay on top of it. It is recorded only in a
+hides, after the EDL pass and onto its output, as the target indicator and
+the overlay ribbon store's pass, which draws the track rays and the bench
+figure, are drawn ([architecture.md](architecture.md#pass-order) § "Pass
+Order"). It runs before those, so they stay on top of it. It is recorded only in a
 frame where a drawn surfel is highlighted
 (`SceneRenderer::has_outlined_surfel`, read when the frame writes its uniforms).
 

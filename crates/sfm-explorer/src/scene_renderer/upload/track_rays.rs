@@ -1,63 +1,69 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Observation ray geometry for the selected point track.
+//! The track rays: the producer of the overlay ribbon store that draws the
+//! observation rays of the selected point.
+//!
+//! `specs/gui/viewer-3d-bench-layer.md` § "The overlay ribbon store" and
+//! `specs/gui/architecture.md` § "Track Ray Visualization" describe them.
 
-use super::super::gpu_types::EdgeInstance;
+use super::super::gpu_types::OverlayInstance;
+use super::super::overlay_ribbons::{OverlayTarget, ProducerId};
 use super::super::SceneRenderer;
 use crate::scene::{ImageRef, PointRef};
 use sfmtool_core::{EditedReconstruction, Se3Transform};
-use wgpu::util::DeviceExt;
 
-/// Length of a point-at-infinity track ray, as a multiple of the camera-cloud
-/// extent — long enough to clearly head out past the scene toward infinity.
-const INFINITY_RAY_SCENE_MULTIPLE: f64 = 2.0;
+/// The rays' orange, in linear light, the colour space of the scene target
+/// they are drawn into.
+///
+/// The orange of the observing frustums and of the Image Browser's track
+/// highlights. Its alpha is below 1 so that where the rays of a track meet,
+/// near their point, they build up, and a ray over a bright point cloud does
+/// not hide the points under it.
+pub(super) const TRACK_RAY_COLOR: [f32; 4] = [1.0, 0.647, 0.0, 0.6];
 
-/// Bounding-box diagonal of the reconstruction's camera centers — a
-/// characteristic scene scale, used to size rays toward points at infinity.
-fn camera_cloud_extent(recon: &sfmtool_core::SfmrReconstruction) -> f64 {
-    let mut iter = recon
-        .image_set
-        .images
-        .iter()
-        .map(|im| im.camera_center().coords);
-    let Some(first) = iter.next() else {
-        return 0.0;
-    };
-    let (mut lo, mut hi) = (first, first);
-    for c in iter {
-        lo = lo.inf(&c);
-        hi = hi.sup(&c);
-    }
-    (hi - lo).norm()
-}
+/// Half a track ray's width, in panel points: a stroke 1.5 points wide.
+///
+/// With the point of anti-aliasing the shader adds, a ray's coverage is full
+/// over its middle half point and falls to nothing 1.25 points from its
+/// middle. At 100% scale that is about the profile of the 1.5-pixel glow the
+/// rays were drawn with before they joined the store, and at
+/// [`TRACK_RAY_COLOR`]'s alpha it puts about as much orange on screen across
+/// a ray.
+pub(super) const TRACK_RAY_HALF_WIDTH: f32 = 0.75;
 
-/// Build the observation-ray geometry for `point_idx`.
+/// The rays of `point_ref` as overlay segments, one per observation whose
+/// keypoint can be read.
 ///
-/// Each ray goes from the camera center along the true observation direction
-/// (unprojected from the SIFT feature position through camera intrinsics) to
-/// the nearest point on the ray to the 3D point. The gap between the ray
-/// endpoint and the 3D point visualizes reprojection error in 3D space.
+/// Each ray leaves the camera centre (`a`, `w = 1`) along the observation
+/// direction: the keypoint unprojected through the image's own intrinsics and
+/// rotated into the world. Where it ends (`b`) depends on the point:
+/// - **A finite point:** the nearest point on the ray to the 3D point, so the
+///   gap between the ray's end and the point shows the reprojection error.
+/// - **A point at infinity:** the observation direction itself, with `w = 0`.
+///   The shader projects it to its vanishing point, where the point's own
+///   splat is drawn, and pins it at the depth points at infinity are drawn
+///   at, so the ray reaches the horizon and is behind every finite thing.
 ///
-/// `sift_cache` is the shared SIFT position cache from `AppState`. Feature
-/// positions are looked up from this cache (the caller must ensure that
-/// relevant images have been cached via `ensure_sift_cached` before calling).
+/// Each is a segment in [`TRACK_RAY_COLOR`], [`TRACK_RAY_HALF_WIDTH`] points
+/// to either side, held at `BEHIND_OPACITY` where the scene hides it and not
+/// pulled toward the eye.
 ///
-/// Split out from the upload so the geometry is assertable without a GPU
-/// buffer readback — the edges land in a VERTEX-usage buffer, which is
-/// write-only from the CPU side.
+/// `sift_cache` is the shared SIFT position cache from `AppState`; the caller
+/// has cached the track's images with `ensure_sift_cached`. An observation
+/// whose keypoint is not there (a missing or truncated `.sift` file) draws no
+/// ray rather than a misleading one.
 ///
-/// The rays are built in the reconstruction's own coordinates and then put
-/// through `transform`, the owning node's similarity: the track-ray pass is one
-/// of the CPU world-space paths, drawn from a shared singleton buffer with no
-/// per-recon `model` matrix of its own. Because a similarity is affine, mapping
-/// the two endpoints is the same as mapping the whole segment.
-pub(super) fn track_ray_edges(
+/// The rays are built in the reconstruction's own coordinates and put through
+/// `transform`, the owning node's similarity, since the store has no per-node
+/// model matrix: a place through the whole similarity, a direction through
+/// its rotation only, as a point at infinity is drawn.
+pub(super) fn track_ray_instances(
     edited: &EditedReconstruction,
     point_ref: PointRef,
     sift_cache: &std::collections::HashMap<ImageRef, crate::state::CachedSiftFeatures>,
     transform: &Se3Transform,
-) -> Vec<EdgeInstance> {
+) -> Vec<OverlayInstance> {
     // The point and its track are the overlay's, so a modified or added point
     // draws the rays it holds now; the images and cameras are the base's.
     let recon = &*edited.base;
@@ -69,18 +75,6 @@ pub(super) fn track_ray_edges(
     let point_pos = point.position;
     let at_infinity = point.is_at_infinity();
 
-    // A point at infinity has no finite location — its stored position is a
-    // unit direction at the origin, which would project onto every forward
-    // ray at t < 0 and collapse to a zero-length (invisible) ray. Instead,
-    // shoot each ray outward along its own bearing to a fixed, scene-scaled
-    // length (a multiple of the camera-cloud extent) so the bundle is
-    // visible heading off toward infinity.
-    let infinity_ray_length = if at_infinity {
-        INFINITY_RAY_SCENE_MULTIPLE * camera_cloud_extent(recon)
-    } else {
-        0.0
-    };
-
     // The observation keypoint lives in one of two places: SIFT feature
     // positions read from `.sift` companions (`sift_files`, indexed through
     // `feature_indexes` into the shared cache) or keypoints stored inline in
@@ -89,7 +83,7 @@ pub(super) fn track_ray_edges(
     // unprojected from whichever the reconstruction carries.
     let feature_indexes = view.feature_indexes();
     let observations = view.observations();
-    let edges: Vec<EdgeInstance> = observations
+    observations
         .iter()
         .enumerate()
         .filter_map(|(k, obs)| {
@@ -100,12 +94,7 @@ pub(super) fn track_ray_edges(
             // rather than once per frame.
             let camera = recon.image_set.image_intrinsics(obs.image_index as usize);
             let center = image.camera_center();
-            let endpoint_a = [center.x as f32, center.y as f32, center.z as f32];
 
-            // The observed keypoint pixel for this observation, from the
-            // SIFT feature or the inline embedded keypoint. Skip the
-            // observation when neither source yields one (e.g. a missing or
-            // truncated `.sift` file) rather than drawing a misleading ray.
             let obs_pixel: [f64; 2] = if let Some(fis) = feature_indexes {
                 let fi = fis[k] as usize;
                 let cached =
@@ -121,88 +110,114 @@ pub(super) fn track_ray_edges(
             // to world space: d_world = R^T * d_cam.
             let d_cam = camera.pixel_to_ray(obs_pixel[0], obs_pixel[1]);
             let r_flat = image.camera_to_world_rotation_flat();
-            let d_world = [
+            let d_world = nalgebra::Vector3::new(
                 r_flat[0] * d_cam[0] + r_flat[1] * d_cam[1] + r_flat[2] * d_cam[2],
                 r_flat[3] * d_cam[0] + r_flat[4] * d_cam[1] + r_flat[5] * d_cam[2],
                 r_flat[6] * d_cam[0] + r_flat[7] * d_cam[1] + r_flat[8] * d_cam[2],
-            ];
+            );
 
-            let endpoint_b = if at_infinity {
-                // Point at infinity: shoot the ray outward along the
-                // observed bearing (a point at infinity has no parallax).
-                [
-                    (center.x + infinity_ray_length * d_world[0]) as f32,
-                    (center.y + infinity_ray_length * d_world[1]) as f32,
-                    (center.z + infinity_ray_length * d_world[2]) as f32,
-                ]
+            let b = if at_infinity {
+                // A point at infinity has no parallax: the ray is the
+                // direction, drawn to the horizon.
+                direction_to_world(transform, d_world)
             } else {
                 // Finite point: terminate at the nearest point on the
                 // observed ray (so reprojection error shows),
                 // t = dot(P - C, d_world) clamped to the forward direction.
-                let cp = [
-                    point_pos.x - center.x,
-                    point_pos.y - center.y,
-                    point_pos.z - center.z,
-                ];
-                let t = (cp[0] * d_world[0] + cp[1] * d_world[1] + cp[2] * d_world[2]).max(0.0);
-                [
-                    (center.x + t * d_world[0]) as f32,
-                    (center.y + t * d_world[1]) as f32,
-                    (center.z + t * d_world[2]) as f32,
-                ]
+                let t = (point_pos - center).dot(&d_world).max(0.0);
+                place_to_world(transform, center + t * d_world)
             };
-
-            Some(EdgeInstance {
-                endpoint_a: to_world(transform, endpoint_a),
-                endpoint_b: to_world(transform, endpoint_b),
-            })
+            Some(OverlayInstance::segment(
+                place_to_world(transform, center),
+                b,
+                TRACK_RAY_COLOR,
+                TRACK_RAY_HALF_WIDTH,
+                OverlayInstance::HOLD,
+            ))
         })
-        .collect();
-    edges
+        .collect()
 }
 
-/// One ray endpoint through the node transform.
-fn to_world(transform: &Se3Transform, p: [f32; 3]) -> [f32; 3] {
-    let world = transform.apply_to_point(&nalgebra::Point3::new(
-        p[0] as f64,
-        p[1] as f64,
-        p[2] as f64,
-    ));
-    [world.x as f32, world.y as f32, world.z as f32]
+/// A place in the node's coordinates as a homogeneous world point, `w = 1`.
+fn place_to_world(transform: &Se3Transform, p: nalgebra::Point3<f64>) -> [f32; 4] {
+    let world = transform.apply_to_point(&p);
+    [world.x as f32, world.y as f32, world.z as f32, 1.0]
+}
+
+/// A direction in the node's coordinates as a homogeneous world direction,
+/// `w = 0`: turned by the similarity's rotation, which is all of it that
+/// moves a direction.
+fn direction_to_world(transform: &Se3Transform, d: nalgebra::Vector3<f64>) -> [f32; 4] {
+    let world = transform.rotation.rotate_vector(&d);
+    [world.x as f32, world.y as f32, world.z as f32, 0.0]
 }
 
 impl SceneRenderer {
-    /// Upload track ray edge geometry for the selected point's observations.
+    /// Write the selected point's track rays into their region of the overlay
+    /// ribbon store, drawn on the scene target. The caller writes only when
+    /// what they are built from has changed.
     ///
-    /// See [`track_ray_edges`] for how each ray is built.
+    /// See [`track_ray_instances`] for how each ray is built.
     pub(crate) fn upload_track_rays(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         edited: &EditedReconstruction,
         point: PointRef,
         sift_cache: &std::collections::HashMap<ImageRef, crate::state::CachedSiftFeatures>,
         transform: &Se3Transform,
     ) {
-        let edges = track_ray_edges(edited, point, sift_cache, transform);
-
-        if edges.is_empty() {
-            self.track_ray_edge_buffer = None;
-            self.track_ray_count = 0;
-            return;
-        }
-
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("track ray edges"),
-            contents: bytemuck::cast_slice(&edges),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        self.track_ray_edge_buffer = Some(buffer);
-        self.track_ray_count = edges.len() as u32;
+        let rays = track_ray_instances(edited, point, sift_cache, transform);
+        self.overlay_ribbons.write(
+            device,
+            queue,
+            ProducerId::TrackRays,
+            OverlayTarget::Scene,
+            &rays,
+        );
     }
 
-    /// Clear track ray geometry (no point selected).
-    pub(crate) fn clear_track_rays(&mut self) {
-        self.track_ray_edge_buffer = None;
-        self.track_ray_count = 0;
+    /// Empty the track rays' region: no point selected, or none to draw. The
+    /// region keeps its capacity.
+    pub(crate) fn clear_track_rays(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.overlay_ribbons.write(
+            device,
+            queue,
+            ProducerId::TrackRays,
+            OverlayTarget::Scene,
+            &[],
+        );
+    }
+}
+
+#[cfg(test)]
+impl SceneRenderer {
+    /// How many rays the track rays' region draws.
+    pub(crate) fn track_ray_count(&self) -> u32 {
+        self.overlay_ribbons
+            .region(ProducerId::TrackRays)
+            .map_or(0, |(_, count, _)| count)
+    }
+
+    /// The track rays' last write into the store, as instances: the rays it
+    /// draws.
+    pub(crate) fn track_rays(&self) -> Vec<OverlayInstance> {
+        let Some((offset, count, _)) = self.overlay_ribbons.region(ProducerId::TrackRays) else {
+            return Vec::new();
+        };
+        let stride = std::mem::size_of::<OverlayInstance>();
+        let start = offset as usize * stride;
+        bytemuck::pod_collect_to_vec(
+            &self.overlay_ribbons.contents()[start..start + count as usize * stride],
+        )
+    }
+
+    /// How many buffer writes the store has issued for the track rays.
+    pub(crate) fn track_ray_writes(&self) -> usize {
+        self.overlay_ribbons
+            .issued
+            .iter()
+            .filter(|write| write.producer == ProducerId::TrackRays)
+            .count()
     }
 }

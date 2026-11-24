@@ -157,13 +157,14 @@ behind the viewer is clipped away entirely.
 ## Depth against the scene
 
 The figure is drawn **in the scene, by the GPU**, in a pass that runs after the
-EDL resolve and after the target indicator and the track rays, so it sits on top
-of everything else the scene texture holds; only the measurements' layer is
-painted over it. It is the thing being worked on. Like
-those two it *samples* the shared depth buffer rather than testing against it,
-which is what lets a fragment behind the scene still be drawn, dimmed, instead
-of discarded ([`point-cloud-rendering.md`](point-cloud-rendering.md) §
-"Depth-Aware Transparency"). The figure therefore shows how it meets the
+EDL resolve and after the target indicator, and draws the selected point's track
+rays first and the figure over them, so the figure sits on top of everything
+else the scene texture holds; only the measurements' layer is painted over it.
+It is the thing being worked on. Like the target indicator it *samples* the
+shared depth buffer rather than testing against it, which is what lets a
+fragment behind the scene still be drawn, dimmed, instead of discarded
+([`point-cloud-rendering.md`](point-cloud-rendering.md) § "Depth-Aware
+Transparency"). The figure therefore shows how it meets the
 geometry around it: where the square cuts through the point cloud or through a
 rendered patch, the part in front reads at full strength and the part behind is
 drawn through.
@@ -250,21 +251,23 @@ them.
 
 ### The overlay ribbon store
 
-The figure's edges and the measurements' marks and lines are held in one GPU
-buffer, the **overlay ribbon store**
+The track rays, the figure's edges and the measurements' marks and lines are
+held in one GPU buffer, the **overlay ribbon store**
 ([scene_renderer/overlay_ribbons.rs](../../crates/sfm-explorer/src/scene_renderer/overlay_ribbons.rs)),
 which the scene renderer owns. Each overlay figure is written by one
 **producer**, the code that builds its instances, and each producer has its own
 region of the buffer:
 
 ```rust
-pub(crate) enum ProducerId { BenchFigure, Measurements } // the region order
+pub(crate) enum ProducerId { TrackRays, BenchFigure, Measurements } // the region order
 pub(crate) enum OverlayTarget { Scene, MeasurementLayer }
 
 impl OverlayRibbons {
     pub(crate) fn write(&mut self, device: &wgpu::Device, queue: &wgpu::Queue,
         producer: ProducerId, target: OverlayTarget, instances: &[OverlayInstance]);
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, target: OverlayTarget);
+    // One region alone, for a pass that draws something else between regions.
+    pub(crate) fn draw_producer(&self, pass: &mut wgpu::RenderPass<'_>, producer: ProducerId);
 }
 ```
 
@@ -307,7 +310,17 @@ nothing:
   figure of a track at infinity is, and only such a segment is drawn as at
   infinity behind the scene: a `FADE` one at the floor opacity rather than
   faded with distance, a `HOLD` one at `BEHIND_OPACITY` as any `HOLD` piece is;
-  a segment with one finite end is drawn as a finite one. The
+  a segment with one finite end is drawn as a finite one. A direction is
+  projected to its vanishing point and its depth pinned at `INF_DEPTH`, the
+  depth points and patches at infinity are drawn at, so a segment from a place
+  to a direction, a track ray to a point at infinity, runs from the place to
+  where its point at infinity is drawn, behind every finite thing at that end.
+  Its fragments are neither all finite nor all at infinity, so the track rays
+  draw it `HOLD`, which holds every hidden fragment at `BEHIND_OPACITY`,
+  rather than `FADE`, which would fade it to the floor toward its end at
+  infinity. If its direction points behind the eye, the near-plane clip cuts it
+  where it crosses the near plane, and it is drawn from the place to the
+  screen's edge. The
   ribbon's width is measured across it in pixels, and the distance across it
   that the anti-aliasing reads is interpolated linearly on the screen rather
   than in perspective, so the middle of a ribbon whose ends lie at different
@@ -357,8 +370,11 @@ nothing:
   the store's buffer once, and draws each of its regions as
   `draw(0..4, offset..offset + count)`, four corners of a strip per instance
   whatever its kind. The regions lie in the buffer, and are drawn, in a fixed
-  order, `ProducerId`'s: the bench figure on the scene target, and the
-  measurements on their layer.
+  order, `ProducerId`'s: the track rays and then the bench figure on the scene
+  target, and the measurements on their layer. The scene target's pass draws
+  its regions one at a time (`draw_producer`), since the figure's centre disc,
+  which is not in the store, is drawn between them: the rays, then the disc,
+  then the figure's segments.
 - **Order within a region.** A producer lays out its own instances with every
   halo first, then every stroke, then every dot, so one item's halo never
   crosses another's stroke.
@@ -368,18 +384,32 @@ changes, which is what it keys its instances on:
 
 | Producer | Target | Writes |
 |---|---|---|
+| Track rays | `Scene` | when its key changes: the selected point and the version that holds it (`app::selected_point_source`), whether that point is live and its node visible (`app::track_ray_source`), and the node's display transform |
 | Bench figure | `Scene` | every frame it is drawn: the arrowhead's barbs turn to face the eye, so a camera move changes it |
 | Measurements | `MeasurementLayer` | when its key changes: each drawn node's document serial, display transform and tint, the selected measurement and endpoint, the focused item's `Arc`, *Show all measurements*, and the visible nodes (`measurement_marks::MeasurementLayerKey`) |
 
-The measurements' key covers everything their instances are built from, so
-orbiting, zooming and resizing the panel build nothing and write nothing
-([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). The
-figure's centre disc is not in the store (§ "Depth against the scene").
+The measurements' key and the track rays' cover everything their instances are
+built from, so orbiting, zooming and resizing the panel build nothing and write
+nothing for either ([`measurement-view.md`](measurement-view.md) § "Drawing
+measurements"). The figure's centre disc is not in the store (§ "Depth against
+the scene").
+
+**The track rays** are one segment per observation of the selected point, from
+the observing camera's centre to the nearest point on its observation ray to the
+point, or, for a point at infinity, to the observation direction with `w = 0`
+([`architecture.md`](architecture.md) § "Track Ray Visualization",
+[upload/track_rays.rs](../../crates/sfm-explorer/src/scene_renderer/upload/track_rays.rs)).
+Each is in the rays' orange at alpha 0.6, 0.75 points to either side, `HOLD`
+and not pulled toward the eye, so a ray going into the scene is drawn at
+`BEHIND_OPACITY` where the scene hides it and at full strength where it is in
+front. The 1.5-point stroke, with the point of anti-aliasing, has about the
+profile at 100% scale of the 1.5-pixel glow the rays were drawn with before.
+While the camera model proposal's preview moves the selected point, the scene
+pass leaves the rays' region undrawn.
+
 [`../drafts/overlay-ribbons.md`](../drafts/overlay-ribbons.md) describes the
-later steps: the track rays as a third producer, drawn as the other overlays
-are with a ray to a point at infinity drawn to the horizon, and whether the
-figure's barbs should turn in the shader so that its key no longer holds the
-camera.
+step that is left: whether the figure's barbs should turn in the shader so that
+its key no longer holds the camera.
 
 ## The handles
 
@@ -808,8 +838,10 @@ check that the figure's pieces are segments at the bench's width in points with
 the `FADE` flag and no pull, that the measurements' upload holds the instances
 it is handed and empties its region for none, and that the camera block carries
 the projection, the pixels per point and the pull fraction the frame handed it.
-The pass contract draws both targets' regions out of one store, a segment, a
-ring and a disc among the measurements', at an offset past the figure's. What
+The pass contract runs the renderer's own pass over all three producers'
+regions in one store, a segment, a ring and a disc among the measurements', at
+an offset past the figure's, and a track ray to a place and one to a direction
+drawn first on the scene target; with the rays shown and with them left out. What
 the shader does with them, the depth-aware blend with and without the fade, the
 clip at the near plane, the pull, the insets and the anti-aliased shapes, runs
 on no `noop` device, so it is checked by eye, with MCP screenshots of the
@@ -829,7 +861,22 @@ region growing past its capacity moves the regions after it and writes them
 again, the regions before it are not written, and past the buffer's size a
 larger buffer holds every region's instances; an empty write issues nothing,
 draws nothing and keeps the capacity; and the regions are drawn in the fixed
-order whatever order they were written in, each target drawing only its own.
+order whatever order they were written in, the track rays first, each target
+drawing only its own.
+
+`scene_renderer/upload/tests.rs` checks the track-ray producer: a finite
+point's rays run from each camera's centre to the nearest point on its
+observation ray, through the node's whole similarity; a point at infinity's
+rays end at a unit direction with `w = 0`, turned by the node's rotation alone;
+that direction projects, through the overlay shader's projection, where the
+point shader draws the point's splat under the node's model matrix, and both
+shaders pin it at `INF_DEPTH`; every ray is a `HOLD` segment in the rays' colour
+and width with no pull; and the upload writes the rays into their region on the
+scene target and the clear empties it, keeping its room. `app/tests.rs` checks
+the key: a frame with an unchanged key writes nothing, a moved node writes
+again, and a hidden node's rays are emptied and come back when it is shown.
+Every ray of a point at infinity reaching its splat at the horizon, and a ray
+dimmed where the scene hides it, are checked by eye on a real GPU.
 
 `bench/geometry/tests.rs` covers the ray arithmetic on its own: a ray meets a
 finite patch where its plane is and a bearing's tangent plane at its own
