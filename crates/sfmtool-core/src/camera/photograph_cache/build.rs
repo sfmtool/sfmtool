@@ -116,7 +116,8 @@ impl PhotographCache {
                     match &data.tier {
                         Tier::Files(_) => {
                             drop(data);
-                            let read = self.read_files(path, slot, Asked::Photograph, progress);
+                            let asked = Asked::Photograph;
+                            let read = self.read_files(path, slot, asked, true, progress);
                             return (read, Found::Reused);
                         }
                         Tier::NotCurrent => {
@@ -236,9 +237,11 @@ impl PhotographCache {
     }
 
     /// Make the mipmap of the photograph at `path`, read under `setting`,
-    /// with [`build_mipmaps`]: the mipmap its files are read from, and the
-    /// files it wrote, or for a build whose files could not be written the
-    /// mipmap read from them in memory, with a warning through `progress`.
+    /// with [`build_mipmaps`]: the mipmap its files are read from, and every
+    /// file it made. A build whose files could not be written is read from
+    /// those files in memory ([`MipmapFiles::in_memory`]), with a warning
+    /// through `progress` the first time for each photograph, not again when
+    /// a level evicted since is made again.
     /// Reads the header first, refusing the photograph as [`header`] does,
     /// and when `share` holds nothing reserves the build as a whole decode
     /// with [`Self::reserve_builds`] before reading the pixels.
@@ -298,32 +301,126 @@ impl PhotographCache {
             files,
             not_written,
         } = built;
-        let (memory, opened) = match not_written {
-            None => (None, files),
-            Some(why) => {
+        if let Some(why) = &not_written {
+            let first = self
+                .shared
+                .not_written_warned
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(path.to_path_buf());
+            if first {
                 progress_warn!(
                     reporting,
                     "The mipmap of {} is held in memory, since its files could not be \
                      written: {why}",
                     path.display()
                 );
-                let memory = files
-                    .into_iter()
-                    .map(|file| {
-                        let level = file.record().level as usize;
-                        (level, Arc::new(LevelSource::Mip(file)))
-                    })
-                    .collect();
-                (Some(memory), Vec::new())
             }
-        };
-        let files = MipmapFiles {
+        }
+        let made = MipmapFiles {
             layout: Arc::new(layout),
             location,
             source,
             region_readable,
-            memory,
+            in_memory: not_written.is_some(),
         };
-        Ok((Arc::new(files), opened))
+        Ok((Arc::new(made), files))
+    }
+
+    /// For a kernel's read of `level` of `path`, whose `slot` reads its
+    /// mipmap from `files`, a build's files held in memory, and no longer
+    /// keeps that level: make the build again in memory, as a build is made,
+    /// reserved on the build count, and answer the level. While another
+    /// caller makes it in the slot this waits, polling `progress`, and reads
+    /// what it made. The build is deterministic, so each level's record is
+    /// the one the slot first read, and one that is not fails the read with
+    /// [`Failure::Changed`] naming the file. Every level made is kept, as an
+    /// entry of a slot in the map or held by one outside it, so one build
+    /// serves the rest of the read; the slot's own eviction spares the level
+    /// asked for whatever its size, and every level of the photograph while
+    /// they are under half the budget.
+    pub(super) fn rebuild_in_memory(
+        &self,
+        path: &Path,
+        slot: &Arc<Slot>,
+        files: &Arc<MipmapFiles>,
+        level: usize,
+        progress: &Progress<'_>,
+    ) -> Result<Arc<LevelSource>, Failure> {
+        let changed = || Failure::Changed(path.to_path_buf());
+        let mut making = {
+            let mut data = slot.lock();
+            loop {
+                if !data.tier.is(files) {
+                    return Err(changed());
+                }
+                if let Some(source) = data.kept_level(level, self.next_tick()) {
+                    return Ok(source);
+                }
+                if !data.making {
+                    data.making = true;
+                    break Making {
+                        slot,
+                        share: Share::None,
+                        finished: false,
+                    };
+                }
+                progress.check_cancel()?;
+                data = slot
+                    .ready
+                    .wait_timeout(data, super::SLOT_WAIT_POLL)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+            }
+        };
+        self.shared.misses.fetch_add(1, Ordering::Relaxed);
+        let built = self.build(
+            path,
+            progress,
+            &mut making.share,
+            &slot.setting,
+            Make::Quietly,
+        );
+        // Dropping the hold on a failure gives the share back, leaves the
+        // slot as it was and wakes its waiters.
+        let (_, opened) = built?;
+        making.finish();
+        let answer = {
+            let mut inner = self.lock();
+            let mapped = inner
+                .map
+                .get(path)
+                .is_some_and(|mapped| Arc::ptr_eq(mapped, slot));
+            let mut data = slot.lock();
+            data.making = false;
+            let differs = opened.iter().find(|file| {
+                let record = file.record();
+                data.records.get(&(record.level as usize)) != Some(record)
+            });
+            if !data.tier.is(files) {
+                Err(changed())
+            } else if let Some(file) = differs {
+                let level = file.record().level as usize;
+                Err(Failure::Changed(files.file_of(path, level)))
+            } else if mapped {
+                let added = self.keep_entries(&mut data, opened);
+                inner.bytes += added;
+                let tick = self.next_tick();
+                let source = data.kept_level(level, tick);
+                drop(data);
+                // Every level is spared while under half the budget, and the
+                // one asked for whatever its size.
+                self.evict(&mut inner, slot, Asked::Keys(&[]), Some(level));
+                source.ok_or_else(changed)
+            } else {
+                for file in opened {
+                    let level = file.record().level as usize;
+                    data.held.insert(level, Arc::new(LevelSource::Mip(file)));
+                }
+                data.kept_level(level, self.next_tick()).ok_or_else(changed)
+            }
+        };
+        slot.ready.notify_all();
+        answer
     }
 }

@@ -141,6 +141,7 @@ fn failed(path: &Path, e: Failure) -> TileError {
     match e {
         Failure::Get(e) => unreadable(path, e),
         Failure::Changed(file) => TileError::Changed { path: file },
+        Failure::NotHeld => unreadable(path, Failure::not_held(path)),
     }
 }
 
@@ -450,12 +451,13 @@ impl PhotographCache {
                 &unslotted
             }
         };
+        let mut slot = slot.as_ref();
         // An out-of-core photograph whose mipmap is current is read from its
         // files, which never waits on a slot or the build count. When a file
         // turns out not current, the slot's mipmap is marked so and the
         // tiles are decoded whole below, in core, so a panel is never
         // answered `Changed`.
-        let read_from_files = match &slot {
+        let read_from_files = match slot {
             Some(slot) => match self.tier_of(path, slot) {
                 Tier::Files(files) => Some((Arc::clone(slot), files)),
                 Tier::Unchecked | Tier::InCore | Tier::NotCurrent => None,
@@ -467,14 +469,18 @@ impl PhotographCache {
         };
         if let Some((files_slot, files)) = read_from_files {
             check_keys(path, &files.layout, keys)?;
-            match self.read_files(path, &files_slot, asked, progress) {
+            match self.read_files(path, &files_slot, asked, false, progress) {
                 Ok(got) => return Ok(TryDecode::Decoded(got.tiles)),
                 Err(Failure::Get(e)) => return Err(unreadable(path, e)),
                 // `read_files` has marked the slot's mipmap not current.
                 Err(Failure::Changed(_)) => {}
+                // A level of a mipmap held in memory was evicted, which only
+                // a build makes again: the tiles are decoded whole in core
+                // and kept by no slot, which goes on reading its mipmap.
+                Err(Failure::NotHeld) => slot = None,
             }
         }
-        if let Some(slot) = &slot {
+        if let Some(slot) = slot {
             let tick = self.next_tick();
             let mut data = slot.lock();
             if data.making {

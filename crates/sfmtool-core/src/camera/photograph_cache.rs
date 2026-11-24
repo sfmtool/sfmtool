@@ -30,7 +30,7 @@
 //! and [`PhotographCache::try_decode_tiles`], which never waits. The design is
 //! in the spec `specs/core/camera/photograph-cache.md`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -53,7 +53,7 @@ mod files;
 mod tiles;
 
 use build::Make;
-use files::{Failure, FileEntry, Tier, Unmapped};
+use files::{Failure, FileEntry, LevelSource, Tier, Unmapped};
 pub use tiles::{PeekedLayout, PeekedTile, TileError, TryDecode};
 
 /// How long a caller waiting for another caller's decode of the same path
@@ -613,13 +613,14 @@ impl CachedTiles {
         let failed = |e| match e {
             Failure::Get(e) => read_error(&self.path, e),
             Failure::Changed(path) => PhotographReadError::Changed { path },
+            Failure::NotHeld => read_error(&self.path, Failure::not_held(&self.path)),
         };
         if self.layout.is_out_of_core() {
             // Read from the files the slot read, comparing each file read
             // again with the record first read, whatever the slot's place in
             // the map.
             let got = cache
-                .read_files(&self.path, &self.slot, Asked::Keys(keys), progress)
+                .read_files(&self.path, &self.slot, Asked::Keys(keys), true, progress)
                 .map_err(failed)?;
             if *got.layout != *self.layout || got.tiles.len() != keys.len() {
                 return Err(PhotographReadError::Changed {
@@ -689,6 +690,12 @@ struct SlotData {
     /// Whether the slot reads its photograph whole in core or from its mip
     /// level files, decided when a request first needs it.
     tier: Tier,
+    /// For a slot outside the map reading a mipmap held in memory, the
+    /// levels it was made with, held while the slot is (by the photograph
+    /// that reads through it), as an answer under a budget of 0 holds its
+    /// decode, and not counted. Empty for a slot in the map, which keeps them
+    /// as file entries.
+    held: HashMap<usize, Arc<LevelSource>>,
 }
 
 impl SlotData {
@@ -763,7 +770,28 @@ impl SlotData {
     fn drop_entries(&mut self) -> u64 {
         self.tiles.clear();
         self.files.clear();
+        self.held.clear();
         std::mem::take(&mut self.bytes)
+    }
+
+    /// The source of `level`'s tiles when the slot keeps its file entry,
+    /// counted as read at `tick`, or holds it as a slot outside the map.
+    fn kept_level(&mut self, level: usize, tick: u64) -> Option<Arc<LevelSource>> {
+        if let Some(entry) = self.files.get_mut(&level) {
+            entry.tick = tick;
+            return Some(Arc::clone(&entry.source));
+        }
+        self.held.get(&level).map(Arc::clone)
+    }
+
+    /// The bytes of the file entries of a mipmap held in memory, which a
+    /// slot's own eviction spares while they are under
+    /// [`READ_SPARING_SHARE`] of the budget; 0 for any other slot.
+    fn in_memory_bytes(&self) -> u64 {
+        match self.tier.files() {
+            Some(files) if files.in_memory => self.files.values().map(|e| e.bytes).sum(),
+            _ => 0,
+        }
     }
 }
 
@@ -943,6 +971,9 @@ struct Shared {
     /// the same, and read again when it changes. Its lock is taken with no
     /// other lock held.
     sources: Mutex<HashMap<PathBuf, (FileStamp, Arc<crate::camera::mipmap::MipmapSource>)>>,
+    /// The photographs whose mipmap a build of this cache could not write,
+    /// warned about once each, so making one again in memory says nothing.
+    not_written_warned: Mutex<HashSet<PathBuf>>,
     /// How many times a workspace file has been read for its
     /// `mipmap_options`.
     #[cfg(test)]
@@ -1018,6 +1049,7 @@ impl PhotographCache {
                 build_reserved: AtomicU64::new(0),
                 workspaces: Mutex::new(HashMap::new()),
                 sources: Mutex::new(HashMap::new()),
+                not_written_warned: Mutex::new(HashSet::new()),
                 #[cfg(test)]
                 workspace_reads: AtomicU64::new(0),
                 #[cfg(test)]
@@ -1620,6 +1652,7 @@ impl PhotographCache {
             Failure::Changed(file) => {
                 GetError::Unreadable(format!("{} changed while it was read", file.display()))
             }
+            Failure::NotHeld => Failure::not_held(path),
         });
         (value.and_then(|got| got.photograph(self, path)), found)
     }
@@ -1649,7 +1682,7 @@ impl PhotographCache {
             match self.unmapped_files_slot(path, &setting) {
                 Unmapped::Files(slot, _) => {
                     return (
-                        self.read_files(path, &slot, asked, progress),
+                        self.read_files(path, &slot, asked, true, progress),
                         Found::Decoded,
                     )
                 }
@@ -1670,7 +1703,10 @@ impl PhotographCache {
         }
         let slot = self.slot_for(path);
         match self.tier_of(path, &slot) {
-            Tier::Files(_) => (self.read_files(path, &slot, asked, progress), Found::Reused),
+            Tier::Files(_) => (
+                self.read_files(path, &slot, asked, true, progress),
+                Found::Reused,
+            ),
             Tier::NotCurrent if make == Make::Never => {
                 let remembered = match &slot.lock().made {
                     Some(Err(e)) => Failure::Get(e.clone()),
@@ -1853,7 +1889,7 @@ impl PhotographCache {
             }
             asked => asked,
         };
-        self.evict(inner, slot, evicting);
+        self.evict(inner, slot, evicting, None);
         // Every tile of the layout was put in the slot just above.
         got.ok_or_else(|| GetError::Unreadable(format!("{}: tiles not kept", path.display())))
     }
@@ -1868,21 +1904,36 @@ impl PhotographCache {
     /// [`Asked::Keys`].
     ///
     /// A file entry is evicted as a used tile is, by when it was last read.
-    /// The tiles of an out-of-core photograph's coarsest level and the levels
-    /// below it, cut from one decode of its coarsest mip level file, go only
-    /// after every other entry, so a photograph whose files have been read
-    /// can be drawn small at once whatever else was read since.
-    fn evict(&self, inner: &mut Inner, slot: &Arc<Slot>, asked: Asked<'_>) {
+    /// The file entries of a mipmap held in memory, which only a build makes
+    /// again, go after every other entry but the coarse tiles, and `slot`'s
+    /// own are spared while they are under [`READ_SPARING_SHARE`] of the
+    /// budget, as a read's decode is, and the level `spared_level` names
+    /// whatever their size: so a kernel reading such a photograph a tile at a
+    /// time does not make its build again for each tile, and the bytes kept
+    /// pass the budget by at most one photograph's levels. The tiles of an
+    /// out-of-core photograph's coarsest level and the levels below it, cut
+    /// from one decode of its coarsest mip level file, go only after every
+    /// other entry, so a photograph whose files have been read can be drawn
+    /// small at once whatever else was read since.
+    fn evict(
+        &self,
+        inner: &mut Inner,
+        slot: &Arc<Slot>,
+        asked: Asked<'_>,
+        spared_level: Option<usize>,
+    ) {
         if inner.bytes <= self.shared.options.budget_bytes {
             return;
         }
         let slots: Vec<Arc<Slot>> = inner.map.values().map(Arc::clone).collect();
         /// An entry that can be evicted, its fields in the order they are
-        /// evicted by: the coarse tiles last, then the unused before the
-        /// used, the least recently asked for first, the finer levels first.
+        /// evicted by: the coarse tiles last, the levels held in memory
+        /// before them, then the unused before the used, the least recently
+        /// asked for first, the finer levels first.
         #[derive(PartialEq, Eq, PartialOrd, Ord)]
         struct Candidate {
             coarse: bool,
+            in_memory: bool,
             used: bool,
             tick: u64,
             level: u8,
@@ -1896,6 +1947,9 @@ impl PhotographCache {
             let own = Arc::ptr_eq(other, slot);
             let data = other.lock();
             let coarsest = data.tier.files().map(|files| files.coarsest());
+            let in_memory = data.tier.files().is_some_and(|files| files.in_memory);
+            let spare_memory =
+                own && in_memory && spares_read_decode(data.in_memory_bytes(), self.budget_bytes());
             for (key, kept) in data.tiles.iter() {
                 let spared = own
                     && match asked {
@@ -1905,6 +1959,7 @@ impl PhotographCache {
                 if !spared {
                     candidates.push(Candidate {
                         coarse: coarsest.is_some_and(|k| usize::from(key.level) >= k),
+                        in_memory: false,
                         used: kept.used,
                         tick: kept.tick,
                         level: key.level,
@@ -1916,8 +1971,13 @@ impl PhotographCache {
                 }
             }
             for (&level, entry) in data.files.iter() {
+                let spared = own && in_memory && (spare_memory || spared_level == Some(level));
+                if spared {
+                    continue;
+                }
                 candidates.push(Candidate {
                     coarse: false,
+                    in_memory,
                     used: true,
                     tick: entry.tick,
                     level: level as u8,

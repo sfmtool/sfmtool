@@ -334,7 +334,9 @@ process renaming over it.
 blocked mipmap directory, a full disk), the build's `files` are the pixels the
 files would have held, at the workspace's qualities, so a reader can decode
 them rather than reading the exact levels for one photograph and the JPEG ones
-for another.
+for another. The same original and build give the same bytes, so a reader that
+has dropped them makes them again rather than keep them for its life
+([photograph-cache.md § "Making a mipmap"](photograph-cache.md#making-a-mipmap)).
 
 ## When a mip level file is current
 

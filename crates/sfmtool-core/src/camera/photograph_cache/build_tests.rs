@@ -6,13 +6,14 @@
 //! `mipmap_options` sets a threshold of 64, read with tiles of 32, so each is
 //! out of core with levels 1 to 4 stored, as in `mipmap_tests.rs`.
 
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, SystemTime};
 
 use crate::camera::mipmap::test_support::{encode_jpeg, synthetic_rgb, JpegOptions};
 use crate::camera::mipmap::MIPMAP_DIR_NAME;
-use crate::camera::sampler::{LevelRect, LevelRegions};
+use crate::camera::sampler::{read_source_rect, test_pool, LevelRect, LevelRegions};
 use crate::progress::{Event, Level, Progress};
 
 use super::mipmap_tests::{
@@ -27,6 +28,24 @@ use super::*;
 fn levels_read(photograph: &TiledPhotograph) -> Vec<Vec<u8>> {
     (0..photograph.layout().levels())
         .map(|level| read_level(photograph, level).unwrap())
+        .collect()
+}
+
+/// [`levels_read`], each level read through a render entry point with
+/// `progress`, which hears what a build made during the read says.
+fn levels_read_with(photograph: &TiledPhotograph, progress: &Progress<'_>) -> Vec<Vec<u8>> {
+    (0..photograph.layout().levels())
+        .map(|level| {
+            let (x1, y1) = photograph.layout().level_size(level);
+            let rect = LevelRect {
+                x0: 0,
+                y0: 0,
+                x1,
+                y1,
+            };
+            let read = read_source_rect(photograph, test_pool(), level, rect, progress).unwrap();
+            read.image().data().to_vec()
+        })
         .collect()
 }
 
@@ -336,48 +355,110 @@ fn a_build_reports_its_phases_through_the_caller_s_progress() {
     );
 }
 
-/// A build whose mipmap directory is blocked, so no file can be written, is
-/// read from the files it made in memory, with a warning through the
-/// caller's `Progress`: the same pixels as the files a build in an
-/// unblocked workspace writes, their bytes counted against the budget and
-/// kept under a budget too small to hold them, until the path is forgotten.
-#[test]
-fn a_build_behind_a_blocked_mipmap_directory_is_read_from_memory() {
+/// A temporary workspace whose mipmap directory is blocked by a file, so no
+/// mip level file can be written in it, with `n` copies of the restartless
+/// photograph; and the levels its files hold, read from an unblocked
+/// workspace, with the bytes one cache keeps for them as file entries.
+fn blocked_workspace(n: usize) -> (Workspace, Vec<PathBuf>, Vec<Vec<u8>>, u64) {
     let jpeg = restartless_jpeg();
     let written = Workspace::new();
     let on_disk = written.photograph("a.jpg", &jpeg);
-    cache_of(GIB).get(&on_disk, &Progress::none()).unwrap();
-    let want = files_level_bytes(&on_disk);
-    let held_bytes: u64 = written
-        .mipmap_files()
-        .iter()
-        .filter(|(path, _)| path.extension().is_some_and(|e| e == "jpg"))
-        .map(|(_, bytes)| bytes.len() as u64)
-        .sum();
-
+    let cache = cache_of(GIB);
+    cache.get(&on_disk, &Progress::none()).unwrap();
+    let files_bytes = cache.stats().bytes;
     let blocked = Workspace::new();
-    let path = blocked.photograph("a.jpg", &jpeg);
+    let paths = (0..n)
+        .map(|i| blocked.photograph(&format!("{i}.jpg"), &jpeg))
+        .collect();
     std::fs::write(blocked.dir.path().join(MIPMAP_DIR_NAME), b"not a directory").unwrap();
-    let warnings = Mutex::new(Vec::new());
-    let sink = |event: Event<'_>| {
+    (blocked, paths, files_level_bytes(&on_disk), files_bytes)
+}
+
+/// The warnings a `Progress` made with [`Progress::to`] of this sink is told.
+struct Warnings(Mutex<Vec<String>>);
+
+impl Warnings {
+    fn sink(&self, event: Event<'_>) {
         if let Event::Message {
             level: Level::Warn,
             text,
             ..
         } = event
         {
-            warnings.lock().unwrap().push(text.to_string());
+            self.0.lock().unwrap().push(text.to_string());
         }
+    }
+}
+
+/// Builds behind a blocked mipmap directory are read from the files they
+/// made in memory, kept as file entries counted against the budget and
+/// evicted when other photographs need the room: over four photographs under
+/// a budget of three photographs' files, the bytes kept after each `get` stay
+/// within the budget and one photograph's files, and reading each
+/// photograph's every level makes no build again. A panel's read of a level
+/// evicted since is answered from a decode in core and makes nothing; a
+/// kernel's read of it makes the build again, once, reading the same pixels.
+/// Each photograph is warned about once, though five builds are made.
+#[test]
+fn builds_behind_a_blocked_mipmap_directory_stay_within_the_budget() {
+    let (_ws, paths, want, files_bytes) = blocked_workspace(4);
+    let budget = 3 * files_bytes;
+    let cache = cache_of(budget);
+    let warnings = Warnings(Mutex::new(Vec::new()));
+    let sink = |event: Event<'_>| warnings.sink(event);
+    let progress = Progress::to(&sink);
+    let mut photographs = Vec::new();
+    for path in &paths {
+        let photograph = cache.get(path, &progress).unwrap();
+        let stats = cache.stats();
+        assert!(stats.bytes <= budget + files_bytes, "{stats:?}");
+        assert!(stats.files > 0, "kept as file entries");
+        assert_eq!(levels_read(&photograph), want);
+        photographs.push(photograph);
+    }
+    assert_eq!(cache.stats().mipmaps_made, 4, "no build made again");
+
+    // The first photograph's levels have been evicted for the others'.
+    let key = TileKey {
+        level: 1,
+        col: 1,
+        row: 1,
     };
-    let cache = cache_of(1);
-    let photograph = cache.get(&path, &Progress::to(&sink)).unwrap();
-    let warnings = warnings.into_inner().unwrap();
-    assert_eq!(warnings.len(), 1, "{warnings:?}");
-    assert!(warnings[0].contains("held in memory"), "{warnings:?}");
+    let in_core = cut_image(ImageU8::read_rgb(&paths[0]).unwrap(), TILE).tiles;
+    let Ok(TryDecode::Decoded(tiles)) =
+        cache.try_decode_tiles(&paths[0], &[key], &Progress::none())
+    else {
+        panic!("a panel's decode");
+    };
+    assert!(same_tile(&tiles[0], &in_core[&key]), "decoded in core");
+    assert_eq!(cache.stats().mipmaps_made, 4, "a panel makes nothing");
+
+    assert_eq!(levels_read_with(&photographs[0], &progress), want);
+    let stats = cache.stats();
+    assert_eq!(stats.mipmaps_made, 5, "made again once");
+    assert!(stats.bytes <= budget + files_bytes, "{stats:?}");
+    let warnings = warnings.0.into_inner().unwrap();
+    assert_eq!(warnings.len(), 4, "{warnings:?}");
+    assert!(warnings.iter().all(|w| w.contains("held in memory")));
+    cache.clear();
+    assert_eq!(cache.stats().bytes, 0);
+}
+
+/// A photograph `get` answered from a build held in memory reads every level
+/// after its slot has left the map, which drops the slot's entries: the first
+/// read makes the build again, once, and the photograph holds what it made,
+/// so its later reads make nothing; every level is the same pixels as the
+/// files an unblocked build writes.
+#[test]
+fn an_evicted_in_memory_level_is_made_again_and_reads_the_same_pixels() {
+    let (_ws, paths, want, _) = blocked_workspace(1);
+    let cache = cache_of(GIB);
+    let photograph = cache.get(&paths[0], &Progress::none()).unwrap();
+    cache.forget(&paths[0]);
+    assert_eq!(cache.stats().bytes, 0);
+    assert_eq!(levels_read(&photograph), want);
+    assert_eq!(cache.stats().mipmaps_made, 2);
     assert_eq!(levels_read(&photograph), want);
     let stats = cache.stats();
-    assert_eq!((stats.files, stats.mipmaps_made, stats.decodes), (0, 1, 0));
-    assert!(stats.bytes >= held_bytes, "{stats:?} against {held_bytes}");
-    cache.forget(&path);
-    assert_eq!(cache.stats().bytes, 0);
+    assert_eq!((stats.mipmaps_made, stats.bytes), (2, 0), "held, not kept");
 }

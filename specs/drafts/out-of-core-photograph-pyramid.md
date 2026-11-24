@@ -3243,9 +3243,19 @@ in core. Step 17 turns the tier on.
       *Build mipmaps* gives way to every task asked for (14e), such
       leftovers would be common. The slot keeps the files the build returned
       as its file entries, with their records, and drops the tiles a panel's
-      decode in core kept for it; a build held in memory keeps its files on
-      the slot's `MipmapFiles`, counted against the budget and never
-      evicted, so a photograph a kernel holds stays readable. Under a budget
+      decode in core kept for it. A build held in memory is kept the same
+      way, as file entries counted against the budget, evicted after every
+      entry but the coarse tiles and spared by the slot's own eviction while
+      under half the budget, as 13e5 spares a read's decode; a kernel's read
+      of a level evicted since makes the build again in the slot, deterministic
+      so its records match, keeping every level, and a panel's read of one
+      decodes in core, kept by no slot, since a panel never makes a mipmap.
+      A slot outside the map holds the levels it was made with, as an answer
+      under a budget of 0 holds its decode, and the warning is sent once for
+      each photograph. So in a read-only workspace the bytes kept pass the
+      budget by at most one photograph's levels rather than pinning every
+      photograph read (an audit finding; option (a), which the draft's
+      "counted against the budget" asks for). Under a budget
       of 0 nothing is kept, so a `get` whose files could not be written
       builds again on its next call. `PhotographCacheStats::decodes` does
       not count a build, which `mipmaps_made` counts once it finishes;

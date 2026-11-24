@@ -388,12 +388,16 @@ An out-of-core photograph read from its mip level files (§ "Out-of-core
 photographs") adds a second kind of entry: each file its tiles are decoded
 from, its bytes and restart index, counted against the same budget and
 evicted as a used tile is, by when it was last read. `stats` counts them as
-`files` beside the `tiles`, and its `bytes` are both kinds'. The tiles of such
-a photograph's coarsest stored level `K` and of the levels below it, which
-one decode of level `K`'s file makes (one tile at the default size, about
-0.78 MB for a 16320×12240 photograph), go only after every other entry, so a
-photograph whose files have been read can be drawn small at once whatever
-was read since.
+`files` beside the `tiles`, and its `bytes` are both kinds'. The files of a
+build that could not write them, held in memory, are such entries too, but
+go after every other entry but the coarse tiles, since only a build makes
+them again, and a photograph's own eviction spares them while they are under
+half the budget, as a read's decode is spared (§ "Making a mipmap"). The
+tiles of such a photograph's coarsest stored level `K` and of the levels
+below it, which one decode of level `K`'s file makes (one tile at the default
+size, about 0.78 MB for a 16320×12240 photograph), go only after every other
+entry, so a photograph whose files have been read can be drawn small at once
+whatever was read since.
 
 A `get_many` over more photographs than the budget holds evicts its own
 earlier photographs' tiles as it goes, and the next call finds only the tail
@@ -747,13 +751,31 @@ in-core photograph there, with no builder object or queue; the code is in
   read again after its bytes are evicted is compared with the record the
   build wrote. The slot drops the tiles a panel's decode in core kept for it.
   A build whose files could not be written (a blocked mipmap directory, a
-  full disk) is read from the files it holds in memory, every level from
-  there and level 0 of a region-readable original from the original: their
-  bytes are counted against the budget while the slot is in the map, and
-  never evicted, and a warning through the caller's `Progress` says why, as
-  *The mipmap of … is held in memory, since its files could not be
-  written: …*. A build that fails otherwise is `GetError::Unreadable` naming
-  the photograph, remembered as a failed decode is until the file changes.
+  full disk) is read from the files it made in memory, level 0 of a
+  region-readable original from the original, and a warning through the
+  caller's `Progress` says why, once for each photograph, as *The mipmap of
+  … is held in memory, since its files could not be written: …*. A slot in
+  the map keeps those files as file entries, counted against the budget and
+  evicted as other entries are, after every entry but the coarse tiles,
+  since only a build makes them again; its own eviction spares them while
+  they are under half the budget, as a read's decode is spared (§ "Budget
+  and eviction"). A kernel's read of a level evicted since makes the build
+  again in memory in the slot, as a build is made and reserved, waiting
+  while another caller makes it; the build is deterministic, so each
+  level's record is the one first read (one that is not fails the read
+  with `Changed`), and it keeps every level it made, so one build serves
+  the rest of the read, and its own eviction spares the level asked for
+  whatever its size. So the bytes kept pass the budget by at most one
+  photograph's levels, and a kernel reading such a photograph a tile at a
+  time makes it again only when other photographs have needed the room. A
+  slot outside the map (a budget of 0, or one forgotten while a photograph
+  reads through it) holds the levels it was made with, as an answer under a
+  budget of 0 holds its decode, and makes them again at most once after it
+  leaves the map. A panel's decode never makes them again: for a level no
+  longer kept it decodes the tiles asked for whole in core, kept by no
+  slot, and the slot goes on reading its mipmap. A build that fails
+  otherwise is `GetError::Unreadable` naming the photograph, remembered as
+  a failed decode is until the file changes.
 - **Progress.** A `get` reports the build's phases `decode`, `reduce` and
   `encode`, counting levels, through its `Progress`; a `get_many` member
   passes on only the build's messages, since the phases of members running in
@@ -1083,9 +1105,15 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   mipmap, the second waiting with nothing reserved; a maker cancelled during
   its encodes stopping within one level, the coarsest file not yet written,
   and the waiter that takes over making only the levels not written; a
-  build's phases reported through the caller's `Progress`; and a build
-  behind a blocked mipmap directory read from memory with a warning, its
-  bytes counted and kept under a budget too small to hold them.
+  build's phases reported through the caller's `Progress`; four builds
+  behind a blocked mipmap directory under a budget of three photographs'
+  files, the bytes kept after each `get` within the budget and one
+  photograph's files, no build made again while each is read, a panel's
+  read of a level evicted since answered from a decode in core and making
+  nothing, a kernel's read of it making the build again once and reading
+  the same pixels, and one warning for each photograph; and a photograph
+  whose slot left the map making its in-memory build again once and
+  holding it for its later reads.
 - [bench/tests/bulk_budget.rs](../../../crates/sfmtool-core/src/bench/tests/bulk_budget.rs),
   bulk kernels on one thread over six photographs written to a temporary
   directory: *Refit all points* under a budget of one photograph and under
