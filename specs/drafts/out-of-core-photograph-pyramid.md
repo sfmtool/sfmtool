@@ -23,8 +23,9 @@ or number of the photographs. That last part is specified in the companion
 draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
-optimization. The user has decided every open question of this draft
-(§ "Open questions", 1 to 15) and every one of the companion draft's.
+optimization. The user has decided open questions 1 to 16 of this draft
+(§ "Open questions") and every one of the companion draft's; questions 17
+and 18, found while splitting step 15, await a decision.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
@@ -792,7 +793,7 @@ the budget, so the panel never asks for more than the cache can keep.
   behind the viewer's *Build SIFT files* and `pick-images`, makes them from
   the decode it already holds, passing it as `build_mipmaps`'s `decoded`
   argument, since there the decode is in Rust and handing it over is a
-  borrow, not a binding's array.
+  borrow, not a binding's array (built, step 15a, before the extraction).
 - **`sfm ws mipmaps PATHS…`** makes them explicitly for the photographs under
   the paths (skipping in-core ones and current mipmaps), with `--prune` to delete
   orphans and `--check` to report stale mipmaps without writing. It is the way to
@@ -3637,6 +3638,76 @@ in core. Step 17 turns the tier on.
     `--prune` deletes an orphan and
     keeps a current mipmap, and deletes every mip level file in a workspace without the
     object; `--check` writes nothing.
+
+    The step is five pull requests, 15a to 15e, each a maker or a part of
+    one that works on its own: the Rust `.sift` build first, since it needs
+    no binding and no decision; then the viewer's two parts, the list
+    filled at open and the thumbnail; then the Python makers, which need a
+    binding. In a workspace without `mipmap_options`, which until step 17
+    is every workspace no one has edited by hand, every result, file and
+    picture is the same after each part.
+
+    - **15a, `build_sift_file` makes mipmaps.** **Built.** In a workspace
+      whose file has `mipmap_options`, each image `build_sift_file` decodes
+      that is out of core and whose mipmap is not current (`check_mipmap`
+      against a `MipmapSource` read for it) gets its mipmap made by
+      `build_mipmaps` with the decode as `decoded`, so the viewer's *Build
+      SIFT files* and `pick-images`, in the viewer and on the command line,
+      make the mipmaps of the photographs they extract. No signature
+      changes. Tests: a build in a workspace with a threshold of 64 writes
+      the mip level files of the 300 x 200 photograph and none for the
+      60 x 40 one, reporting no phase of the build; a workspace without the
+      object gets no mipmap directory; an invalid object is a warning
+      naming each image, with every `.sift` still written.
+      **As built** ([sift/files.rs](../../crates/sfmtool-core/src/features/sift/files.rs)):
+      the build runs after the decode, the hash and the thumbnail and before
+      the gray conversion, while the decode is held anyway, rather than after
+      the `.sift` is written as the Python extractors will: kept until after
+      the extraction, the decode would sit beside the extraction's own
+      memory, and made before it, the build's few bytes per source pixel
+      stay below the extraction's peak, so the number of images run at once
+      is unchanged. A build that fails, an invalid object and files that
+      could not be written are warnings through the caller's `Progress`, and
+      the `.sift` file is still written, as `build_mipmaps`' report of
+      failures in § "Python bindings" does not stop a run; a cancelled build
+      is the run's cancellation. Only the build's messages reach the
+      caller's `Progress`, since its phases and counts would replace
+      `build_sift_files`' image count.
+    - **15b, the list filled at open.** When a reconstruction opens in a
+      workspace with the object, the open job finds its out-of-core
+      photographs whose mipmaps are not current (a `stat`, the header, the
+      region test's markers and the coarsest file's record each) and puts
+      them on *Build mipmaps*' list, the selected image first, then the
+      Image Browser strip's, then the rest in image order, behind any a
+      panel has queued, and the task is queued. Tests: the task makes the
+      selected image's mipmap in its first run; takes a photograph a panel
+      adds to the front of its list in its next run without cancelling the
+      running one; and lets a waiting quiet task of higher `QuietRank` (a
+      camera model proposal's job) start between its chunks while it has a
+      long list.
+    - **15c, the thumbnail from the coarsest mip level file.** The display
+      thumbnail of an out-of-core photograph whose coarsest mip level file
+      is current is made from that file; one whose file is not current gets
+      the placeholder row at open, filled on the rayon pool once the
+      photograph is `Known` (§ "Readers on the GUI thread"). Waits on open
+      question 18 for `sfm web-export`, which fills a missing column with
+      the same rows. Tests: the row equals `thumbnail_from_rgb` of the
+      coarsest level's decode with no whole decode of the original; a
+      placeholder row is filled once the task has made the mipmap. Visible:
+      a thumbnail's pixels change slightly.
+    - **15d, the Python makers and `sfm sift`.** The binding the Python
+      extractors call after each `.sift` is written, on one cache the run
+      holds, and `sfm sift --extract` making the mipmaps of the photographs
+      it extracts. Waits on open question 17, which decides the binding.
+      Tests: `sfm sift` on a small-threshold synthetic workspace writes the
+      files; in a workspace without the object it writes none.
+    - **15e, `sfm ws mipmaps PATHS…` with `--prune` and `--check`.** The
+      `ws` subcommand, its spec beside `ws-init-command.md`, and the core
+      functions that prune and check, behind a binding; the builds through
+      the binding of 15d. Tests: `--prune` deletes an orphan and keeps a
+      current mipmap, and deletes every mip level file in a workspace without
+      the object; `--check` writes nothing. Visible: the new subcommand's
+      help.
 16. **Python and the readers that must agree with the viewer**: the
     `sfmtool.photographs` submodule with the `PhotographCache` class (its
     layout, level, tile and region reads, `build_mipmaps`, `stats`) and core's
@@ -3693,8 +3764,8 @@ or `read_rgb` pixel by pixel.
 
 ## Open questions
 
-The user has decided every question below; the section records the
-decisions.
+The user has decided questions 1 to 16; the section records the
+decisions. Questions 17 and 18 await the user's decision.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
@@ -3843,3 +3914,46 @@ decisions.
     does not apply. The first form of 14e2a built (a) and named the
     stand-in in G13; that clause is gone and the panel's spec cites G1 to
     G12 for it.
+17. **The binding `sfm sift` and `sfm ws mipmaps` build through in step
+    15.** Found while splitting step 15. Step 15 has `sfm sift` and
+    `sfm ws mipmaps` make mipmaps, and step 16 moves "`sfm ws mipmaps` and
+    the Python SIFT extractors on `PhotographCache.build_mipmaps`", the one
+    way to build mipmaps from Python with no free function (§ "Python
+    bindings"). So step 15 names no binding for them to call. The options:
+    - (a) 15d brings forward the `sfmtool.photographs` submodule with the
+      `PhotographCache` class, its constructor and `build_mipmaps` (and
+      `stats`, which a test of shared builds reads), wired as § "Python
+      bindings" says; step 16 adds `layout`, `read_level`, `read_tile` and
+      `read_region`, `ImagePyramidSet.read` and the readers moved onto it;
+    - (b) step 15 adds a free binding, such as
+      `sfmtool.workspace.build_mipmaps(paths)`, and step 16 replaces it
+      with the class's method, deleting the free function;
+    - (c) `sfm sift`'s mipmaps and the whole of `sfm ws mipmaps` move to
+      step 16, beside the class, and step 15 keeps the Rust `.sift` build,
+      the viewer's list at open and the thumbnail.
+
+    *Recommended:* (a). It keeps the rule that the class's method is the one
+    way to build from Python, builds no binding only to delete it, and
+    keeps the makers in the step that is about makers; the class is small
+    without its reads, and its wiring (the submodule, the lazy-loading and
+    registration tests) is work step 16 would otherwise do. *Awaiting the
+    user's decision.*
+18. **`sfm web-export`'s thumbnail of an out-of-core photograph whose
+    mipmap is not current.** Found while splitting step 15.
+    `display_thumbnail_row` fills a missing thumbnail column for both the
+    viewer's open and `sfm web-export`, "so the two show the same picture".
+    § "Readers on the GUI thread" decides the viewer's case: the
+    placeholder row at open, filled from the coarsest mip level file once
+    the photograph is `Known`. A web export writes its thumbnails once, so
+    it has no later fill. The options:
+    - (a) the export makes the mipmap first, through the photograph cache
+      it reads with (`get_many`, as it makes the mipmaps its patch
+      bitmaps need), and reads the coarsest file, so its rows are the
+      viewer's;
+    - (b) the export decodes the original whole and resizes it, as today,
+      so its row differs slightly from the viewer's;
+    - (c) the export writes the placeholder row.
+
+    *Recommended:* (a), as § "Who makes the mipmaps, and when" has every
+    reader of the cache make the mipmaps it needs, and the export already
+    makes them for its patch bitmaps. *Awaiting the user's decision.*

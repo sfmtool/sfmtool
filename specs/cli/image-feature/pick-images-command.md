@@ -279,7 +279,8 @@ The vote's camera is not used, and the term is off, when the pilot walk chose
 fewer than 3 frames, the vote reached no consensus, or its pool spread is
 above 0.35. The pilot writes nothing: no `.matches` file, no `.camrig`, and
 nothing in the workspace but the `.sift` files of the frames it reads, which
-the walk after it reuses. A rig sequence always has a camera, from its
+the walk after it reuses, and their mipmaps in a workspace with
+`mipmap_options` ([Extraction](#extraction)). A rig sequence always has a camera, from its
 `.camrig`, so the pilot runs only for sequences of single images.
 
 ### Extraction
@@ -292,7 +293,11 @@ call: `pick_images` is given the workspace's `feature_options` and
 `feature_prefix_dir` and extracts in Rust, as `build_sift_files` does
 ([core/features/sift.md § Building `.sift` files](../../core/features/sift.md#building-sift-files)):
 the same files at the same paths, with the same content, a file at least as
-new as its image used as it is, and every file kept. The extraction runs on a
+new as its image used as it is, and every file kept. In a workspace whose
+file has `mipmap_options`, a frame it extracts that is out of core also gets
+its mipmap, made from the same decode, as `build_sift_files` makes one, and
+`--prune-images` leaves the mip level files of the frames it deletes. The
+extraction runs on a
 pool of workers, as many as `build_sift_files` runs (one per core, capped
 by memory, or `SFMTOOL_SIFT_EXTRACT_WORKERS`), ahead of the walk, on the
 frames the walk predicts it will read: the next step's first candidate and

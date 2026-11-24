@@ -19,8 +19,11 @@ one, or of a region-readable original, is decoded alone. The photograph cache
 reads an out-of-core photograph whose mipmap is current from its files, and
 its `get` makes the mipmap of one whose files are missing or stale
 ([photograph-cache.md § "Out-of-core photographs"](photograph-cache.md#out-of-core-photographs)).
-No command writes `mipmap_options` yet; the viewer's and `sfm`'s makers and
-the object's writers come in the steps of
+`build_sift_files`, behind the viewer's *Build SIFT Files* and `pick-images`,
+makes the mipmap of each out-of-core photograph it decodes, from that decode
+([sift.md § "Building `.sift` files"](../features/sift.md#building-sift-files)).
+No command writes `mipmap_options` yet; `sfm sift`'s and the viewer's other
+makers and the object's writers come in the steps of
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
 which also has the measurements behind the choices below.
 
