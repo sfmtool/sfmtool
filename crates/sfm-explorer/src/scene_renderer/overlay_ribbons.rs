@@ -5,11 +5,11 @@
 //! overlay figure the 3D view draws, a region per producer.
 //!
 //! A producer is the code that builds one overlay's instances: the track
-//! rays, the bench figure, and the drawn measurements. Each writes its instances into its own
-//! region with [`OverlayRibbons::write`], and each target's pass draws its
-//! regions out of the one buffer in the fixed region order
-//! ([`ProducerId`]'s). `specs/gui/viewer-3d-bench-layer.md` § "The overlay
-//! ribbon store" describes it.
+//! rays, the bench figure, and the drawn measurements. Each writes its
+//! instances into its own region with [`OverlayRibbons::write`], and each
+//! target's pass draws its regions out of the one buffer in the fixed region
+//! order ([`ProducerId`]'s). `specs/gui/viewer-3d-bench-layer.md` § "The
+//! overlay ribbon store" describes it.
 //!
 //! The regions lie end to end in [`ProducerId`] order, each `capacity`
 //! instances long. A write that fits its region's capacity is one

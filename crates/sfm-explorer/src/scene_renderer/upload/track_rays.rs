@@ -26,10 +26,10 @@ pub(super) const TRACK_RAY_COLOR: [f32; 4] = [1.0, 0.647, 0.0, 0.6];
 ///
 /// With the point of anti-aliasing the shader adds, a ray's coverage is full
 /// over its middle half point and falls to nothing 1.25 points from its
-/// middle. At 100% scale that is about the profile of the 1.5-pixel glow the
-/// rays were drawn with before they joined the store, and at
-/// [`TRACK_RAY_COLOR`]'s alpha it puts about as much orange on screen across
-/// a ray.
+/// middle. At 100% scale that is about the profile of the glow, 1.5 pixels to
+/// either side of the middle, that the rays were drawn with before they joined
+/// the store, and at [`TRACK_RAY_COLOR`]'s alpha it puts about as much orange
+/// on screen across a ray.
 pub(super) const TRACK_RAY_HALF_WIDTH: f32 = 0.75;
 
 /// The rays of `point_ref` as overlay segments, one per observation whose

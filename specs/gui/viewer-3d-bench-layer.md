@@ -403,7 +403,8 @@ Each is in the rays' orange at alpha 0.6, 0.75 points to either side, `HOLD`
 and not pulled toward the eye, so a ray going into the scene is drawn at
 `BEHIND_OPACITY` where the scene hides it and at full strength where it is in
 front. The 1.5-point stroke, with the point of anti-aliasing, has about the
-profile at 100% scale of the 1.5-pixel glow the rays were drawn with before.
+profile at 100% scale of the glow, 1.5 pixels to either side, that the rays
+were drawn with before.
 While the camera model proposal's preview moves the selected point, the scene
 pass leaves the rays' region undrawn.
 
