@@ -424,7 +424,7 @@ fn a_highlighted_point_with_a_surfel_shows_as_its_outline_and_not_its_dot() {
         "if in.w != 0.0 {",
         "if !is_outlined(in) {",
         "out.back_facing = 1u;",
-        "let outline = (selected || hovered) && edge_px < OUTLINE_WIDTH_PX;",
+        "let outline = (selected || hovered) && edge_px < outline_width_px();",
         "if !outline && (texel.a < uniforms.alpha_cutoff || in.back_facing != 0u) {",
         "let opacity = select(uniforms.patch_opacity * in.alpha, 1.0, outline);",
     ] {
@@ -447,7 +447,7 @@ fn the_hidden_outline_is_the_surfels_band_at_the_bench_figures_behind_opacity() 
         "return place_preview(in, preview, size_factor);",
         // The same band, in the same colours, at the opacity the bench figure
         // is drawn through the scene at.
-        "if edge_distance_px(in.uv) >= OUTLINE_WIDTH_PX {",
+        "if edge_distance_px(in.uv) >= outline_width_px() {",
         "return vec4<f32>(outline_color(in.mark, selected), BEHIND_OPACITY);",
         "rgb = outline_color(in.mark, selected);",
     ] {
@@ -468,6 +468,44 @@ fn the_hidden_outline_is_the_surfels_band_at_the_bench_figures_behind_opacity() 
         bench.contains("BEHIND_OPACITY *") && !bench.contains("const BEHIND_OPACITY"),
         "bench_track.wgsl does not read the shared BEHIND_OPACITY"
     );
+}
+
+/// An overlay segment's inset ends: an end clipped at the near plane is not
+/// inset, a segment no longer on screen than its insets draws nothing, the cut
+/// ends lie on the segment at the places that project there, and a cut end's
+/// coverage falls off over a point as the sides' does while an end that is
+/// not cut stays square.
+#[test]
+fn an_overlay_segment_is_inset_on_screen_except_at_a_clipped_end() {
+    let bench = include_str!("../../shaders/bench_track.wgsl");
+    for line in [
+        "@location(8) inset: vec2<f32>,",
+        "inset_a = 0.0;",
+        "inset_b = 0.0;",
+        "if edge_len <= inset_a + inset_b {",
+        "let start = at_screen_fraction(clip_a, clip_b, inset_a / edge_len);",
+        "let end = at_screen_fraction(clip_a, clip_b, 1.0 - inset_b / edge_len);",
+        "let t = fraction * clip_a.w / ((1.0 - fraction) * clip_b.w + fraction * clip_a.w);",
+        "let reach = select(select(0.0, aa_px, cut_a), select(0.0, aa_px, cut_b), is_b);",
+        "select(NOT_CUT, -along, cut_a),",
+        "select(NOT_CUT, along - drawn_len, cut_b),",
+        "outside = max(abs(in.local.y) - half_px, max(in.past_ends.x, in.past_ends.y));",
+    ] {
+        assert!(
+            bench.lines().any(|l| l.trim() == line),
+            "bench_track.wgsl does not declare `{line}`"
+        );
+    }
+    // Each end's inset is dropped in the branch that clips that end.
+    let clip_a = bench
+        .find("va = mix(va, vb, t);")
+        .expect("end a is clipped");
+    let clip_b = bench
+        .find("vb = mix(va, vb, t);")
+        .expect("end b is clipped");
+    assert!(bench[clip_a..clip_b].contains("inset_a = 0.0;"));
+    assert!(!bench[clip_a..clip_b].contains("inset_b = 0.0;"));
+    assert!(bench[clip_b..].contains("inset_b = 0.0;"));
 }
 
 #[test]
@@ -569,15 +607,30 @@ fn the_splat_and_the_outline_share_the_highlight_colours_and_the_bench_stroke() 
         }
     }
     // The outline is as wide as the stroke the bench draws the patch being
-    // edited with, so the two read as the same kind of mark.
-    let line = format!(
-        "const OUTLINE_WIDTH_PX: f32 = {};",
-        2.0 * super::super::gpu_types::BENCH_LINE_HALF_WIDTH
-    );
-    assert!(
-        include_str!("../../shaders/patch.wgsl")
-            .lines()
-            .any(|l| l.trim() == line),
-        "patch.wgsl does not declare `{line}`"
+    // edited with, so the two read as the same kind of mark: both in panel
+    // points, the outline turned into the pixels its edge distance is measured
+    // in by the frame's pixels per point, which the patch uniform block
+    // carries as the bench pass's does.
+    let patch = include_str!("../../shaders/patch.wgsl");
+    for line in [
+        format!(
+            "const OUTLINE_WIDTH_POINTS: f32 = {};",
+            2.0 * super::super::gpu_types::BENCH_LINE_HALF_WIDTH
+        ),
+        "return OUTLINE_WIDTH_POINTS * uniforms.pixels_per_point;".to_string(),
+        "pixels_per_point: f32, // physical pixels to a panel point".to_string(),
+    ] {
+        assert!(
+            patch.lines().any(|l| l.trim() == line),
+            "patch.wgsl does not declare `{line}`"
+        );
+    }
+    let bench = include_str!("../../shaders/bench_track.wgsl");
+    assert!(bench.contains("let half_px = in.half_width * px;"));
+    // The patch block's Rust side places `pixels_per_point` straight after
+    // the camera position, where the WGSL declares it.
+    assert_eq!(
+        std::mem::offset_of!(super::super::gpu_types::PatchUniforms, pixels_per_point),
+        std::mem::offset_of!(super::super::gpu_types::PatchUniforms, camera_pos) + 12
     );
 }

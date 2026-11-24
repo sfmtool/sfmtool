@@ -19,6 +19,7 @@ use crate::measurements::fixture::{measured_state, POINTS};
 use crate::measurements::{EndpointSide, MeasurementRef};
 use crate::platform::ScrollInput;
 use crate::scene::ReconId;
+use crate::scene_renderer::OverlayInstance;
 use crate::state::AppState;
 
 use super::super::Viewer3D;
@@ -42,10 +43,23 @@ fn frame(
     events: Vec<egui::Event>,
     pointer: egui::Pos2,
 ) -> Frame {
+    frame_sized(viewer, ctx, state, events, pointer, VIEWPORT)
+}
+
+/// [`frame`] in a window `size` points across.
+fn frame_sized(
+    viewer: &mut Viewer3D,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    events: Vec<egui::Event>,
+    pointer: egui::Pos2,
+    size: egui::Vec2,
+) -> Frame {
+    viewer.measurement_key = state.measurement_layer_key(state.show_all_measurements);
     viewer.measurements = state.measurement_layer(state.show_all_measurements);
     crate::platform::set_test_pointer_pos(Some(pointer));
     let input = egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT)),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
         events,
         // Half a second a frame, so clicks on separate frames are never a
         // double-click and the two of one frame are.
@@ -537,66 +551,43 @@ fn a_line_with_one_end_behind_the_eye_is_clipped() {
     );
 }
 
-/// Ribbons a mark draws: a ring and its halo, of `RING_SEGMENTS` chords each,
-/// and the dot.
-const MARK_RIBBONS: usize = 2 * super::RING_SEGMENTS + 1;
+/// How every piece of a measurement is drawn.
+const FLAGS: u32 = OverlayInstance::HOLD | OverlayInstance::PULL_TOWARD_EYE;
 
-/// `p` moved [`super::toward_eye_fraction`] of the way toward the viewer's eye
-/// in `rect`, as the
-/// pass takes it.
-fn toward_eye(viewer: &Viewer3D, rect: egui::Rect, p: Point3<f64>) -> [f32; 4] {
-    let eye = viewer.camera.position();
-    let q = eye + (p - eye) * (1.0 - super::toward_eye_fraction(&viewer.camera, rect));
-    [q.x as f32, q.y as f32, q.z as f32, 1.0]
+/// A finite world point as an instance holds it.
+fn at(p: Point3<f64>) -> [f32; 4] {
+    [p.x as f32, p.y as f32, p.z as f32, 1.0]
 }
 
-/// Where the viewport projects a ribbon's endpoint.
-fn on_screen(viewer: &Viewer3D, rect: egui::Rect, p: [f32; 4]) -> egui::Pos2 {
-    projected(
-        viewer,
-        rect,
-        Point3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2])),
-    )
-}
-
-fn assert_close(a: [f32; 4], b: [f32; 4], what: &str) {
-    assert!(
-        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4),
-        "{what}: {a:?} != {b:?}"
-    );
-}
-
-/// The selected measurement's ribbons: the line and its halo between the two
-/// endpoints, then each mark's ring and halo at its radius on screen, the
-/// selected endpoint's larger, and its dot; in the node's colour and the
-/// halo's, at the stroke's width in physical pixels. The frame builds the
-/// same ribbons for the upload.
+/// The selected measurement's instances: the halos of its line and of each
+/// mark's ring, then the line and each ring, then each dot; each ring and dot
+/// one instance at the endpoint's own position with its radius in points, the
+/// selected endpoint's ring larger; in the node's colour and the halo's, at
+/// the strokes' widths in points, held behind the scene and pulled toward the
+/// eye. The frame builds the same instances for the upload.
 #[test]
-fn a_measurement_draws_its_line_and_marks_as_ribbons() {
+fn a_measurement_draws_its_line_and_marks_as_instances() {
     use crate::measurement_marks::{
-        HALO, LINE_WIDTH, MARK_DOT_RADIUS, MARK_RADIUS, SELECTED_MARK_SCALE, STORED_RGB,
+        HALO, HALO_EXTRA_WIDTH, LINE_WIDTH, MARK_DOT_RADIUS, MARK_RADIUS, SELECTED_MARK_SCALE,
+        STORED_RGB,
     };
     let (mut state, id) = measured_state(Some("m"));
     let m = select(&mut state, id, 0);
     state.select_endpoint(m, EndpointSide::B);
     let (mut viewer, ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
-    let shown = frame(
+    frame(
         &mut viewer,
         &ctx,
         &mut state,
         Vec::new(),
         egui::pos2(5.0, 5.0),
     );
-    let rect = shown.rect;
+    let pieces = super::instances(&viewer.measurements);
     assert_eq!(
-        viewer.measurement_ribbons,
-        super::ribbons(&viewer.measurements, &viewer.camera, rect, 1.0),
-        "the frame builds the ribbons the upload draws"
+        viewer.measurement_upload.as_ref(),
+        Some(&pieces),
+        "the frame builds the instances the upload draws"
     );
-
-    let ppp = 2.0;
-    let ribbons = super::ribbons(&viewer.measurements, &viewer.camera, rect, ppp);
-    assert_eq!(ribbons.len(), 2 + 2 * MARK_RIBBONS);
     let grey = super::encoded_rgba(egui::Color32::from_rgb(
         STORED_RGB[0],
         STORED_RGB[1],
@@ -615,67 +606,168 @@ fn a_measurement_draws_its_line_and_marks_as_ribbons() {
         ]
     );
 
-    let (a, b) = (Point3::from(POINTS[0]), Point3::from(POINTS[1]));
-    let [line_halo, line] = [ribbons[0], ribbons[1]];
-    for (ribbon, color, width) in [
-        (line_halo, halo, LINE_WIDTH + 2.0),
-        (line, grey, LINE_WIDTH),
-    ] {
-        assert_close(ribbon.a, toward_eye(&viewer, rect, a), "line end A");
-        assert_close(ribbon.b, toward_eye(&viewer, rect, b), "line end B");
-        assert_eq!(ribbon.color, color);
-        assert_eq!(ribbon.half_width, width / 2.0 * ppp);
+    let (a, b) = (at(Point3::from(POINTS[0])), at(Point3::from(POINTS[1])));
+    let (half, halo_half) = (LINE_WIDTH / 2.0, (LINE_WIDTH + HALO_EXTRA_WIDTH) / 2.0);
+    let selected = MARK_RADIUS * SELECTED_MARK_SCALE;
+    // The line and its halo stop at the outer edge of each ring's stroke.
+    let line = |color, half_width| {
+        OverlayInstance::segment(a, b, color, half_width, FLAGS)
+            .inset(MARK_RADIUS + half, selected + half)
+    };
+    let ring =
+        |p, color, radius, half_width| OverlayInstance::ring(p, color, radius, half_width, FLAGS);
+    let dot = |p| OverlayInstance::disc(p, grey, MARK_DOT_RADIUS, FLAGS);
+    assert_eq!(
+        pieces,
+        vec![
+            line(halo, halo_half),
+            ring(a, halo, MARK_RADIUS, halo_half),
+            ring(b, halo, selected, halo_half),
+            line(grey, half),
+            ring(a, grey, MARK_RADIUS, half),
+            ring(b, grey, selected, half),
+            dot(a),
+            dot(b),
+        ]
+    );
+    for piece in &pieces {
+        assert_eq!(piece.flags, FLAGS);
     }
+}
 
-    for (k, (side, p)) in [(EndpointSide::A, a), (EndpointSide::B, b)]
-        .into_iter()
-        .enumerate()
-    {
-        let mark = &ribbons[2 + k * MARK_RIBBONS..2 + (k + 1) * MARK_RIBBONS];
-        let centre = projected(&viewer, rect, p);
-        let radius = if side == EndpointSide::B {
-            MARK_RADIUS * SELECTED_MARK_SCALE
-        } else {
-            MARK_RADIUS
+/// A ring and a dot are one instance each, whatever the distance of the
+/// endpoint: their radius is in points and their centre is the endpoint, so
+/// the same instances are built from far away and from close up.
+#[test]
+fn a_ring_or_a_dot_is_one_instance_with_its_radius_in_points() {
+    use crate::measurement_marks::{MARK_DOT_RADIUS, MARK_RADIUS};
+    let (mut state, id) = measured_state(Some("m"));
+    select(&mut state, id, 0);
+    let near = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0)).0;
+    let far = looking_from(
+        &mut state,
+        Point3::new(0.0, -200.0, 0.0),
+        egui::pos2(5.0, 5.0),
+    )
+    .0;
+    let pieces = super::instances(&near.measurements);
+    assert_eq!(pieces, super::instances(&far.measurements));
+    let rings: Vec<_> = pieces
+        .iter()
+        .filter(|p| p.kind == OverlayInstance::RING)
+        .collect();
+    let discs: Vec<_> = pieces
+        .iter()
+        .filter(|p| p.kind == OverlayInstance::DISC)
+        .collect();
+    assert_eq!(
+        (rings.len(), discs.len()),
+        (4, 2),
+        "a halo and a ring a mark"
+    );
+    for ring in rings {
+        assert_eq!(ring.radius, MARK_RADIUS);
+    }
+    for disc in discs {
+        assert_eq!((disc.radius, disc.half_width), (MARK_DOT_RADIUS, 0.0));
+    }
+}
+
+/// With *Show all measurements* on, every halo comes before every stroke, and
+/// every dot after both, across the measurements: one measurement's halo never
+/// crosses another's stroke.
+#[test]
+fn halos_come_before_strokes_across_measurements() {
+    let (mut state, id) = measured_state(Some("m"));
+    select(&mut state, id, 0);
+    state.show_all_measurements = true;
+    let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+    assert!(viewer.measurements.drawn.len() > 1);
+    let halo = super::encoded_rgba(crate::measurement_marks::HALO);
+    let pieces = super::instances(&viewer.measurements);
+    let rank = |p: &OverlayInstance| match (p.color == halo, p.kind) {
+        (true, _) => 0,
+        (false, OverlayInstance::DISC) => 2,
+        (false, _) => 1,
+    };
+    let ranks: Vec<u8> = pieces.iter().map(rank).collect();
+    assert!(ranks.windows(2).all(|w| w[0] <= w[1]), "{ranks:?}");
+    let halos = ranks.iter().filter(|r| **r == 0).count();
+    let strokes = ranks.iter().filter(|r| **r == 1).count();
+    assert_eq!(halos, strokes, "a halo under every stroke");
+    assert!(ranks.contains(&2));
+    // Each measurement's stroke is in the layer's order.
+    let lines: Vec<[f32; 4]> = pieces
+        .iter()
+        .filter(|p| p.kind == OverlayInstance::SEGMENT && p.color != halo)
+        .map(|p| p.color)
+        .collect();
+    let expected: Vec<[f32; 4]> = viewer
+        .measurements
+        .drawn
+        .iter()
+        .filter(|d| {
+            d.endpoints
+                .iter()
+                .filter(|e| matches!(e.place, crate::measurement_marks::Place::Finite(_)))
+                .count()
+                == 2
+        })
+        .map(|d| super::encoded_rgba(d.color))
+        .collect();
+    assert_eq!(lines, expected);
+}
+
+/// Every measurement's line and its halo stop at the outer edge of the stroke
+/// of the ring at each of their ends, the selected endpoint's larger ring and
+/// the selected measurement's wider stroke included, so no line draws over a
+/// ring's stroke or inside it. The rings, dots and every other piece are not
+/// inset.
+#[test]
+fn a_line_stops_at_the_outer_edge_of_each_end_s_ring() {
+    let (mut state, id) = measured_state(Some("m"));
+    let m = select(&mut state, id, 0);
+    state.select_endpoint(m, EndpointSide::A);
+    state.show_all_measurements = true;
+    let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+    let halo = super::encoded_rgba(crate::measurement_marks::HALO);
+    let pieces = super::instances(&viewer.measurements);
+    let segments: Vec<_> = pieces
+        .iter()
+        .filter(|p| p.kind == OverlayInstance::SEGMENT)
+        .collect();
+    assert!(segments.len() >= 4, "two lines, each with its halo");
+    let mut radii = Vec::new();
+    for segment in &segments {
+        // The stroke ring of the same colour at each end: a halo's line is
+        // inset as its measurement's stroke is.
+        let stroke = segments
+            .iter()
+            .find(|s| s.a == segment.a && s.b == segment.b && s.color != halo)
+            .expect("each halo's line has its stroke");
+        let ring_at = |p: [f32; 4]| {
+            pieces
+                .iter()
+                .find(|r| r.kind == OverlayInstance::RING && r.a == p && r.color == stroke.color)
+                .expect("a ring at each end of a line")
         };
-        let (rings, dot) = mark.split_at(2 * super::RING_SEGMENTS);
-        let (ring_halo, ring) = rings.split_at(super::RING_SEGMENTS);
-        for (chords, color, width) in [
-            (ring_halo, halo, LINE_WIDTH + 2.0),
-            (ring, grey, LINE_WIDTH),
-        ] {
-            for chord in chords {
-                for end in [chord.a, chord.b] {
-                    let r = on_screen(&viewer, rect, end).distance(centre);
-                    assert!((r - radius).abs() < 1e-2, "{side:?}: {r} != {radius}");
-                }
-                assert_eq!(chord.color, color);
-                assert_eq!(chord.half_width, width / 2.0 * ppp);
-            }
-        }
-        // The ring is closed: its last chord ends where its first begins.
-        assert_close(ring[0].a, ring[super::RING_SEGMENTS - 1].b, "closed ring");
-        let dot = dot[0];
-        assert_eq!(dot.color, grey);
-        assert_eq!(dot.half_width, MARK_DOT_RADIUS * ppp);
-        for end in [dot.a, dot.b] {
-            let r = on_screen(&viewer, rect, end).distance(centre);
-            assert!((r - MARK_DOT_RADIUS).abs() < 1e-2, "dot: {r}");
-        }
-        // The mark is drawn toward the eye, at the depth its line's end is.
-        let depth = |q: [f32; 4]| {
-            -viewer
-                .camera
-                .world_to_view(&Point3::new(
-                    f64::from(q[0]),
-                    f64::from(q[1]),
-                    f64::from(q[2]),
-                ))
-                .z
-        };
-        let expected = -viewer.camera.world_to_view(&p).z
-            * (1.0 - super::toward_eye_fraction(&viewer.camera, rect));
-        assert!((depth(ring[0].a) - expected).abs() < 1e-4);
+        let (ring_a, ring_b) = (ring_at(segment.a), ring_at(segment.b));
+        assert_eq!(
+            segment.inset,
+            [
+                ring_a.radius + ring_a.half_width,
+                ring_b.radius + ring_b.half_width
+            ]
+        );
+        radii.extend([ring_a.radius, ring_b.radius]);
+    }
+    // The selected endpoint's ring is the larger one, and its line's end
+    // stops further out.
+    assert!(radii
+        .iter()
+        .any(|r| *r > crate::measurement_marks::MARK_RADIUS));
+    for piece in pieces.iter().filter(|p| p.kind != OverlayInstance::SEGMENT) {
+        assert_eq!(piece.inset, [0.0; 2]);
     }
 }
 
@@ -691,20 +783,17 @@ fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
     select(&mut state, id, 0);
     state.show_all_measurements = true;
     let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
     let layer = &viewer.measurements;
     assert!(layer.drawn.len() > 1, "every measurement is drawn");
+    let halo = super::encoded_rgba(crate::measurement_marks::HALO);
     let mut roles = Vec::new();
     for drawn in &layer.drawn {
         let one = crate::measurement_marks::MeasurementLayer {
             drawn: vec![drawn.clone()],
         };
-        let ribbons = super::ribbons(&one, &viewer.camera, rect, 1.0);
+        let pieces = super::instances(&one);
         // A measurement with no finite endpoint draws nothing.
-        let Some(stroke) = ribbons
-            .iter()
-            .find(|r| r.color != super::encoded_rgba(crate::measurement_marks::HALO))
-        else {
+        let Some(stroke) = pieces.iter().find(|p| p.color != halo) else {
             continue;
         };
         roles.push(drawn.role);
@@ -727,28 +816,27 @@ fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
     item.role = Role::Item;
     item.color = crate::bench::verdict_color(sfmtool_core::bench::Verdict::In);
     item.width = ITEM_LINE_WIDTH;
-    let ribbons = super::ribbons(
-        &crate::measurement_marks::MeasurementLayer { drawn: vec![item] },
-        &viewer.camera,
-        rect,
-        1.0,
-    );
+    let pieces =
+        super::instances(&crate::measurement_marks::MeasurementLayer { drawn: vec![item] });
     let violet = super::encoded_rgba(crate::bench::verdict_color(
         sfmtool_core::bench::Verdict::In,
     ));
-    assert_eq!(ribbons[1].color, violet);
-    assert_eq!(ribbons[1].half_width, ITEM_LINE_WIDTH / 2.0);
+    let line = pieces
+        .iter()
+        .find(|p| p.kind == OverlayInstance::SEGMENT && p.color != halo)
+        .expect("the item's line");
+    assert_eq!(line.color, violet);
+    assert_eq!(line.half_width, ITEM_LINE_WIDTH / 2.0);
 }
 
-/// A refused endpoint and one at infinity draw no ribbon, and the other
+/// A refused endpoint and one at infinity draw no instance, and the other
 /// endpoint still draws its mark, with no line.
 #[test]
-fn refused_and_infinite_endpoints_draw_no_ribbons() {
+fn refused_and_infinite_endpoints_draw_no_instances() {
     let (mut state, id) = measured_state(Some("m"));
     for index in [2, 3] {
         select(&mut state, id, index);
         let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
         let drawn = &viewer.measurements.drawn[0];
         let crate::measurement_marks::Place::Finite(a) = drawn.endpoints[0].place else {
             panic!("measurement {index}: A is finite");
@@ -760,22 +848,27 @@ fn refused_and_infinite_endpoints_draw_no_ribbons() {
             ),
             "measurement {index}: B is not"
         );
-        let ribbons = super::ribbons(&viewer.measurements, &viewer.camera, rect, 1.0);
-        assert_eq!(ribbons.len(), MARK_RIBBONS, "measurement {index}");
-        let centre = projected(&viewer, rect, a);
-        for ribbon in &ribbons {
-            for end in [ribbon.a, ribbon.b] {
-                assert!(
-                    on_screen(&viewer, rect, end).distance(centre) < 10.0,
-                    "measurement {index}: every piece is A's mark"
-                );
-            }
+        let pieces = super::instances(&viewer.measurements);
+        let kinds: Vec<u32> = pieces.iter().map(|p| p.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                OverlayInstance::RING,
+                OverlayInstance::RING,
+                OverlayInstance::DISC
+            ],
+            "measurement {index}: A's halo, ring and dot"
+        );
+        for piece in &pieces {
+            assert_eq!(piece.a, at(a), "measurement {index}: every piece is A's");
         }
     }
 }
 
 /// A line with one end behind the eye keeps that end, for the pass to clip
-/// at the near plane, and the end behind draws no mark.
+/// at the near plane, and both ends keep their marks: the instances do not
+/// depend on the camera, and the pass draws nothing of a ring or a dot whose
+/// centre is behind the near plane.
 #[test]
 fn a_line_with_one_end_behind_the_eye_is_handed_to_the_pass_whole() {
     let (mut state, id) = measured_state(Some("m"));
@@ -786,25 +879,180 @@ fn a_line_with_one_end_behind_the_eye_is_handed_to_the_pass_whole() {
     viewer.view_initialized = true;
     viewer.maintain_z_up = false;
     viewer.camera.camera = Camera::look_at(eye, eye + Vector3::x(), Vector3::z());
-    viewer.measurements = state.measurement_layer(false);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, VIEWPORT);
-
-    let ribbons = super::ribbons(&viewer.measurements, &viewer.camera, rect, 1.0);
-    assert_eq!(ribbons.len(), 2 + MARK_RIBBONS, "the line and B's mark");
-    let (a, b) = (Point3::from(POINTS[0]), Point3::from(POINTS[1]));
-    assert_close(
-        ribbons[1].a,
-        toward_eye(&viewer, rect, a),
-        "A, behind the eye",
+    let ctx = egui::Context::default();
+    frame(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        Vec::new(),
+        egui::pos2(5.0, 5.0),
     );
-    assert_close(ribbons[1].b, toward_eye(&viewer, rect, b), "B");
+    let (a, b) = (Point3::from(POINTS[0]), Point3::from(POINTS[1]));
     assert!(
         viewer.camera.world_to_view(&a).z > 0.0,
         "A is behind the eye"
     );
-    let centre = projected(&viewer, rect, b);
-    for ribbon in &ribbons[2..] {
-        assert!(on_screen(&viewer, rect, ribbon.a).distance(centre) < 10.0);
+    let pieces = viewer.measurement_upload.expect("built");
+    let lines: Vec<_> = pieces
+        .iter()
+        .filter(|p| p.kind == OverlayInstance::SEGMENT)
+        .collect();
+    assert_eq!(lines.len(), 2, "the line and its halo");
+    for line in lines {
+        assert_eq!((line.a, line.b), (at(a), at(b)));
+    }
+    let marks: Vec<_> = pieces
+        .iter()
+        .filter(|p| p.kind != OverlayInstance::SEGMENT)
+        .map(|p| p.a)
+        .collect();
+    assert_eq!(
+        marks,
+        [at(a), at(b), at(a), at(b), at(a), at(b)],
+        "each end's halo, ring and dot"
+    );
+}
+
+/// The pull the pass draws the measurements toward the eye by is the one the
+/// CPU drew them by before the shader did: [`super::toward_eye_fraction`] of
+/// the camera and the panel of the frame, handed over with the frame's pixels
+/// per point. It follows the field of view and the panel's size.
+#[test]
+fn the_frame_hands_the_pass_the_pull_and_the_scale() {
+    let (mut state, id) = measured_state(Some("m"));
+    select(&mut state, id, 0);
+    let (mut viewer, ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+    ctx.set_pixels_per_point(2.0);
+    let mut seen = Vec::new();
+    for (fov, size) in [
+        (0.8, VIEWPORT),
+        (0.3, VIEWPORT),
+        (0.3, egui::vec2(900.0, 400.0)),
+    ] {
+        viewer.camera.fov = fov;
+        let shown = frame_sized(
+            &mut viewer,
+            &ctx,
+            &mut state,
+            Vec::new(),
+            egui::pos2(5.0, 5.0),
+            size,
+        );
+        let expected = super::toward_eye_fraction(&viewer.camera, shown.rect) as f32;
+        assert_eq!(viewer.overlay_view.pull_fraction, expected);
+        assert_eq!(viewer.overlay_view.pixels_per_point, 2.0);
+        seen.push(expected);
+    }
+    assert!(seen[0] != seen[1] && seen[1] != seen[2], "{seen:?}");
+}
+
+/// The instances are built once, and a frame that changes only the camera, the
+/// field of view or the panel's size builds and hands over nothing. Each change
+/// to what they are drawn from builds them once more: a step on the focused
+/// item, an undo, another measurement or an endpoint selected, *Show all
+/// measurements* toggled, the node hidden and shown, its display transform
+/// changed, and its tint.
+#[test]
+fn the_instances_are_built_when_their_key_changes_and_not_for_the_camera() {
+    let (mut state, id) = measured_state(Some("m"));
+    select(&mut state, id, 0);
+    let (mut viewer, ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+    assert_eq!(viewer.measurement_builds, 1, "built once over two frames");
+    assert!(viewer.measurement_upload.take().is_some());
+    let pointer = egui::pos2(5.0, 5.0);
+
+    // The camera alone.
+    let still = |viewer: &mut Viewer3D, state: &mut AppState, size: egui::Vec2| {
+        frame_sized(viewer, &ctx, state, Vec::new(), pointer, size);
+        assert_eq!(viewer.measurement_builds, 1);
+        assert!(viewer.measurement_upload.is_none());
+    };
+    viewer.camera.orbit(40.0, 15.0);
+    still(&mut viewer, &mut state, VIEWPORT);
+    viewer.camera.fov = 0.3;
+    still(&mut viewer, &mut state, VIEWPORT);
+    still(&mut viewer, &mut state, egui::vec2(700.0, 500.0));
+
+    // Each change to the key builds once, and the frame after it nothing.
+    let mut builds = 1;
+    let mut changed = |viewer: &mut Viewer3D, state: &mut AppState, what: &str| {
+        frame(viewer, &ctx, state, Vec::new(), pointer);
+        builds += 1;
+        assert_eq!(viewer.measurement_builds, builds, "{what}");
+        assert_eq!(
+            viewer.measurement_upload.take(),
+            Some(super::instances(&viewer.measurements)),
+            "{what}"
+        );
+        frame(viewer, &ctx, state, Vec::new(), pointer);
+        assert_eq!(viewer.measurement_builds, builds, "{what}, a frame later");
+        assert!(viewer.measurement_upload.is_none(), "{what}, a frame later");
+    };
+    let put = state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    changed(&mut viewer, &mut state, "the item focused");
+    state
+        .set_bench_measurement_label(id, &put.label, "door")
+        .unwrap();
+    changed(&mut viewer, &mut state, "a step on the item");
+    state.undo(id).unwrap();
+    changed(&mut viewer, &mut state, "an undo");
+    select(&mut state, id, 1);
+    changed(&mut viewer, &mut state, "another measurement selected");
+    state.select_endpoint(MeasurementRef::distance(id, 1), EndpointSide::A);
+    changed(&mut viewer, &mut state, "an endpoint selected");
+    state.show_all_measurements = true;
+    changed(&mut viewer, &mut state, "show all toggled");
+    state.scene[0].visible = false;
+    changed(&mut viewer, &mut state, "the node hidden");
+    state.scene[0].visible = true;
+    changed(&mut viewer, &mut state, "the node shown");
+    state.scene[0].history.transform_mut().scale = 2.0;
+    changed(&mut viewer, &mut state, "the display transform changed");
+    state.scene[0].tint = crate::scene::NodeTint::Tint(&crate::scene::TINT_PALETTE[0]);
+    changed(&mut viewer, &mut state, "the node tinted");
+}
+
+/// With a thousand measurements and *Show all measurements* on, a frame while
+/// the camera orbits builds no instance and hands nothing to the upload.
+#[test]
+fn a_thousand_measurements_orbited_build_and_upload_nothing() {
+    let (mut state, id) = measured_state(Some("m"));
+    {
+        let distance = state.scene[0]
+            .recon_mut()
+            .image_set
+            .measurements
+            .distance
+            .as_mut()
+            .expect("the fixture's measurements");
+        let n = distance.distances.len();
+        let rows: Vec<usize> = (0..1000).map(|i| i % n).collect();
+        distance.distances = distance.distances.select(ndarray::Axis(0), &rows);
+        distance.units = distance.units.select(ndarray::Axis(0), &rows);
+        distance.image_indexes = distance.image_indexes.select(ndarray::Axis(0), &rows);
+        distance.endpoints_xy = distance.endpoints_xy.select(ndarray::Axis(0), &rows);
+        distance.labels = rows.iter().map(|&i| distance.labels[i].clone()).collect();
+    }
+    select(&mut state, id, 0);
+    state.show_all_measurements = true;
+    let (mut viewer, ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
+    assert_eq!(viewer.measurements.drawn.len(), 1000);
+    assert_eq!(viewer.measurement_builds, 1);
+    let built = viewer.measurement_upload.take().expect("built once");
+    assert!(built.len() > 5000, "{} instances", built.len());
+    for _ in 0..5 {
+        viewer.camera.orbit(25.0, 5.0);
+        frame(
+            &mut viewer,
+            &ctx,
+            &mut state,
+            Vec::new(),
+            egui::pos2(5.0, 5.0),
+        );
+        assert_eq!(viewer.measurement_builds, 1);
+        assert!(viewer.measurement_upload.is_none());
     }
 }
 

@@ -837,11 +837,13 @@ impl App {
         // is a few hundred instances.
         self.scene_renderer
             .upload_bench_track(device, queue, self.viewer_3d.bench_figure.as_ref());
-        // The measurements' marks and lines, on the same cadence and for the
-        // same reason: a mark is a ring a fixed number of points across, so
-        // its world size follows the camera.
-        self.scene_renderer
-            .upload_measurements(device, queue, &self.viewer_3d.measurement_ribbons);
+        // The measurements' rings, dots and lines, only when the 3D viewer
+        // built them again: nothing in them depends on the camera, so a frame
+        // that changed only the view writes nothing.
+        if let Some(instances) = self.viewer_3d.measurement_upload.take() {
+            self.scene_renderer
+                .upload_measurements(device, queue, &instances);
+        }
 
         // Upload/clear background image for camera view mode. The background is
         // a singleton too, serving the camera view's own node — whose transform
@@ -927,6 +929,7 @@ impl App {
             self.state.patch_size_log2,
             self.state.patch_opacity,
             self.state.patch_alpha_cutoff,
+            self.viewer_3d.overlay_view.pixels_per_point,
         );
 
         // Update background image uniforms every frame in camera view (viewport
@@ -992,8 +995,11 @@ impl App {
         // over the scene texture, and then the focused item, last of the
         // post-EDL passes onto it: the focused item is the thing being worked
         // on, so nothing else the scene texture holds is over it.
-        self.scene_renderer
-            .update_bench_track_uniforms(queue, &self.viewer_3d.camera);
+        self.scene_renderer.update_bench_track_uniforms(
+            queue,
+            &self.viewer_3d.camera,
+            self.viewer_3d.overlay_view,
+        );
         self.scene_renderer.render_bench_track(encoder);
 
         // A region of the pick buffer, when the viewport asked for one last

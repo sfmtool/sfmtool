@@ -8,7 +8,7 @@
 //! What is drawn, the hit test and the press are
 //! [`crate::measurement_marks`]'s, which Image Detail shares; what is here is
 //! where an endpoint lands in the viewport, the marks and lines as the scene
-//! pass draws them ([`ribbons`]), and what a click on the indicator does. The
+//! pass draws them ([`instances`]), and what a click on the indicator does. The
 //! pass draws a piece in front of the scene at full strength and a piece
 //! behind it at `BEHIND_OPACITY`; the hit test reads the projection alone, so
 //! a measurement behind the scene is hovered and clicked as one in front is.
@@ -20,14 +20,12 @@ use nalgebra::Point3;
 use crate::measurement_marks::{
     self, Indicator, MeasurementLayer, Place, Screen, ScreenMark, ScreenMeasurement, Target,
 };
+use crate::scene_renderer::OverlayInstance;
 
 use super::{Viewer3D, ViewportCamera};
 
 #[cfg(test)]
 mod tests;
-
-/// Chords in an endpoint mark's ring.
-const RING_SEGMENTS: usize = 24;
 
 /// How far toward the eye a measurement's pieces are drawn, in panel points
 /// at each piece's own depth: the selected ring's radius and its halo.
@@ -56,7 +54,9 @@ const MAX_TOWARD_EYE: f64 = 0.25;
 /// so a pull of a fixed number of points is the same fraction of every
 /// piece's depth, and the pull is a uniform scale toward the eye. A point
 /// moved along its own line of sight projects where it did, so the marks land
-/// where the hit test reads them.
+/// where the hit test reads them. The 3D view hands it to the pass once a
+/// frame ([`crate::scene_renderer::OverlayView`]), and the shader moves each
+/// piece flagged [`OverlayInstance::PULL_TOWARD_EYE`] by it.
 pub(crate) fn toward_eye_fraction(camera: &ViewportCamera, rect: Rect) -> f64 {
     let aspect = f64::from(rect.width()) / f64::from(rect.height());
     let per_point = 2.0 * (camera.vertical_fov(aspect) / 2.0).tan() / f64::from(rect.height());
@@ -68,111 +68,74 @@ pub(crate) fn toward_eye_fraction(camera: &ViewportCamera, rect: Rect) -> f64 {
     }
 }
 
-/// One straight piece of a drawn measurement as the 3D view's scene pass
-/// draws it: the line, a chord of a mark's ring, the halo under either, or
-/// the dot at a mark's centre.
-///
-/// The pass draws it as one camera-facing ribbon of the bench figure's kind,
-/// at full strength where it is in front of the scene and at
-/// `BEHIND_OPACITY` where it is behind, with no fade.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Ribbon {
-    /// One endpoint in the shared world space, `(xyz, w)` with `w = 1`.
-    pub(crate) a: [f32; 4],
-    /// The other.
-    pub(crate) b: [f32; 4],
-    /// Its colour as sRGB-encoded values, not premultiplied ([`encoded_rgba`]),
-    /// as the pass blends it into the measurements' layer.
-    pub(crate) color: [f32; 4],
-    /// Half its width, in physical pixels.
-    pub(crate) half_width: f32,
-}
+/// How every piece of a measurement is drawn: held at `BEHIND_OPACITY` behind
+/// the scene, and pulled toward the eye.
+const FLAGS: u32 = OverlayInstance::HOLD | OverlayInstance::PULL_TOWARD_EYE;
 
-/// The marks and lines of `layer` as the scene pass draws them through
-/// `camera` in `rect`, in draw order, with `pixels_per_point` physical pixels
-/// to a panel point.
+/// The rings, dots and lines of `layer` as the scene pass draws them, in draw
+/// order, built from nothing that depends on the camera.
 ///
-/// Each measurement draws its line, the halo under the stroke, and then each
-/// mark: a ring of [`RING_SEGMENTS`] chords with its halo under it, and the
-/// dot at its centre, the order Image Detail paints them in. A mark's ring is
-/// the size it is on screen whatever its distance: it is built in the plane
-/// facing the eye at the endpoint's depth, its radius in panel points
-/// unprojected there. Every piece is drawn [`toward_eye_fraction`] of the way
-/// toward the eye.
+/// Every halo comes first, then every stroke, then every dot, each in the
+/// layer's order: so no measurement's halo crosses another's stroke. A
+/// measurement's halos are its line's and then each mark's ring's; its
+/// strokes are its line and then each mark's ring. A ring and a dot are one
+/// instance each, sized in points about the endpoint, which the pass turns to
+/// face the eye there; the widths are the strokes' in points. The line and its
+/// halo are inset at each end by that end's ring's radius and half its stroke
+/// ([`OverlayInstance::inset`]): the line stops on screen at the ring's outer
+/// edge, so it neither runs inside the ring to the dot nor draws over the
+/// ring's stroke, where a translucent measurement's two strokes would add up
+/// to a brighter spot, and the ring's halo bounds the join. Every piece is
+/// flagged to hold at `BEHIND_OPACITY` behind the scene and to be drawn toward
+/// the eye ([`toward_eye_fraction`]).
 ///
 /// An endpoint at infinity or refused draws nothing and the other endpoint
-/// still draws its mark. A finite endpoint behind the eye draws no mark, and
-/// a line with one end behind it keeps that end: the pass clips the segment
-/// at the near plane, as it clips the bench figure's.
-pub(crate) fn ribbons(
-    layer: &MeasurementLayer,
-    camera: &ViewportCamera,
-    rect: Rect,
-    pixels_per_point: f32,
-) -> Vec<Ribbon> {
-    let eye = camera.position();
-    let keep = 1.0 - toward_eye_fraction(camera, rect);
-    let toward_eye = |p: &Point3<f64>| eye + (p - eye) * keep;
-    let half = |width: f32| width * 0.5 * pixels_per_point;
+/// still draws its mark. A finite endpoint behind the eye draws no mark and a
+/// line with one end behind it is clipped at the near plane: the pass does
+/// both, as it clips the bench figure's segments.
+pub(crate) fn instances(layer: &MeasurementLayer) -> Vec<OverlayInstance> {
     let halo = encoded_rgba(measurement_marks::HALO);
-    let mut out = Vec::new();
+    let mut halos = Vec::new();
+    let mut strokes = Vec::new();
+    let mut dots = Vec::new();
     for drawn in &layer.drawn {
         let color = encoded_rgba(drawn.color);
-        let halo_width = drawn.width + measurement_marks::HALO_EXTRA_WIDTH;
+        let half = drawn.width / 2.0;
+        let halo_half = (drawn.width + measurement_marks::HALO_EXTRA_WIDTH) / 2.0;
         let finite: Vec<_> = drawn
             .endpoints
             .iter()
             .filter_map(|e| match e.place {
-                Place::Finite(p) => Some((e.side, p)),
+                Place::Finite(p) => Some((e.side, homogeneous(&p))),
                 Place::AtInfinity | Place::Refused => None,
             })
             .collect();
-        if let [(_, a), (_, b)] = finite.as_slice() {
-            let (a, b) = (homogeneous(&toward_eye(a)), homogeneous(&toward_eye(b)));
-            for (color, width) in [(halo, halo_width), (color, drawn.width)] {
-                out.push(Ribbon {
-                    a,
-                    b,
-                    color,
-                    half_width: half(width),
-                });
-            }
+        if let [(side_a, a), (side_b, b)] = finite.as_slice() {
+            // The line and its halo stop at the outer edge of each end's
+            // ring's stroke.
+            let ring_edge = |side| measurement_marks::mark_radius(drawn, side) + half;
+            let (inset_a, inset_b) = (ring_edge(*side_a), ring_edge(*side_b));
+            halos.push(
+                OverlayInstance::segment(*a, *b, halo, halo_half, FLAGS).inset(inset_a, inset_b),
+            );
+            strokes
+                .push(OverlayInstance::segment(*a, *b, color, half, FLAGS).inset(inset_a, inset_b));
         }
         for (side, p) in &finite {
-            let Some(centre) = camera.project_homogeneous(p.coords, 1.0, rect) else {
-                continue;
-            };
-            let depth = -camera.world_to_view(p).z * keep;
-            let at = |offset: Vec2| {
-                let c = centre + offset;
-                homogeneous(&camera.unproject(c.x, c.y, depth, rect))
-            };
             let radius = measurement_marks::mark_radius(drawn, *side);
-            let ring: Vec<[f32; 4]> = (0..=RING_SEGMENTS)
-                .map(|k| {
-                    let angle = k as f32 * std::f32::consts::TAU / RING_SEGMENTS as f32;
-                    at(Vec2::angled(angle) * radius)
-                })
-                .collect();
-            for (color, width) in [(halo, halo_width), (color, drawn.width)] {
-                out.extend(ring.windows(2).map(|chord| Ribbon {
-                    a: chord[0],
-                    b: chord[1],
-                    color,
-                    half_width: half(width),
-                }));
-            }
-            // The dot: a ribbon as wide as it is long.
-            let dot = measurement_marks::MARK_DOT_RADIUS;
-            out.push(Ribbon {
-                a: at(Vec2::new(-dot, 0.0)),
-                b: at(Vec2::new(dot, 0.0)),
+            halos.push(OverlayInstance::ring(*p, halo, radius, halo_half, FLAGS));
+            strokes.push(OverlayInstance::ring(*p, color, radius, half, FLAGS));
+            dots.push(OverlayInstance::disc(
+                *p,
                 color,
-                half_width: half(2.0 * dot),
-            });
+                measurement_marks::MARK_DOT_RADIUS,
+                FLAGS,
+            ));
         }
     }
-    out
+    halos.append(&mut strokes);
+    halos.append(&mut dots);
+    halos
 }
 
 /// A finite world point as the pass takes it.
@@ -199,6 +162,30 @@ pub(crate) fn encoded_rgba(color: Color32) -> [f32; 4] {
 }
 
 impl Viewer3D {
+    /// Build the measurements' instances from [`Self::measurements`] for
+    /// `app.rs` to write, when [`Self::measurement_key`] differs from the key
+    /// they were last built on; otherwise do nothing.
+    pub(super) fn build_measurement_instances(&mut self) {
+        if self.measurement_built.as_ref() == Some(&self.measurement_key) {
+            return;
+        }
+        self.measurement_upload = Some(instances(&self.measurements));
+        self.measurement_built = Some(self.measurement_key.clone());
+        #[cfg(test)]
+        {
+            self.measurement_builds += 1;
+        }
+    }
+
+    /// Draw no measurements in the scene: the 3D view has no node to show.
+    /// Empties the store's region once, and the next frame that shows a node
+    /// builds the instances again.
+    pub(crate) fn clear_measurement_instances(&mut self) {
+        if self.measurement_built.take().is_some() {
+            self.measurement_upload = Some(Vec::new());
+        }
+    }
+
     /// The layer's measurements as the viewport camera sees them now in
     /// `rect`, with the indicator where the selected measurement is drawn
     /// and no part of it is in view.
@@ -337,7 +324,7 @@ impl Viewer3D {
     }
 
     /// Draw the off-screen indicator and the hovered measurement's text over
-    /// the scene. The marks and lines are the scene pass's ([`ribbons`]).
+    /// the scene. The marks and lines are the scene pass's ([`instances`]).
     pub(super) fn draw_measurements(
         &self,
         painter: &egui::Painter,

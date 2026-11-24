@@ -30,12 +30,14 @@ fn device() -> (wgpu::Device, wgpu::Queue) {
 /// `n` instances, each told apart from every other by `tag` and its index.
 fn instances(n: u32, tag: f32) -> Vec<OverlayInstance> {
     (0..n)
-        .map(|i| OverlayInstance {
-            endpoint_a: [tag, i as f32, 0.0, 1.0],
-            endpoint_b: [tag, i as f32, 1.0, 1.0],
-            color: [tag, 0.5, 0.25, 1.0],
-            half_width: 1.5,
-            fade: 0.0,
+        .map(|i| {
+            OverlayInstance::segment(
+                [tag, i as f32, 0.0, 1.0],
+                [tag, i as f32, 1.0, 1.0],
+                [tag, 0.5, 0.25, 1.0],
+                1.5,
+                OverlayInstance::HOLD,
+            )
         })
         .collect()
 }

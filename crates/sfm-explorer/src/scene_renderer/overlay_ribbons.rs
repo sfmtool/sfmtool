@@ -248,7 +248,8 @@ impl OverlayRibbons {
     }
 
     /// Bind the buffer to vertex slot 1 of `pass` and draw each of
-    /// `target`'s regions as camera-facing ribbon quads, in region order.
+    /// `target`'s regions, four strip corners an instance, in region order:
+    /// a segment's ribbon, or the square a ring or a disc is cut out of.
     ///
     /// The caller has set the pipeline, the bind group and the quad corners in
     /// slot 0.

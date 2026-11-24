@@ -31,7 +31,7 @@ the GPU pass that draws them is
 [scene_renderer/bench_track.rs](../../crates/sfm-explorer/src/scene_renderer/bench_track.rs)
 with
 [shaders/bench_track.wgsl](../../crates/sfm-explorer/src/shaders/bench_track.wgsl),
-drawing its edges out of the overlay ribbon store,
+drawing its segments out of the overlay ribbon store,
 [scene_renderer/overlay_ribbons.rs](../../crates/sfm-explorer/src/scene_renderer/overlay_ribbons.rs)
 (§ "The overlay ribbon store");
 and what a pointer means against a patch is
@@ -60,7 +60,7 @@ cluster-stage item has no shared geometry behind it and draws nothing, as does a
 track nothing has given a patch. Items that are not focused draw nothing, which
 is what Image Detail does too: the bench holds several and both panels show the
 one being worked on. A focused measurement item is drawn by the measurements'
-own marks and line, in the same violet, as edges of this pass drawn before the
+own marks and line, in the same violet, as pieces of this pass drawn before the
 figure (§ "Depth against the scene"), and has no handle in this view
 ([`measurement-view.md`](measurement-view.md) § "Drawing measurements").
 
@@ -130,9 +130,9 @@ plane already, and a track at infinity is not lifted either.
 **Sizes are world sizes.** The dot, the circles and the arrow all scale with the
 patch, so the figure looks the same at every distance and is small on screen
 when the patch is small. Handles are reached by zooming in, as they are in Image
-Detail. The one measurement in pixels is the stroke: half-width 1.25 px, which
-is the 2.5 px stroke the Image Detail bench layer draws the same track with, so
-the two read as one layer.
+Detail. The one measurement in panel points is the stroke: half-width 1.25
+points, which is the 2.5-point stroke the Image Detail bench layer draws the
+same track with, so the two read as one layer.
 
 ### A track at infinity
 
@@ -200,32 +200,37 @@ and only the opacity says the figure is behind something.
 
 The pass borrows the indicator's two pipelines. Every straight piece of the
 figure (the square's edges, the normal and its barbs, each mark's segment, and
-each chord of each hollow circle) is one instance of a camera-facing **ribbon
-quad** carrying its two homogeneous endpoints and its own colour, and the filled
-centre disc is a **triangle list**. A triangle cannot be clipped a vertex at a
-time the way a segment can, so a disc vertex behind the near plane drops its
-whole triangle; the disc is an eighth of a half-length across, so its three
-corners agree in every view but a grazing one. The figure is rebuilt on the CPU
-every frame it is drawn, since the barbs turn to face the eye and there is no
-state to key it on that a camera move does not invalidate. It is a few hundred
-instances. Its edges are written into the figure's region of the overlay ribbon
-store (§ "The overlay ribbon store"), and its disc into a vertex buffer of its
-own, made again each frame: a disc is three vertices per triangle rather than
-an edge instance, drawn by a pipeline of its own.
+each chord of each hollow circle) is one **segment** instance of the overlay
+ribbon store (§ "The overlay ribbon store"): a ribbon facing the eye, carrying
+its two homogeneous endpoints, its own colour, the bench's width in points and
+the `FADE` flag, its edges anti-aliased over about one panel point. The hollow
+circles lie in the patch's plane and foreshorten with it, so they stay chords
+rather than the store's rings, which face the eye. The filled centre disc is a
+**triangle list** in that plane, for the same reason. A triangle cannot be
+clipped a vertex at a time the way a segment can, so a disc vertex behind the
+near plane drops its whole triangle; the disc is an eighth of a half-length
+across, so its three corners agree in every view but a grazing one. The figure
+is rebuilt on the CPU every frame it is drawn, since the barbs turn to face the
+eye and there is no state to key it on that a camera move does not invalidate.
+It is a few hundred instances. Its segments are written into the figure's
+region of the store, and its disc into a vertex buffer of its own, made again
+each frame: a disc is three vertices per triangle rather than an instance,
+drawn by a pipeline of its own.
 
 **The same shader draws the 3D view's measurements**, in the same call
 ([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). Their
-marks and lines are edges of the same kind, rebuilt on the CPU each frame
-(`viewer_3d::measurements::ribbons`) and written into their own region of the
-store, and each edge instance carries the two
-things in which they differ from the figure's. One is **its width**: the
-figure's edges are `BENCH_LINE_HALF_WIDTH`, and a measurement's are its stroke
-in points, in physical pixels. The other is **whether its part behind the scene
-fades**: the figure's does, as the table above says, and a measurement's
-holds at `BEHIND_OPACITY` however far behind it is, as a highlighted surfel's
-hidden outline does ([`patch-rendering.md`](patch-rendering.md)), since a
-measurement far behind the cloud has to stay findable and has no size of its
-own to fade over. And they are drawn **into a layer of their own**, with the
+lines are segments, and their marks' rings and dots the store's rings and
+discs, built only when what they are drawn from changes
+(`viewer_3d::measurements::instances`) and written into their own region of
+the store. Each instance carries what differs from the figure's: **its shape
+and width**, a measurement's stroke in points where the figure's segments are
+`BENCH_LINE_HALF_WIDTH`; **whether its part behind the scene fades**, which the
+figure's does, as the table above says, while a measurement's holds at
+`BEHIND_OPACITY` however far behind it is, as a highlighted surfel's hidden
+outline does ([`patch-rendering.md`](patch-rendering.md)), since a measurement
+far behind the cloud has to stay findable and has no size of its own to fade
+over; and **the pull toward the eye**, which only a measurement's pieces take.
+And they are drawn **into a layer of their own**, with the
 same shader and bind group: a `MEASUREMENT_TARGET_FORMAT` (`Rgba8Unorm`)
 texture the panel's size, cleared to transparent every frame, which the 3D
 view paints over the scene texture, the grid and the axes, where the egui
@@ -264,8 +269,78 @@ impl OverlayRibbons {
 ```
 
 A region records its producer, the target it is drawn into, and its offset,
-count and capacity in instances. `OverlayInstance` is the edge instance
-described above.
+count and capacity in instances. An instance is one piece of an overlay figure,
+built from nothing that depends on the camera
+([scene_renderer/gpu_types.rs](../../crates/sfm-explorer/src/scene_renderer/gpu_types.rs)):
+
+```rust
+#[repr(C)]
+pub(crate) struct OverlayInstance {
+    pub(crate) a: [f32; 4],     // a segment's one end; a ring's or a disc's centre
+    pub(crate) b: [f32; 4],     // a segment's other end
+    pub(crate) color: [f32; 4], // not premultiplied, in the target's colour space
+    pub(crate) half_width: f32, // half the stroke's width, in panel points
+    pub(crate) radius: f32,     // a ring's or a disc's radius, in panel points
+    pub(crate) kind: u32,       // SEGMENT, RING or DISC
+    pub(crate) flags: u32,      // HOLD or FADE, and PULL_TOWARD_EYE
+    pub(crate) inset: [f32; 2], // how far in from a and from b a segment is drawn, in panel points
+}
+
+// A measurement's ring about its endpoint, which the pass turns to face the eye.
+OverlayInstance::ring(centre, color, MARK_RADIUS, LINE_WIDTH / 2.0,
+    OverlayInstance::HOLD | OverlayInstance::PULL_TOWARD_EYE)
+```
+
+Places are homogeneous world points, `w = 1` for a place and `w = 0` for a
+direction, which is drawn at infinity, rotation-only. Everything the camera
+decides is the shader's, from the camera block it is handed each frame, so a
+producer builds its instances once from what it draws and a camera move writes
+nothing:
+
+- **Sizes in points.** Widths and radii are in panel points, turned into pixels
+  by the block's `pixels_per_point`, so an instance stays the same across a
+  change of the window's scale.
+- **Segments** are ribbons facing the eye, clipped at the near plane in
+  homogeneous view space before the perspective divide, so an end with `w = 0`
+  stays a direction rather than being divided by zero. A segment whose two ends
+  are both directions is dropped when either points behind the eye, as the
+  figure of a track at infinity is, and only such a segment is drawn as at
+  infinity behind the scene: a `FADE` one at the floor opacity rather than
+  faded with distance, a `HOLD` one at `BEHIND_OPACITY` as any `HOLD` piece is;
+  a segment with one finite end is drawn as a finite one. The
+  ribbon's width is measured across it in pixels, and the distance across it
+  that the anti-aliasing reads is interpolated linearly on the screen rather
+  than in perspective, so the middle of a ribbon whose ends lie at different
+  depths stays on the line between them.
+- **Insets.** A segment can be cut short on screen at either end by its
+  `inset` there, in points (`OverlayInstance::inset`), which a measurement's
+  line is so that it stops at the outer edge of each end's ring
+  ([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). The
+  shader moves each cut end, after the near-plane clip and the projection, to
+  the place on the segment that projects that many points along it, so the cut
+  end keeps the segment's depth there. An end clipped at the near plane is not
+  inset, since what it was inset from is behind the eye; a segment no longer on
+  screen than its two insets together draws nothing. A cut end is
+  anti-aliased over a point as the sides are, while an end that is not cut
+  stays square where it is, which is how the figure's segments, never inset,
+  meet at its corners.
+- **Rings and discs** are one instance each. The shader projects the centre and
+  expands a square of `radius + half_width` points, plus the anti-aliasing's
+  point, aligned to the screen around it; the fragment shader draws the annulus
+  or the disc from each fragment's distance to the centre. A centre behind the
+  near plane draws nothing.
+- **Edges** are anti-aliased over about one panel point: a fragment's coverage
+  falls from 1 to 0 over the point centred on the shape's edge (a segment's
+  sides and its cut ends), and multiplies its alpha.
+- **Behind the scene**, `FADE` fades with depth to the floor, as the figure
+  does, and `HOLD` holds at `BEHIND_OPACITY`, as a measurement does
+  (§ "Depth against the scene").
+- **The pull toward the eye.** A piece flagged `PULL_TOWARD_EYE` is moved toward
+  the eye in the vertex shader, along its own line of sight, by the block's
+  `pull_fraction`, which the 3D view computes once a frame as the measurements'
+  `toward_eye_fraction` ([`measurement-view.md`](measurement-view.md) §
+  "Drawing measurements"). A piece moved along its line of sight projects where
+  it did, so what the CPU hit test projects is where the piece is drawn.
 
 - **Writing.** Instances that fit the region's capacity are one
   `queue.write_buffer` of that region and nothing else. More instances than
@@ -280,16 +355,31 @@ described above.
   keeps its capacity for the next write.
 - **Drawing.** Each target's pass sets its pipeline and the quad corners, binds
   the store's buffer once, and draws each of its regions as
-  `draw(0..4, offset..offset + count)`. The regions lie in the buffer, and are
-  drawn, in a fixed order, `ProducerId`'s: the bench figure on the scene
-  target, and the measurements on their layer.
+  `draw(0..4, offset..offset + count)`, four corners of a strip per instance
+  whatever its kind. The regions lie in the buffer, and are drawn, in a fixed
+  order, `ProducerId`'s: the bench figure on the scene target, and the
+  measurements on their layer.
+- **Order within a region.** A producer lays out its own instances with every
+  halo first, then every stroke, then every dot, so one item's halo never
+  crosses another's stroke.
 
-The bench figure and the measurements both write their region every frame,
-since both are built from the camera. The figure's centre disc is not in the
-store (§ "Depth against the scene").
+**The producers.** Each producer writes its region when what it draws from
+changes, which is what it keys its instances on:
+
+| Producer | Target | Writes |
+|---|---|---|
+| Bench figure | `Scene` | every frame it is drawn: the arrowhead's barbs turn to face the eye, so a camera move changes it |
+| Measurements | `MeasurementLayer` | when its key changes: each drawn node's document serial, display transform and tint, the selected measurement and endpoint, the focused item's `Arc`, *Show all measurements*, and the visible nodes (`measurement_marks::MeasurementLayerKey`) |
+
+The measurements' key covers everything their instances are built from, so
+orbiting, zooming and resizing the panel build nothing and write nothing
+([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). The
+figure's centre disc is not in the store (§ "Depth against the scene").
 [`../drafts/overlay-ribbons.md`](../drafts/overlay-ribbons.md) describes the
-later steps: instances that do not depend on the camera, producers that write
-only when what they draw from changes, and the track rays as a third producer.
+later steps: the track rays as a third producer, drawn as the other overlays
+are with a ray to a point at infinity drawn to the horizon, and whether the
+figure's barbs should turn in the shader so that its key no longer holds the
+camera.
 
 ## The handles
 
@@ -677,7 +767,7 @@ Every value here is a constant of the module named beside it, not a setting.
 | `SELECTED_CIRCLE_SCALE` | `1.6` | how much larger the selected observation's circle is drawn |
 | `HANDLE_HIT_RADIUS` | `9.0` | reach of the dot, a corner, the arrowhead and a circle, in panel px |
 | `EDGE_HIT_WIDTH` | `8.0` | reach of an edge and of the normal's segment, in panel px |
-| `BENCH_LINE_HALF_WIDTH` | `1.25` | half the stroke width, in px (`scene_renderer/gpu_types.rs`) |
+| `BENCH_LINE_HALF_WIDTH` | `1.25` | half the stroke width, in panel points (`scene_renderer/gpu_types.rs`) |
 | `BEHIND_OPACITY` | `0.45` | opacity the moment the figure passes behind the scene (`shaders/bench_track.wgsl`) |
 | `FLOOR_OPACITY` | `0.15` | the opacity it fades to and never below |
 | `INF_DEPTH` | `1e-6` | the NDC depth a direction's fragments are pinned at |
@@ -714,15 +804,22 @@ wgpu's `noop` backend, where wgpu-core still performs its full validation while
 wgpu-hal stubs the driver: a vertex layout that disagrees with the instance
 struct, or a uniform block whose Rust side has drifted from the WGSL, is a
 validation error there rather than a blank pass on a real GPU. The same tests
-check that the figure's edges carry the fade flag and the measurements' do
-not, at the widths each carries, and that the measurements' upload holds one
-instance per ribbon. The pass contract draws both targets' regions out of one
-store, the measurements' at an offset past the figure's. What the shader does
-with them, the depth-aware blend with
-and without the fade and the clip at the near plane, runs on no `noop` device,
-so it is checked by eye, with MCP screenshots of the viewport showing a
-square lying on a surface, one in front of it and one behind it
-([`mcp-server.md`](mcp-server.md)).
+check that the figure's pieces are segments at the bench's width in points with
+the `FADE` flag and no pull, that the measurements' upload holds the instances
+it is handed and empties its region for none, and that the camera block carries
+the projection, the pixels per point and the pull fraction the frame handed it.
+The pass contract draws both targets' regions out of one store, a segment, a
+ring and a disc among the measurements', at an offset past the figure's. What
+the shader does with them, the depth-aware blend with and without the fade, the
+clip at the near plane, the pull, the insets and the anti-aliased shapes, runs
+on no `noop` device, so it is checked by eye, with MCP screenshots of the
+viewport showing a square lying on a surface, one in front of it and one behind
+it, rings and lines of measurements in front of and behind the scene, and a
+line that stops at its rings and runs off the view where it is clipped
+([`mcp-server.md`](mcp-server.md)). `scene_renderer/pipelines/tests.rs` holds
+the shader's insets to their rules in its source: an end clipped at the near
+plane not inset, a segment shorter than its insets dropped, the cut ends placed
+on the segment and anti-aliased.
 
 `scene_renderer/overlay_ribbons/tests.rs` checks the store on the same `noop`
 device. That device keeps no buffer contents, so the store records, in test

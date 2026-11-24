@@ -13,10 +13,12 @@
 //! means the same thing in both views (G8). Image Detail paints the marks and
 //! lines with [`Screen::draw`]; the 3D view draws the same marks and lines, at
 //! the same sizes and in the same colours, in its scene pass
-//! (`viewer_3d::measurements::ribbons`), and paints only the indicator
+//! (`viewer_3d::measurements::instances`), and paints only the indicator
 //! ([`Screen::draw_indicator`]).
 //!
 //! See `specs/gui/measurement-view.md` § "Drawing measurements".
+
+use std::sync::Arc;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
 
@@ -165,7 +167,92 @@ impl MeasurementLayer {
     }
 }
 
+/// Everything [`AppState::measurement_layer`] builds the 3D view's
+/// measurements from that can change their rings, dots and lines: what the
+/// 3D view keys the instances it builds from a layer on, so it builds them
+/// again only when this changes and never for a camera move.
+///
+/// The focused item is compared by its `Arc`, which a step on it replaces,
+/// as [`crate::scene::SceneNode::item_reading`] compares it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MeasurementLayerKey {
+    show_all: bool,
+    selected: Option<MeasurementRef>,
+    selected_endpoint: Option<EndpointSide>,
+    item: Option<Arc<sfmtool_core::bench::EditableMeasurement>>,
+    /// Every visible node and the focused item's, in scene order.
+    nodes: Vec<NodeKey>,
+}
+
+/// What [`MeasurementLayerKey`] holds of one node.
+#[derive(Debug, Clone, PartialEq)]
+struct NodeKey {
+    id: ReconId,
+    visible: bool,
+    /// The version's document serial, which the stored measurements, their
+    /// readings and the item's reading follow.
+    document: crate::document::VersionSerial,
+    /// The display transform as its quaternion, translation and scale.
+    transform: [f64; 8],
+    /// Which colour its stored measurements are drawn in.
+    tint: crate::scene::NodeTint,
+}
+
+impl PartialEq for MeasurementLayerKey {
+    fn eq(&self, other: &Self) -> bool {
+        let item = match (&self.item, &other.item) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        item && self.show_all == other.show_all
+            && self.selected == other.selected
+            && self.selected_endpoint == other.selected_endpoint
+            && self.nodes == other.nodes
+    }
+}
+
 impl AppState {
+    /// What [`Self::measurement_layer`] builds the 3D view's layer from, with
+    /// *Show all measurements* `show_all`, as far as it changes how the
+    /// measurements are drawn ([`MeasurementLayerKey`]).
+    pub(crate) fn measurement_layer_key(&self, show_all: bool) -> MeasurementLayerKey {
+        let item = self.focused_item().and_then(|focused| {
+            let label = self.focused_measurement_label(focused.node)?;
+            Some((
+                focused.node,
+                Arc::clone(self.bench_measurement(focused.node, label)?),
+            ))
+        });
+        let nodes = self
+            .scene
+            .iter()
+            .filter_map(|node| {
+                let visible = crate::scene::is_visible(node, self.solo);
+                if !visible && item.as_ref().is_none_or(|(id, _)| *id != node.id) {
+                    return None;
+                }
+                let transform = node.transform();
+                let [qw, qx, qy, qz] = transform.rotation.to_wxyz_array();
+                let t = transform.translation;
+                Some(NodeKey {
+                    id: node.id,
+                    visible,
+                    document: node.history.current_version().document_serial,
+                    transform: [qw, qx, qy, qz, t.x, t.y, t.z, transform.scale],
+                    tint: node.tint,
+                })
+            })
+            .collect();
+        MeasurementLayerKey {
+            show_all,
+            selected: self.selected_measurement,
+            selected_endpoint: self.selected_endpoint,
+            item: item.map(|(_, item)| item),
+            nodes,
+        }
+    }
+
     /// What the 3D view or Image Detail draws this frame, with that view's
     /// *Show all measurements* option `show_all`.
     ///
