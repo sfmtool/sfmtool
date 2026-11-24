@@ -399,6 +399,15 @@ impl PhotographCache {
     ) -> Result<TryDecode, TileError> {
         let asked = Asked::Keys(keys);
         let slot = (self.shared.options.budget_bytes > 0).then(|| self.slot_for(path));
+        // Found once for a call with no slot, which both reads below use.
+        let unslotted;
+        let setting = match &slot {
+            Some(slot) => &slot.setting,
+            None => {
+                unslotted = self.setting_for(path);
+                &unslotted
+            }
+        };
         // An out-of-core photograph whose mipmap is current is read from its
         // files, which never waits on a slot or the build count. When a file
         // turns out not current, the slot's mipmap is marked so and the
@@ -408,7 +417,7 @@ impl PhotographCache {
             Some(slot) => self
                 .tier_of(path, slot)
                 .map(|files| (Arc::clone(slot), files)),
-            None => self.unmapped_files_slot(path, &self.setting_for(path)),
+            None => self.unmapped_files_slot(path, setting),
         };
         if let Some((files_slot, files)) = read_from_files {
             check_keys(path, &files.layout, keys)?;
@@ -445,14 +454,6 @@ impl PhotographCache {
         }
         // A file whose header cannot be read, or whose workspace file cannot,
         // is made at once, as the failure remembered in its slot.
-        let unslotted;
-        let setting = match &slot {
-            Some(slot) => &slot.setting,
-            None => {
-                unslotted = self.setting_for(path);
-                &unslotted
-            }
-        };
         let size = header(path, setting);
         let mut share = Share::None;
         if let Ok((width, height)) = size {

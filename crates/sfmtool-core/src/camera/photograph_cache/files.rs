@@ -350,6 +350,11 @@ impl PhotographCache {
         path: &Path,
         setting: &WorkspaceSetting,
     ) -> Option<(Arc<Slot>, Arc<MipmapFiles>)> {
+        // A workspace without `mipmap_options` has no out-of-core
+        // photograph: nothing is read for it, not even the stamp.
+        if !matches!(setting.options, Ok(Some(_))) {
+            return None;
+        }
         let stamp = file_stamp(path);
         let (files, coarsest) = self.check_files(path, setting)?;
         let slot = Arc::new(Slot::new(stamp, setting.clone()));
