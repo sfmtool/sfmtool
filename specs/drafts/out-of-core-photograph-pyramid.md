@@ -24,7 +24,7 @@ draft [view-region-pyramid.md](view-region-pyramid.md), which this design
 requires: without it no kernel can read a large photograph within a bounded
 memory, so it is a numbered step here (§ "Implementation steps"), not a later
 optimization. The user has decided every open question of this draft
-(§ "Open questions", 1 to 14) and every one of the companion draft's.
+(§ "Open questions", 1 to 15) and every one of the companion draft's.
 
 Amends [core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
 (the cache hands out photograph tiles for every photograph instead of whole
@@ -3296,7 +3296,9 @@ in core. Step 17 turns the tier on.
       mipmaps*' shared list once per path, the spinner with *Building
       mipmap…*, the 3D background drawing the coarsest level while it
       waits, and Image Detail's *Workspace file error:* with the message.
-      A panel's request then no longer reads an out-of-core photograph
+      It looks again at how a panel is answered for an evicted level held
+      in memory (§ "Open questions", 15). A panel's request then no
+      longer reads an out-of-core photograph
       without a current mipmap in core, and a `Changed` puts the photograph
       back to `Building`, queued again. With the list comes the least of
       the *Build mipmaps* quiet task that drains it (open question 14,
@@ -3507,3 +3509,23 @@ decisions.
     chunk would never be queued again, and its panel would draw the spinner
     for good, which (a) was chosen to rule out. This follows from (a) and
     needs no further decision.
+15. **A panel's read of an evicted level held in memory.** Found while
+    building 14c: when a mipmap's files cannot be written, its levels are
+    held in memory as file entries, evicted under the budget and made again
+    when a kernel reads them. A panel that asks for tiles of such a level
+    after it was evicted (on a zoom or a pan; a panel keeps the tiles it is
+    answered, so not on every frame) could be answered in three ways:
+    - (a) from a whole decode of the original in core that no slot keeps,
+      reserved with `try_reserve_build`, as for a photograph without a
+      current mipmap, so a panel never makes a mipmap;
+    - (b) by the panel making the levels again in memory without waiting
+      (reserved with `try_reserve_build`, answering `Busy` when refused or
+      when the slot is being made, and writing no files), so later requests
+      cost nothing until the levels are evicted again;
+    - (c) by keeping the panel's in-core tiles in the slot, which would mix
+      pixels one JPEG loss apart into what kernels read.
+
+    *Decided by the user:* (a), as built in 14c. It happens only in a
+    workspace whose mipmap files cannot be written, with the cache under
+    its budget, and it keeps the rule that a panel never makes a mipmap.
+    Step 14e, which gives panels the `Building` state, looks at it again.
