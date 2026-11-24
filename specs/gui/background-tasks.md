@@ -395,7 +395,11 @@ specifies with the rest of the task (its step 15).
   the file's length and modification time, so a cache of budget 0, which
   remembers no failure, is not asked to make it again on every frame; it is
   queued again once its file changes. A run ends with a repaint, as every
-  task's end does, which draws what it made.
+  task's end does, which draws what it made. It also wakes the viewer once
+  for each build of its chunk that publishes its photograph's coarsest
+  level (`COARSEST_PUBLISHED`), so Image Detail and the 3D background draw
+  that level before the run ends, though a quiet task's progress wakes no
+  one.
 - **Its line.** While a run is running, the quiet line says what it does
   and how far it has got, how many photographs have been answered of how
   many queued since the list was last empty: `quiet Building mipmaps: 3 of

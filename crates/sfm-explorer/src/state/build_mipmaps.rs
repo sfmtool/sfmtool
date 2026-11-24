@@ -39,8 +39,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use sfmtool_core::camera::{PeekedLayout, PhotographCache};
-use sfmtool_core::progress::Progress;
+use sfmtool_core::camera::{PeekedLayout, PhotographCache, COARSEST_PUBLISHED};
+use sfmtool_core::progress::{Event, Progress};
 
 use super::{AppState, PhotographRequests};
 use crate::background::{Operation, QuietJob, QuietRank, QuietSource};
@@ -128,10 +128,16 @@ pub(super) fn lock(list: &Mutex<MipmapList>) -> MutexGuard<'_, MipmapList> {
 /// made is kept as a failure of the panels' reads. A run that is cancelled
 /// puts the photographs of its chunk whose layout is not yet known back at
 /// the front, in their order.
+///
+/// Calls `wake` each time a build of the chunk has published its
+/// photograph's coarsest level ([`COARSEST_PUBLISHED`]), so the panels
+/// waiting on it draw it before the build ends: once a build, so at most
+/// one repaint a photograph besides the one the run's end gives.
 pub(crate) fn run_chunk(
     cache: &PhotographCache,
     requests: &PhotographRequests,
     progress: &Progress<'_>,
+    wake: Option<&(dyn Fn() + Sync)>,
 ) {
     let list = &requests.mipmaps;
     let chunk = {
@@ -150,7 +156,20 @@ pub(crate) fn run_chunk(
     let paths: Vec<&Path> = chunk.iter().map(PathBuf::as_path).collect();
     #[cfg(test)]
     requests.chunk_started(&chunk);
-    match cache.get_many(&paths, progress) {
+    let published = |event: Event<'_>| {
+        if let (
+            Event::Value {
+                name: COARSEST_PUBLISHED,
+                ..
+            },
+            Some(wake),
+        ) = (&event, wake)
+        {
+            wake();
+        }
+        progress.forward(event);
+    };
+    match cache.get_many(&paths, &progress.tapped(&published)) {
         Ok((answers, _)) => {
             for (path, answer) in chunk.iter().zip(answers) {
                 if answer.is_none() {
@@ -209,10 +228,12 @@ impl AppState {
         };
         let cache = Arc::clone(&self.photographs);
         let requests = self.photograph_requests.clone();
+        let wake = self.wake.clone();
         let (sender, ended) = std::sync::mpsc::channel::<()>();
         let job = QuietJob::new(
             move |progress: &Progress<'_>| {
-                run_chunk(&cache, &requests, progress);
+                let wake = wake.as_deref().map(|wake| wake as &(dyn Fn() + Sync));
+                run_chunk(&cache, &requests, progress, wake);
                 drop(sender);
             },
             // Nothing was taken from the list: the next frame queues again.
@@ -253,7 +274,12 @@ pub(crate) fn job_stops_when_cancelled() -> bool {
     let (requests, _) = PhotographRequests::queued();
     lock(&requests.mipmaps).queue(&paths[0]);
     let cancel = std::sync::atomic::AtomicBool::new(true);
-    run_chunk(&cache, &requests, &Progress::none().cancelled_by(&cancel));
+    run_chunk(
+        &cache,
+        &requests,
+        &Progress::none().cancelled_by(&cancel),
+        None,
+    );
     cache.stats().mipmaps_made == 0
         && tests::mipmap_file_count(dir.path()) == 0
         && requests.mipmaps_waiting() == paths

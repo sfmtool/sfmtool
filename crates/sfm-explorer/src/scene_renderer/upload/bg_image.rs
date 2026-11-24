@@ -19,7 +19,7 @@ use super::super::SceneRenderer;
 use crate::scene::ImageRef;
 use crate::state::{DisplayLayout, DisplayLevel};
 use sfmtool_core::camera::image::ImageU8;
-use sfmtool_core::camera::{CameraIntrinsics, PyramidLayout};
+use sfmtool_core::camera::{CameraIntrinsics, CoarsestLevel, PhotographTile, PyramidLayout};
 use sfmtool_core::SfmrReconstruction;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -140,6 +140,22 @@ pub(crate) struct BgMeshKey {
     pub(crate) uv_scale: [f32; 2],
 }
 
+/// The core of `tile`, a photograph tile with its one-pixel border: the
+/// pixels of its level it covers.
+fn tile_core(tile: &PhotographTile) -> ImageU8 {
+    let [w, h] = tile.size;
+    let c = tile.pixels.channels() as usize;
+    let stride = tile.pixels.width() as usize * c;
+    let span = w as usize * c;
+    let data = tile.pixels.data();
+    let mut core = Vec::with_capacity(span * h as usize);
+    for y in 0..h as usize {
+        let from = (y + 1) * stride + c;
+        core.extend_from_slice(&data[from..from + span]);
+    }
+    ImageU8::new(w, h, tile.pixels.channels(), core)
+}
+
 /// `level` as RGBA rows for an `Rgba8UnormSrgb` texture, with alpha 255 where
 /// the level has none. The cache's levels are RGB; the background pipeline
 /// draws with no blending, so the alpha has no visible effect.
@@ -178,7 +194,13 @@ impl SceneRenderer {
     ///
     /// - **Ready**: the level is copied into a new texture, and the bind group
     ///   rebuilt around it.
-    /// - **Loading**, the layout's or the level's: the texture keeps what it
+    /// - **Building** with the coarsest level a build of the photograph's
+    ///   mipmap has published: that level is drawn, level `K`, the one tile a
+    ///   build publishes first, until the photograph is known and its own
+    ///   level lands. It is copied into a texture once, not on every frame
+    ///   that asks while the build runs.
+    /// - **Loading**, the layout's or the level's, or **Building** before the
+    ///   coarsest level is published: the texture keeps what it
     ///   holds, so while the next image of a camera switch or an animation
     ///   loads, the previous one stays on its own mesh. A background of
     ///   another node is cleared, since the frame's node transform is not its
@@ -233,15 +255,58 @@ impl SceneRenderer {
                         None => self.clear_bg_image(),
                     }
                 }
-                // A photograph waiting for its mipmap keeps the previous
-                // image's photograph on its own mesh, as one being read does.
-                DisplayLayout::Loading | DisplayLayout::Building => {
+                // A photograph waiting for its mipmap draws its coarsest level
+                // once the build has published it, and until then keeps the
+                // previous image's photograph on its own mesh, as one being
+                // read does.
+                DisplayLayout::Building(Some(coarsest)) => {
+                    self.load_coarsest_level(device, queue, image, &coarsest)
+                }
+                DisplayLayout::Loading | DisplayLayout::Building(None) => {
                     self.keep_bg_image_while_loading(image)
                 }
                 DisplayLayout::Unreadable => self.clear_bg_image(),
             }
         }
         self.update_bg_mesh(device, recon);
+    }
+
+    /// Draw `coarsest`, the coarsest level a build of `image`'s mipmap has
+    /// published, unless the texture holds that level of `image` already: its
+    /// first tile's core, level `K` whole, with the texture coordinates
+    /// scaled for level `K` of the photograph's own size, so it lies where the
+    /// photograph will.
+    fn load_coarsest_level(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image: ImageRef,
+        coarsest: &CoarsestLevel,
+    ) {
+        let level = coarsest.level();
+        if self
+            .bg_image_loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.image == image && loaded.level == level)
+        {
+            return;
+        }
+        let Some(pixels) = coarsest.tiles.first().map(|tile| tile_core(tile)) else {
+            self.keep_bg_image_while_loading(image);
+            return;
+        };
+        let layout = &coarsest.layout;
+        let level_sizes = (0..layout.levels()).map(|l| layout.level_size(l)).collect();
+        self.load_bg_texture(
+            device,
+            queue,
+            LoadedBgLevel {
+                image,
+                level,
+                level_sizes,
+            },
+            &pixels,
+        );
     }
 
     /// While `image`'s photograph loads, keep the one the texture holds, on

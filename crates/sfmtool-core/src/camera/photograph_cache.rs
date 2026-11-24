@@ -54,7 +54,9 @@ mod tiles;
 
 use build::Make;
 use files::{Failure, FileEntry, LevelSource, Tier, Unmapped};
-pub use tiles::{PeekedLayout, PeekedTile, TileError, TryDecode};
+pub use tiles::{
+    CoarsestLevel, PeekedLayout, PeekedTile, TileError, TryDecode, COARSEST_PUBLISHED,
+};
 
 /// How long a caller waiting for another caller's decode of the same path
 /// waits on the slot before it looks at its own `Progress` for cancellation
@@ -713,6 +715,13 @@ struct SlotData {
     /// decode, and not counted. Empty for a slot in the map, which keeps them
     /// as file entries.
     held: HashMap<usize, Arc<LevelSource>>,
+    /// The coarsest level a build in the slot has published, while the
+    /// photograph is not current: from the build that made it until the slot
+    /// reads its files or drops its entries, kept after a cancelled build until
+    /// the next one publishes. Not counted against the budget: one photograph's
+    /// level `K` and the levels below it, a few hundred kilobytes, for each
+    /// photograph a build has started on and not finished.
+    coarsest: Option<Arc<CoarsestLevel>>,
 }
 
 impl SlotData {
@@ -783,11 +792,13 @@ impl SlotData {
         })
     }
 
-    /// Drop every tile and file entry kept, answering the bytes they held.
+    /// Drop every tile and file entry kept, answering the bytes they held,
+    /// and the coarsest level a build published.
     fn drop_entries(&mut self) -> u64 {
         self.tiles.clear();
         self.files.clear();
         self.held.clear();
+        self.coarsest = None;
         std::mem::take(&mut self.bytes)
     }
 
@@ -1037,6 +1048,9 @@ pub(crate) enum SlotEvent {
     /// A panel's decode ([`PhotographCache::try_decode_tiles`]) has its
     /// reservation and is about to claim the slot.
     PanelReserved,
+    /// A build has published the photograph's coarsest level, and goes on to
+    /// make the rest.
+    CoarsestPublished,
 }
 
 impl std::fmt::Debug for PhotographCache {

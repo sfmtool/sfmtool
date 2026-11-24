@@ -18,14 +18,15 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use super::files::{Checked, Failure, LevelSource, MipmapFiles, Tier};
+use super::files::{cut_coarse, Checked, Failure, LevelSource, MipmapFiles, Tier};
 use super::{
-    file_stamp, header, whole_decode_bytes, Asked, Found, GetError, Got, Making, PhotographCache,
-    Share, Slot, WorkspaceSetting,
+    file_stamp, header, whole_decode_bytes, Asked, CoarsestLevel, Found, GetError, Got, Making,
+    PeekedLayout, PhotographCache, Share, Slot, WorkspaceSetting, COARSEST_PUBLISHED,
 };
 use crate::camera::mipmap::{
-    build_mipmaps, mipmap_location, BuiltMipmap, MipLevelFile, MipmapError,
+    build_mipmaps, mipmap_location, BuiltMipmap, MipLevelFile, MipmapError, PyramidLayout,
 };
+use crate::camera::tiled_photograph::TileKey;
 use crate::progress::{Event, Progress};
 use crate::progress_warn;
 
@@ -44,6 +45,42 @@ pub(super) enum Make {
     /// messages, since the phases of members running in parallel would
     /// overwrite one another in the caller's display.
     Quietly,
+}
+
+/// Where a build publishes the photograph's coarsest level once it is
+/// encoded, for a panel to draw while it waits ([`PeekedLayout::Building`]).
+#[derive(Clone, Copy)]
+pub(super) enum Publish<'s> {
+    /// Nowhere: a build made again in memory for a kernel's read of a
+    /// photograph already read from its files.
+    Nowhere,
+    /// In the slot the build is made in.
+    Slot(&'s Arc<Slot>),
+    /// Under a budget of 0, which keeps no slot: in the layout
+    /// [`PhotographCache::request_layout`] kept for the photograph, when a
+    /// panel asked for one and it is `Building`.
+    Layouts,
+}
+
+/// The coarsest level of `layout`, a photograph's out-of-core layout, cut
+/// from `file`, its level `K`'s file: the tile of level `K` and one of each
+/// level below it. `None` when the file does not decode to level `K`'s size
+/// or a level is more than one tile.
+fn coarsest_level(layout: &PyramidLayout, file: &MipLevelFile) -> Option<CoarsestLevel> {
+    let mut cut = cut_coarse(layout, file)?;
+    let tiles = (layout.stored_levels()..layout.levels())
+        .map(|level| {
+            cut.remove(&TileKey {
+                level: level as u8,
+                col: 0,
+                row: 0,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    cut.is_empty().then(|| CoarsestLevel {
+        layout: Arc::new(layout.clone()),
+        tiles,
+    })
 }
 
 /// The [`GetError`] a failed build of `path`'s mipmap is answered and
@@ -166,8 +203,16 @@ impl PhotographCache {
             }
             Checked::InCore | Checked::NotCurrent => {
                 self.shared.misses.fetch_add(1, Ordering::Relaxed);
-                self.build(path, progress, &mut making.share, &slot.setting, make)
-                    .map(|(files, opened)| (files, opened, Found::Made))
+                let publish = Publish::Slot(slot);
+                self.build(
+                    path,
+                    progress,
+                    &mut making.share,
+                    &slot.setting,
+                    make,
+                    publish,
+                )
+                .map(|(files, opened)| (files, opened, Found::Made))
             }
         };
         if let Err(GetError::Cancelled) = made {
@@ -222,11 +267,22 @@ impl PhotographCache {
     ) -> (Result<Got, Failure>, Found) {
         self.shared.misses.fetch_add(1, Ordering::Relaxed);
         let stamp = file_stamp(path);
-        let built = self.build(path, progress, &mut share, &setting, make);
+        let built = self.build(path, progress, &mut share, &setting, make, Publish::Layouts);
         share.release();
         let (files, opened) = match built {
             Ok(built) => built,
-            Err(e) => return (Err(Failure::Get(e)), Found::Decoded),
+            Err(e) => {
+                // A failed build's coarsest level is not drawn; a cancelled
+                // one's is, until the next build publishes its own.
+                if !matches!(e, GetError::Cancelled) {
+                    if let Some(PeekedLayout::Building { coarsest }) =
+                        self.lock().layouts.get_mut(path)
+                    {
+                        *coarsest = None;
+                    }
+                }
+                return (Err(Failure::Get(e)), Found::Decoded);
+            }
         };
         let slot = Arc::new(Slot::new(stamp, setting));
         {
@@ -251,6 +307,11 @@ impl PhotographCache {
     /// polls it for cancellation between the build's stages, answering
     /// [`GetError::Cancelled`] with the levels already written left current.
     ///
+    /// Once the coarsest level is encoded, or found current, it is cut into a
+    /// [`CoarsestLevel`] and published where `publish` says, and
+    /// [`COARSEST_PUBLISHED`] reported through `progress` whatever `make`
+    /// says, so a caller that draws can repaint: one value a build.
+    ///
     /// Must not use rayon, for the reason [`Self::decode`] gives: it runs
     /// while its slot is marked as being made. `build_mipmaps`, the decoder
     /// and the encoder use none.
@@ -261,6 +322,7 @@ impl PhotographCache {
         share: &mut Share<'r>,
         setting: &WorkspaceSetting,
         make: Make,
+        publish: Publish<'_>,
     ) -> Result<(Arc<MipmapFiles>, Vec<MipLevelFile>), GetError> {
         let (width, height) = header(path, setting)?;
         let not_out_of_core = || {
@@ -277,10 +339,13 @@ impl PhotographCache {
         }
         #[cfg(test)]
         self.slot_event(super::SlotEvent::DecodeStarted, path);
-        let messages = |event: Event<'_>| {
-            if let Event::Message { .. } = event {
-                progress.forward(event);
-            }
+        let messages = |event: Event<'_>| match event {
+            Event::Message { .. }
+            | Event::Value {
+                name: COARSEST_PUBLISHED,
+                ..
+            } => progress.forward(event),
+            _ => {}
         };
         let quiet = progress.tapped(&messages);
         let reporting = match make {
@@ -288,7 +353,27 @@ impl PhotographCache {
             Make::Never | Make::Reporting => progress,
         };
         let tile_size = self.shared.options.tile_size;
-        let built = build_mipmaps(path, None, options, tile_size, reporting)
+        // No layout, nothing published: a build made again in memory.
+        let layout = PyramidLayout::for_size(width, height, Some(options), tile_size)
+            .filter(|_| !matches!(publish, Publish::Nowhere));
+        let mut published = false;
+        let mut on_level = |file: &MipLevelFile| {
+            let Some(layout) = &layout else {
+                return;
+            };
+            let k = layout.stored_levels();
+            if published || file.record().level as usize != k {
+                return;
+            }
+            published = true;
+            if let Some(coarsest) = coarsest_level(layout, file) {
+                self.publish_coarsest(path, publish, Arc::new(coarsest));
+                #[cfg(test)]
+                self.slot_event(super::SlotEvent::CoarsestPublished, path);
+                reporting.value(COARSEST_PUBLISHED, k as f64);
+            }
+        };
+        let built = build_mipmaps(path, None, options, tile_size, reporting, &mut on_level)
             .map_err(|e| build_error(path, e))?;
         self.shared.mipmaps_made.fetch_add(1, Ordering::Relaxed);
         let location = mipmap_location(path).ok_or_else(not_out_of_core)?;
@@ -335,6 +420,26 @@ impl PhotographCache {
             in_memory: not_written.is_some(),
         };
         Ok((Arc::new(made), files))
+    }
+
+    /// Publish `coarsest`, the coarsest level a build of `path` has encoded,
+    /// where `publish` says: in the slot, which answers it to
+    /// [`Self::layout`] while the photograph is not current, or under a
+    /// budget of 0 in the layout [`Self::request_layout`] kept for `path`
+    /// when it is `Building`, which a panel then takes from
+    /// [`Self::layout`]. Replaces one a build published before.
+    fn publish_coarsest(&self, path: &Path, publish: Publish<'_>, coarsest: Arc<CoarsestLevel>) {
+        match publish {
+            Publish::Nowhere => {}
+            Publish::Slot(slot) => slot.lock().coarsest = Some(coarsest),
+            Publish::Layouts => {
+                if let Some(PeekedLayout::Building { coarsest: kept }) =
+                    self.lock().layouts.get_mut(path)
+                {
+                    *kept = Some(coarsest);
+                }
+            }
+        }
     }
 
     /// For a kernel's read of `level` of `path`, whose `slot` reads its
@@ -390,6 +495,7 @@ impl PhotographCache {
             &mut making.share,
             &slot.setting,
             Make::Quietly,
+            Publish::Nowhere,
         );
         // Dropping the hold on a failure gives the share back, leaves the
         // slot as it was and wakes its waiters.

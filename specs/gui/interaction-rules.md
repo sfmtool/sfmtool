@@ -122,7 +122,9 @@ observation table is such a list.
 **G13. A picture kept while its replacement loads takes no click.** A panel
 that keeps drawing the picture it showed before while the one now selected
 loads, as Image Detail keeps the previous photograph until the new one's first
-tiles land, takes no click, double-click, drag or right-click on that picture:
+tiles land, or draws a stand-in for the selected one while it is made, as
+Image Detail draws the coarsest level of a photograph whose mipmap is being
+made, takes no click, double-click, drag or right-click on that picture:
 the drawn picture is not the selected one, so a click would select, edit or
 open a menu on something the user did not choose. No selection is made or
 cleared, no drag pans the view or moves a mark, and no menu opens. Hover still

@@ -289,7 +289,7 @@ fn a_kernel_and_the_task_make_each_mipmap_once_between_them() {
     start.wait();
     // One chunk is as many as the rayon pool runs at once; the rest follow.
     while !requests.mipmaps_waiting().is_empty() {
-        run_chunk(&cache, &requests, &Progress::none());
+        run_chunk(&cache, &requests, &Progress::none(), None);
     }
     assert!(kernel.join().unwrap(), "the kernel read every photograph");
     assert_eq!(cache.stats().mipmaps_made, 4);
@@ -333,4 +333,93 @@ fn the_quiet_line_says_how_many_mipmaps_are_built_of_how_many() {
     assert_eq!(texts[at + 1], "Building mipmaps: 0 of 2", "{texts:?}");
     drop(release);
     state.land_quiet_tasks();
+}
+
+/// How long a held run of *Build mipmaps* waits to be released before it
+/// goes on by itself, so a test that fails before releasing it ends.
+const HANG: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A run of *Build mipmaps* on a thread of its own, held once a build of its
+/// chunk has published its photograph's coarsest level, until the test sends
+/// on `release`.
+pub(crate) struct HeldRun {
+    /// Told when the coarsest level is published, before the run is held.
+    pub(crate) published: mpsc::Receiver<()>,
+    pub(crate) release: mpsc::Sender<()>,
+    /// Told when the run has ended.
+    pub(crate) ended: mpsc::Receiver<()>,
+}
+
+impl HeldRun {
+    /// Wait until the coarsest level is published.
+    pub(crate) fn wait_published(&self) {
+        self.published
+            .recv_timeout(HANG)
+            .expect("a build published its coarsest level");
+    }
+
+    /// Let the run go on, and wait until it has ended.
+    pub(crate) fn finish(self) {
+        let _ = self.release.send(());
+        self.ended.recv_timeout(HANG).expect("the run ended");
+    }
+}
+
+/// Start a run of *Build mipmaps* over `requests`' list, held as
+/// [`HeldRun`] says.
+pub(crate) fn run_held_once_published(
+    cache: &Arc<PhotographCache>,
+    requests: &PhotographRequests,
+) -> HeldRun {
+    let (published_tx, published) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let (ended_tx, ended) = mpsc::channel();
+    let (cache, requests) = (Arc::clone(cache), requests.clone());
+    std::thread::spawn(move || {
+        let released = Mutex::new(released);
+        let wake = move || {
+            let _ = published_tx.send(());
+            let _ = released.lock().unwrap().recv_timeout(HANG);
+        };
+        run_chunk(&cache, &requests, &Progress::none(), Some(&wake));
+        let _ = ended_tx.send(());
+    });
+    HeldRun {
+        published,
+        release,
+        ended,
+    }
+}
+
+/// A run of *Build mipmaps* wakes the viewer once for each photograph of its
+/// chunk whose coarsest level a build published, so the panels waiting on it
+/// draw that level before the run ends: three photographs, three wakes, one
+/// each, with a budget smaller than a photograph and with one of 0; and a
+/// run over photographs whose mipmaps are current builds nothing and wakes
+/// no one.
+#[test]
+fn a_run_wakes_the_viewer_once_for_each_coarsest_level_it_publishes() {
+    for budget in [20_000, 0] {
+        let (_dir, paths) = out_of_core_workspace(3);
+        let cache = cache_for(budget, 3);
+        let (requests, _) = PhotographRequests::queued();
+        let woken = std::sync::atomic::AtomicUsize::new(0);
+        let wake = || {
+            woken.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        };
+        for round in ["made", "current"] {
+            woken.store(0, std::sync::atomic::Ordering::Relaxed);
+            queue_all(&requests, &paths);
+            while !requests.mipmaps_waiting().is_empty() {
+                run_chunk(&cache, &requests, &Progress::none(), Some(&wake));
+            }
+            let expected = if round == "made" { 3 } else { 0 };
+            assert_eq!(
+                woken.load(std::sync::atomic::Ordering::Relaxed),
+                expected,
+                "budget {budget}, {round}"
+            );
+        }
+        assert_eq!(cache.stats().mipmaps_made, 3, "budget {budget}");
+    }
 }

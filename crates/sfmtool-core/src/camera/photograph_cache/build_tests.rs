@@ -171,7 +171,10 @@ fn a_get_makes_a_missing_or_stale_mipmap_and_reads_it() {
             .err(),
         Some(TileError::Changed { path: path.clone() })
     );
-    assert_eq!(cache.layout(&path), PeekedLayout::Building);
+    assert_eq!(
+        cache.layout(&path),
+        PeekedLayout::Building { coarsest: None }
+    );
     let phases = Mutex::new(Vec::new());
     let sink = |event: Event<'_>| {
         if let Event::Enter { phase, .. } = event {
@@ -214,6 +217,11 @@ fn cache_holding_every_build() -> HeldBuilds {
     cache.set_slot_hook(Box::new(move |cache, event, _| {
         // Read without `stats`, which takes the slot lock a waiter holds.
         let reserved = cache.shared.build_reserved.load(Ordering::SeqCst);
+        // A build's publishing of its coarsest level is not among the
+        // events these tests wait for.
+        if event == SlotEvent::CoarsestPublished {
+            return;
+        }
         let _ = event_tx.send((event, reserved));
         if event == SlotEvent::DecodeStarted {
             let _ = release_rx.lock().unwrap().recv_timeout(HANG);
@@ -493,7 +501,10 @@ fn under_a_budget_of_0_a_panel_reads_a_build_held_in_memory_in_core() {
     };
     let cache = cache_of(0);
     cache.request_layout(path);
-    assert_eq!(cache.layout(path), PeekedLayout::Building);
+    assert_eq!(
+        cache.layout(path),
+        PeekedLayout::Building { coarsest: None }
+    );
     assert_eq!(
         cache
             .try_decode_tiles(path, &[key], &Progress::none())
@@ -548,6 +559,16 @@ fn a_file_a_read_found_missing_is_made_again_each_time() {
             };
             if rewrite {
                 std::fs::write(&level_1, [0u8; 64]).unwrap();
+                // Each rewrite at a time of its own: two writes within one
+                // tick of the file system's clock can share one.
+                std::fs::File::options()
+                    .write(true)
+                    .open(&level_1)
+                    .unwrap()
+                    .set_modified(
+                        SystemTime::UNIX_EPOCH + Duration::from_secs(1 << 30) * (round + 1),
+                    )
+                    .unwrap();
             } else {
                 std::fs::remove_file(&level_1).unwrap();
             }
@@ -560,7 +581,11 @@ fn a_file_a_read_found_missing_is_made_again_each_time() {
                 }),
                 "{budget}, {rewrite}, round {round}"
             );
-            assert_eq!(cache.layout(&path), PeekedLayout::Building, "{budget}");
+            assert_eq!(
+                cache.layout(&path),
+                PeekedLayout::Building { coarsest: None },
+                "{budget}"
+            );
 
             let (found, tally) = cache
                 .get_many(&[path.as_path()], &Progress::none())
@@ -868,4 +893,90 @@ fn get_many_waits_on_a_build_another_caller_is_making() {
     let stats = held.cache.stats();
     assert_eq!((stats.mipmaps_made, stats.build_reserved_bytes), (1, 0));
     assert!(held.events.try_recv().is_err(), "one build started");
+}
+
+/// A build held once it has published the photograph's coarsest level (the
+/// slot hook's `CoarsestPublished`), before it has written a file, answers
+/// `layout` as `Building` with that level: the layout the finished mipmap is
+/// read under, and one tile of level `K` and of each level below it, equal to
+/// the coarse tiles the written files then give. The build reports
+/// [`COARSEST_PUBLISHED`] once through `get_many`'s `Progress`, and once it
+/// ends the photograph is `Known` and keeps no coarsest level. With a budget,
+/// where the slot holds the level, and with one of 0, where the layout a
+/// panel asked for holds it.
+#[test]
+fn a_build_publishes_the_coarsest_level_before_it_ends() {
+    for budget in [GIB, 0] {
+        let ws = Workspace::new();
+        let path = ws.photograph("a.jpg", &readable_jpeg());
+        let (published_tx, published) = channel();
+        let (release, release_rx) = channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let mut cache = PhotographCache::new(PhotographCacheOptions {
+            budget_bytes: budget,
+            build_budget_bytes: GIB,
+            tile_size: TILE,
+        });
+        cache.set_slot_hook(Box::new(move |_, event, _| {
+            if event == SlotEvent::CoarsestPublished {
+                let _ = published_tx.send(());
+                let _ = release_rx.lock().unwrap().recv_timeout(HANG);
+            }
+        }));
+        let cache = Arc::new(cache);
+        // A panel's header read, which finds no mipmap.
+        cache.request_layout(&path);
+        assert_eq!(
+            cache.layout(&path),
+            PeekedLayout::Building { coarsest: None },
+            "{budget}"
+        );
+        let built = on_a_thread({
+            let (cache, path) = (Arc::clone(&cache), path.clone());
+            move || {
+                let values = Mutex::new(Vec::new());
+                let sink = |event: Event<'_>| {
+                    if let Event::Value {
+                        name: COARSEST_PUBLISHED,
+                        value,
+                    } = event
+                    {
+                        values.lock().unwrap().push(value);
+                    }
+                };
+                cache
+                    .get_many(&[path.as_path()], &Progress::to(&sink))
+                    .unwrap();
+                values.into_inner().unwrap()
+            }
+        });
+        published
+            .recv_timeout(HANG)
+            .expect("the coarsest was published");
+        let PeekedLayout::Building {
+            coarsest: Some(coarsest),
+        } = cache.layout(&path)
+        else {
+            panic!("{budget}: {:?}", cache.layout(&path));
+        };
+        assert!(ws.mipmap_files().is_empty(), "{budget}: a file was written");
+        release.send(()).unwrap();
+        assert_eq!(built.recv_timeout(HANG).unwrap(), [4.0], "{budget}");
+
+        let layout = out_of_core_layout();
+        assert_eq!(*coarsest.layout, layout, "{budget}");
+        assert_eq!(coarsest.level(), 4, "{budget}");
+        let keys: Vec<u8> = coarsest.tiles.iter().map(|tile| tile.key.level).collect();
+        assert_eq!(keys, [4, 5, 6, 7], "{budget}");
+        let from_files = tiles_of(&layout, &files_levels(&path));
+        for tile in &coarsest.tiles {
+            assert_eq!((tile.key.col, tile.key.row), (0, 0));
+            assert!(same_tile(tile, &from_files[&tile.key]), "{budget}");
+        }
+        assert_eq!(
+            cache.layout(&path),
+            PeekedLayout::Known(Arc::new(layout)),
+            "{budget}"
+        );
+    }
 }

@@ -304,6 +304,30 @@ fn tile_of(
     Ok(tile_from_region(layout, key, &region, [x0, y0]))
 }
 
+/// Every tile of level `K` of `layout` and of the levels below it, cut from a
+/// decode of `file`, level `K`'s mip level file, and the levels box-filtered
+/// from it, as [`ImageU8::downsample_2x`] makes them: the coarse tiles a slot
+/// reading its files keeps, and the ones a build publishes. `None` when the
+/// file does not decode to level `K`'s size.
+pub(super) fn cut_coarse(
+    layout: &PyramidLayout,
+    file: &MipLevelFile,
+) -> Option<HashMap<TileKey, Arc<PhotographTile>>> {
+    let k = layout.stored_levels();
+    let mut level = file.decode().ok()?;
+    if (level.width(), level.height()) != layout.level_size(k) {
+        return None;
+    }
+    let mut tiles = HashMap::new();
+    for l in k..layout.levels() {
+        cut_level(layout, l, &level, &mut tiles);
+        if l + 1 < layout.levels() {
+            level = level.downsample_2x();
+        }
+    }
+    Some(tiles)
+}
+
 impl PhotographCache {
     /// The facts of the original at `path`, whose mipmap is at `location`, as
     /// its records are checked against: the ones kept for this spelling of
@@ -902,19 +926,7 @@ impl PhotographCache {
         let LevelSource::Mip(file) = &*source else {
             return Err(changed());
         };
-        let layout = &files.layout;
-        let mut level = file.decode().map_err(|_| changed())?;
-        if (level.width(), level.height()) != layout.level_size(k) {
-            return Err(changed());
-        }
-        let mut tiles = HashMap::new();
-        for l in k..layout.levels() {
-            cut_level(layout, l, &level, &mut tiles);
-            if l + 1 < layout.levels() {
-                level = level.downsample_2x();
-            }
-        }
-        Ok(tiles)
+        cut_coarse(&files.layout, file).ok_or_else(changed)
     }
 
     /// Mark `slot`'s mipmap not current, a read having found `file`, a file
@@ -967,7 +979,7 @@ impl PhotographCache {
         if let Some(kept) = inner.layouts.get_mut(path) {
             *kept = match &again {
                 Some(e) => PeekedLayout::Unreadable(e.to_string()),
-                None => PeekedLayout::Building,
+                None => PeekedLayout::Building { coarsest: None },
             };
         }
         again

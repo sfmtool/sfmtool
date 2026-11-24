@@ -71,9 +71,11 @@ pub fn region_layout(bytes: &[u8]) -> Result<RegionLayout, NotRegionReadable>;
 pub fn mipmap_location(photograph: &Path) -> Option<MipmapLocation>;
 impl MipmapLocation { pub fn level_path(&self, level: usize, quality: u8) -> PathBuf; /* … */ }
 
-/// Make the mipmap from one decode, writing what can be written.
+/// Make the mipmap from one decode, writing what can be written, telling
+/// `on_level` each level as it is encoded, the coarsest first.
 pub fn build_mipmaps(photograph: &Path, decoded: Option<&ImageU8>, options: &MipmapOptions,
-                     tile_size: u32, progress: &Progress<'_>) -> Result<BuiltMipmap, MipmapError>;
+                     tile_size: u32, progress: &Progress<'_>,
+                     on_level: &mut dyn FnMut(&MipLevelFile)) -> Result<BuiltMipmap, MipmapError>;
 pub struct BuiltMipmap { pub layout: PyramidLayout, pub region_readable: bool,
                          pub files: Vec<MipLevelFile>, pub not_written: Option<String> }
 
@@ -116,6 +118,12 @@ Why it is shaped this way:
 - **A build returns the files it encoded.** The caller decodes those bytes
   rather than reading back the files just written, and when the files could
   not be written the same bytes are the in-memory equivalent (below).
+- **A build tells each level as it is encoded.** The coarsest level is
+  encoded first, about one decode's time after the build starts and before
+  any file is written, so a caller that shows the photograph while the rest
+  is made has it then: the photograph cache publishes it for the panels to
+  draw ([photograph-cache.md § "Making a mipmap"](photograph-cache.md#making-a-mipmap)).
+  A callback rather than a second function, so there is one build.
 - **The original's facts are a value of their own.** `MipmapSource` hashes the
   original at most once however many files are checked against it, so a
   caller that keeps one per original and spelling of its path hashes once.
@@ -133,7 +141,7 @@ let (layout, location) = photograph_layout(&path, PHOTOGRAPH_TILE_SIZE)?;
 if let (Some(location), Some(options)) = (location, layout.options()) {
     let source = MipmapSource::read(&path, &location)?;
     if check_mipmap(&source, &location, &layout).is_err() {
-        build_mipmaps(&path, None, options, PHOTOGRAPH_TILE_SIZE, &Progress::none())?;
+        build_mipmaps(&path, None, options, PHOTOGRAPH_TILE_SIZE, &Progress::none(), &mut |_| {})?;
     }
 }
 ```
@@ -301,6 +309,9 @@ level above it in memory. Each level is encoded on its own, coarsest first, and
 carries one JPEG loss, any level can be made again alone to the same bytes,
 and the reduced levels are the same whether or not the original is
 region-readable. The same original and build give the same bytes.
+`on_level` is told each level's file as soon as it is encoded, or read
+when it is current, before it is written: the coarsest first, then each
+finer level and `-mip0` last.
 
 A level whose file is current already (§ "When a mip level file is
 current", with the build's number of stored levels and region answer) is
@@ -503,7 +514,9 @@ of another threshold; in-core photographs writing nothing; a build over
 a file of an original whose path differs only in case warning once, naming
 both; the 65535 / 65536
 header-only refusal in every workspace kind; the in-memory equivalent behind a
-blocked mipmap directory; a cancelled build; a grey photograph; a build of a
+blocked mipmap directory; a cancelled build; a grey photograph; each
+level told as it is encoded, the coarsest first and before its file is
+written, and a current level told as it is read; a build of a
 header-only PNG answering in core or too large without decoding it; and two
 threads and two processes building at once while a file is held open.
 [region/tests.rs](../../../crates/sfmtool-core/src/camera/mipmap/region/tests.rs)

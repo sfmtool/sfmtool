@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sfmtool_core::camera::image::ImageU8;
-use sfmtool_core::camera::{PhotographTile, PyramidLayout, TileKey};
+use sfmtool_core::camera::{CoarsestLevel, PhotographTile, PyramidLayout, TileKey};
 
 use super::view::ViewGeometry;
 use crate::scene::{ImageRef, ReconId};
@@ -330,6 +330,34 @@ impl PhotographTiles {
             .as_ref()
             .filter(|(kept, ..)| *kept == image)
             .map(|(.., layout)| layout)
+    }
+
+    /// Take `coarsest`, the coarsest level a build of `image`'s mipmap has
+    /// published, as what the panel draws of `image` while the build runs:
+    /// its layout kept as `image`'s, the one the finished mipmap is read
+    /// under, and its tiles uploaded, one of level `K` and of each level
+    /// below it, unless they are already. [`Self::draw`] then draws them as it
+    /// draws any uploaded tile, level `K`'s standing in for every finer level
+    /// over the level-0 pixels it covers. They are the tiles the cache
+    /// answers once the mipmap is made, so they stay drawn after it.
+    pub(super) fn show_coarsest(
+        &mut self,
+        ctx: &egui::Context,
+        image: ImageRef,
+        coarsest: &CoarsestLevel,
+    ) {
+        self.layout(image, Some(&coarsest.layout));
+        for tile in &coarsest.tiles {
+            let key = PhotographTileKey {
+                image,
+                level: usize::from(tile.key.level),
+                col: tile.key.col,
+                row: tile.key.row,
+            };
+            if !self.resident.contains_key(&key) {
+                self.upload(ctx, key, tile);
+            }
+        }
     }
 
     /// Draw `image` into `image_rect`, clipped by `painter`, from the tiles of
@@ -642,7 +670,7 @@ impl PhotographTiles {
 
     /// The tiles uploaded now, with their textures, in no order.
     #[cfg(test)]
-    fn resident(&self) -> Vec<(PhotographTileKey, egui::TextureId)> {
+    pub(super) fn resident(&self) -> Vec<(PhotographTileKey, egui::TextureId)> {
         self.resident
             .iter()
             .map(|(key, resident)| (*key, resident.texture.id()))
