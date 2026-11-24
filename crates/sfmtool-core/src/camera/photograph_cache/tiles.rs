@@ -390,7 +390,7 @@ impl PhotographCache {
             }
         }
         #[cfg(test)]
-        self.slot_event(super::SlotEvent::PanelReserved);
+        self.slot_event(super::SlotEvent::PanelReserved, path);
         let value = match &slot {
             None => {
                 self.shared.misses.fetch_add(1, Ordering::Relaxed);

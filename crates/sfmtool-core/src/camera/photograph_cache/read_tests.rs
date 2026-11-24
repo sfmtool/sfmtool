@@ -152,7 +152,7 @@ fn cancelling_cache(budget: u64, after: usize, flag: &Arc<AtomicBool>) -> Photog
     let mut cache = PhotographCache::new(with_budget(budget));
     let started = AtomicUsize::new(0);
     let flag = Arc::clone(flag);
-    cache.set_slot_hook(Box::new(move |_, event| {
+    cache.set_slot_hook(Box::new(move |_, event, _| {
         if event == SlotEvent::DecodeStarted && started.fetch_add(1, Ordering::SeqCst) >= after {
             flag.store(true, Ordering::SeqCst);
         }

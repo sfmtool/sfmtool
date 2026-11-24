@@ -396,6 +396,31 @@ struct Kept {
     tick: u64,
 }
 
+/// The share of the cache's budget under which the decode a read through a
+/// photograph makes ([`Asked::Read`]) keeps every tile of the photograph until
+/// the next decode, as a `get`'s does.
+///
+/// Kept whole, the rest of the decode is there for the next renders of the
+/// same photograph, which a bulk kernel taking its points by reference image
+/// reads next, rather than being dropped before the used tiles of photographs
+/// the kernel has finished with. That pays while the budget holds several
+/// photographs. When it holds about one or fewer, keeping one photograph
+/// whole pushes out the few tiles the other views of the same point need, and
+/// keeping only the tiles asked for decodes less, so above this share a read's
+/// decode is evicted as a tile request's is. Half is the line between the two:
+/// on `dino_dog_toy` at 50 MB (about four photographs) sparing halves the
+/// display bitmaps' decodes, and on six 128 px photographs under a budget of
+/// one, sparing made the refit's renders decode about four times as often
+/// (`specs/drafts/view-region-pyramid.md`, open question 12).
+const READ_SPARING_SHARE: f64 = 0.5;
+
+/// Whether the decode of a read through a photograph whose tiles are
+/// `photograph_bytes` keeps every tile until the next decode, under a budget
+/// of `budget_bytes` ([`READ_SPARING_SHARE`]).
+fn spares_read_decode(photograph_bytes: u64, budget_bytes: u64) -> bool {
+    (photograph_bytes as f64) < READ_SPARING_SHARE * budget_bytes as f64
+}
+
 /// What a request asks a slot for: which tiles it is answered, and which its
 /// decode keeps as used.
 #[derive(Clone, Copy)]
@@ -412,6 +437,15 @@ enum Asked<'a> {
     /// decode's: answered those, and a decode keeps them as used and the
     /// rest as unused.
     Keys(&'a [TileKey]),
+    /// The tiles `keys` of a photograph `get` or `get_many` answered, read
+    /// through it ([`CachedTiles::read`]): answered those, and a decode keeps
+    /// them as used and the rest as unused, as for [`Asked::Keys`]. When the
+    /// photograph's tiles are under [`READ_SPARING_SHARE`] of the budget, the
+    /// decode's own eviction drops none of the slot's tiles, as for
+    /// [`Asked::Photograph`]: the read is a render's, whose kernel asked for
+    /// the whole photograph and, taking its points in the bulk kernels' point
+    /// order, reads its other tiles next.
+    Read(&'a [TileKey]),
 }
 
 /// A request's answer: the photograph's layout and the tiles it asked for,
@@ -468,7 +502,10 @@ impl Got {
 /// A read takes the tiles the slot keeps; when one is not kept it reads the
 /// file again as [`PhotographCache::get_tile`] does, decoding the photograph,
 /// reserving with [`PhotographCache::reserve_builds`] and waiting on the slot
-/// while another caller decodes it, polling the reader's `Progress`. A file
+/// while another caller decodes it, polling the reader's `Progress`. Unlike
+/// `get_tile`'s, that decode keeps every tile until the next decode, as a
+/// `get`'s does, when the photograph's tiles are under
+/// [`READ_SPARING_SHARE`] of the budget ([`Asked::Read`]). A file
 /// whose length or modification time is not the slot's any more, or whose
 /// layout is not the one recorded, fails the read with
 /// [`PhotographReadError::Changed`], so a kernel never reads two versions of
@@ -483,7 +520,9 @@ pub(crate) struct CachedTiles {
 impl CachedTiles {
     /// The tiles `keys`, in order, each a tile of the layout: from the slot
     /// when it keeps every one of them, marking them used, and otherwise
-    /// from one decode of the file that keeps them as used.
+    /// from one decode of the file that keeps them as used and the rest as
+    /// unused, none of them dropped before the next decode when the
+    /// photograph is under [`READ_SPARING_SHARE`] of the budget.
     pub(crate) fn read(
         &self,
         keys: &[TileKey],
@@ -503,7 +542,7 @@ impl CachedTiles {
             let tick = cache.next_tick();
             let mut data = self.slot.lock();
             if matches!(&data.made, Some(Ok(layout)) if **layout == *self.layout) {
-                if let Some(got) = data.kept(Asked::Keys(keys), tick, &self.slot) {
+                if let Some(got) = data.kept(Asked::Read(keys), tick, &self.slot) {
                     return Ok(got.tiles);
                 }
             }
@@ -517,7 +556,7 @@ impl CachedTiles {
                 path: self.path.clone(),
             });
         }
-        let (value, _) = cache.fetch(&self.path, progress, Share::None, Asked::Keys(keys));
+        let (value, _) = cache.fetch(&self.path, progress, Share::None, Asked::Read(keys));
         let got = value.map_err(|e| read_error(&self.path, e))?;
         if *got.layout != *self.layout || got.tiles.len() != keys.len() {
             return Err(PhotographReadError::Changed {
@@ -596,7 +635,7 @@ impl SlotData {
                 }
                 self.tiles.values().map(|k| Arc::clone(&k.tile)).collect()
             }
-            Asked::Keys(keys) => {
+            Asked::Keys(keys) | Asked::Read(keys) => {
                 let keys: Vec<TileKey> = keys
                     .iter()
                     .copied()
@@ -804,9 +843,9 @@ struct Shared {
 }
 
 /// The test build's hook on a cache's slot events, told the cache too so it
-/// can read the build count.
+/// can read the build count, and the photograph's path.
 #[cfg(test)]
-pub(crate) type SlotHook = dyn Fn(&PhotographCache, SlotEvent) + Send + Sync;
+pub(crate) type SlotHook = dyn Fn(&PhotographCache, SlotEvent, &Path) + Send + Sync;
 
 /// What [`PhotographCache::on_slot_event`] is told.
 #[cfg(test)]
@@ -1235,9 +1274,9 @@ impl PhotographCache {
     }
 
     #[cfg(test)]
-    fn slot_event(&self, event: SlotEvent) {
+    fn slot_event(&self, event: SlotEvent, path: &Path) {
         if let Some(on_slot_event) = &self.shared.on_slot_event {
-            on_slot_event(self, event);
+            on_slot_event(self, event, path);
         }
     }
 
@@ -1281,7 +1320,7 @@ impl PhotographCache {
             *share = Share::Own(self.reserve_builds(whole_decode_bytes(width, height), 1));
         }
         #[cfg(test)]
-        self.slot_event(SlotEvent::DecodeStarted);
+        self.slot_event(SlotEvent::DecodeStarted, path);
         let image = ImageU8::read_rgb(path).map_err(|e| unreadable(path, e))?;
         self.shared.decodes.fetch_add(1, Ordering::Relaxed);
         if progress.is_cancelled() {
@@ -1394,7 +1433,7 @@ impl PhotographCache {
                 }
                 #[cfg(test)]
                 if !std::mem::replace(&mut told_waiting, true) {
-                    self.slot_event(SlotEvent::WaitStarted);
+                    self.slot_event(SlotEvent::WaitStarted, path);
                 }
                 data = slot
                     .ready
@@ -1440,7 +1479,9 @@ impl PhotographCache {
     /// decode's copy of it is dropped, so a caller holding it and the cache
     /// share one; the tiles `asked` names are kept as used, the others as
     /// unused, and the cache then drops tiles down to its budget, never one
-    /// `asked` names. A slot that left the map while its decode ran
+    /// `asked` names, nor, for [`Asked::Read`] of a photograph whose tiles
+    /// are under [`READ_SPARING_SHARE`] of the budget, any of the slot's. A
+    /// slot that left the map while its decode ran
     /// (forgotten, cleared or replaced by a newer file) keeps no tile: its
     /// caller still gets its tiles, but the cache neither keeps nor counts
     /// them. A failure drops every tile the slot kept.
@@ -1491,8 +1532,9 @@ impl PhotographCache {
         let tick = self.next_tick();
         let used = |key: &TileKey| match asked {
             Asked::Photograph | Asked::Every => false,
-            Asked::Keys(keys) => keys.contains(key),
+            Asked::Keys(keys) | Asked::Read(keys) => keys.contains(key),
         };
+        let decoded_bytes: u64 = cut.tiles.values().map(|tile| tile_bytes(tile)).sum();
         let mut added = 0;
         for (key, tile) in cut.tiles {
             let used = used(&key);
@@ -1511,7 +1553,16 @@ impl PhotographCache {
         inner.bytes += added;
         let got = data.kept(asked, tick, slot);
         drop(data);
-        self.evict(inner, slot, asked);
+        // A read's decode is spared whole only while the photograph is a
+        // small share of the budget; otherwise it is evicted as a tile
+        // request's is.
+        let evicting = match asked {
+            Asked::Read(keys) if !spares_read_decode(decoded_bytes, self.budget_bytes()) => {
+                Asked::Keys(keys)
+            }
+            asked => asked,
+        };
+        self.evict(inner, slot, evicting);
         // Every tile of the layout was put in the slot just above.
         got.ok_or_else(|| GetError::Unreadable(format!("{}: tiles not kept", path.display())))
     }
@@ -1519,9 +1570,11 @@ impl PhotographCache {
     /// Drop tiles until the bytes kept are within the budget: the unused
     /// before the used, the least recently asked for first and, among tiles
     /// asked for together, the finer levels first. Never one of `slot`'s
-    /// tiles that `asked` names (every one of them for [`Asked::Photograph`]
-    /// and [`Asked::Every`]): those the request that just kept them is
-    /// answered, or reads first.
+    /// tiles that `asked` names, nor, for [`Asked::Photograph`],
+    /// [`Asked::Every`] and [`Asked::Read`], any of `slot`'s tiles: those the
+    /// request that just kept them is answered, or reads first. [`Self::store`]
+    /// hands a read's decode over [`READ_SPARING_SHARE`] of the budget in as
+    /// [`Asked::Keys`].
     fn evict(&self, inner: &mut Inner, slot: &Arc<Slot>, asked: Asked<'_>) {
         if inner.bytes <= self.shared.options.budget_bytes {
             return;
@@ -1533,7 +1586,7 @@ impl PhotographCache {
             for (key, kept) in other.lock().tiles.iter() {
                 let spared = own
                     && match asked {
-                        Asked::Photograph | Asked::Every => true,
+                        Asked::Photograph | Asked::Every | Asked::Read(_) => true,
                         Asked::Keys(keys) => keys.contains(key),
                     };
                 if !spared {
@@ -1565,7 +1618,7 @@ fn answer_of(cut: CutImage, asked: Asked<'_>) -> Got {
     let channels = tiles.values().next().map_or(0, |t| t.pixels.channels());
     let tiles = match asked {
         Asked::Photograph | Asked::Every => tiles.into_values().collect(),
-        Asked::Keys(keys) => keys
+        Asked::Keys(keys) | Asked::Read(keys) => keys
             .iter()
             .filter_map(|key| tiles.get(key).cloned())
             .collect(),

@@ -615,7 +615,7 @@ fn a_spawn_cancelled_while_a_nested_render_decodes_answers_cancelled() {
     let mut cache = PhotographCache::new(options);
     let started = AtomicUsize::new(0);
     let set = Arc::clone(&flag);
-    cache.set_slot_hook(Box::new(move |_, event| {
+    cache.set_slot_hook(Box::new(move |_, event, _| {
         if event == SlotEvent::DecodeStarted && started.fetch_add(1, Ordering::SeqCst) >= 4 {
             set.store(true, Ordering::SeqCst);
         }
