@@ -3604,8 +3604,9 @@ in core. Step 17 turns the tier on.
           made the mipmaps, Measurement View's then asking for no repaint.
           Track View, unlike Image Detail and Measurement View, asks for a
           repaint on every headless frame of its tests whatever its
-          photographs' state, so its test bounds the reads and not the
-          repaints.
+          photographs' state, since its header turns a spinner while the
+          track is evaluated and no evaluation ends in those tests, so its
+          test bounds the reads and not the repaints.
 15. **Makers**: `sfm sift` and `build_sift_file`, the rest of the viewer's
     *Build mipmaps* quiet task, whose job, shared list, `QuietRank` place
     and giving way 14e builds (the list filled when a reconstruction opens,
