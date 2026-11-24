@@ -3034,9 +3034,10 @@ in core. Step 17 turns the tier on.
     files, mipmaps made in the slot when missing or stale (the misses of a
     `get_many` in groups sized by the build budget), `TileError::Changed`,
     and panels queueing photographs whose mipmap is not current for the
-    *Build mipmaps* quiet task (the task with its shared list, as far as step
-    15 needs it). Tests: with the small threshold, a `get` on a photograph
-    with no mipmap makes it and returns its pixels; two threads asking for
+    *Build mipmaps* quiet task (its shared list and the job that drains it;
+    step 15 adds the rest of the task). Tests: with the small threshold, a
+    `get` on a photograph with no mipmap makes it and returns its pixels;
+    two threads asking for
     one path make one mipmap; a `get_many` over 20 out-of-core photographs
     never has more builds in progress than the build budget allows, with a
     budget set small for the test and checked through the count; a panel
@@ -3058,19 +3059,19 @@ in core. Step 17 turns the tier on.
     files; then `get` makes a missing or stale mipmap in the slot; then
     `get_many` makes its misses in groups sized by the build budget and
     reports what it made; and last the panels act on the `Building` state and
-    queue photographs for *Build mipmaps*, whose job makes them. Reading comes before making, so
-    that making a mipmap only hands the slot the files the reading part
-    already reads, as `build_mipmaps` returns them. In a workspace without
-    `mipmap_options`, which until step 17 is every workspace no one has
-    edited by hand, every result and every picture is the same after each
-    part. In one with the object, 14b changes the pixels of an out-of-core
-    photograph whose mipmap is current to its mipmap's; between 14b and 14c
-    one whose files are missing or stale is still read in core, from a whole
-    decode of the original, and from 14c no kernel reads one so. A panel
-    never makes a mipmap: until 14e its requests read an out-of-core
-    photograph without a current mipmap whole in core, as they read every
-    photograph today, and from 14e they wait on its `Building` state
-    instead.
+    queue photographs for *Build mipmaps*, whose job makes them. Reading
+    comes before making, so that making a mipmap only hands the slot the
+    files the reading part already reads, as `build_mipmaps` returns them.
+    In a workspace without `mipmap_options`, which until step 17 is every
+    workspace no one has edited by hand, every result and every picture is
+    the same after each part. In one with the object, 14b changes the pixels
+    of an out-of-core photograph whose mipmap is current to its mipmap's;
+    between 14b and 14c one whose files are missing or stale is still read
+    in core, from a whole decode of the original, and from 14c no kernel
+    reads one so. A panel never makes a mipmap: until 14e its requests read
+    an out-of-core photograph without a current mipmap whole in core, as
+    they read every photograph today, and from 14e they wait on its
+    `Building` state instead.
 
     - **14a, the workspace's setting in the cache.** **Built.** The cache
       finds each photograph's workspace root when it makes the photograph's
@@ -3203,7 +3204,8 @@ in core. Step 17 turns the tier on.
       caller waits on the slot rather than start a second; its tally and
       its `Progress` count the mipmaps made.
     - **14e, the panels.** `PeekedLayout::Building { coarsest }` and
-      `PeekedTile::Building`, `request_layout`'s record check, a build
+      `PeekedTile::Building`, `request_layout` answering `Building` when its
+      record check finds the mipmap not current, a build
       publishing each reduced level as it is encoded, `display_layout`
       queueing a photograph that is `Building` at the front of *Build
       mipmaps*' shared list once per path, the spinner with *Building
