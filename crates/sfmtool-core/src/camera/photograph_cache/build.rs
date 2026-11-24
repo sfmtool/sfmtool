@@ -335,10 +335,10 @@ impl PhotographCache {
     /// what it made. The build is deterministic, so each level's record is
     /// the one the slot first read, and one that is not fails the read with
     /// [`Failure::Changed`] naming the file. Every level made is kept, as an
-    /// entry of a slot in the map or held by one outside it, so one build
-    /// serves the rest of the read; the slot's own eviction spares the level
-    /// asked for whatever its size, and every level of the photograph while
-    /// they are under half the budget.
+    /// entry of a slot in the map or held by one outside it, and the slot's
+    /// own eviction spares the level asked for whatever its size, and every
+    /// level of the photograph while they are under half the budget, so one
+    /// build then serves the rest of the read.
     pub(super) fn rebuild_in_memory(
         &self,
         path: &Path,

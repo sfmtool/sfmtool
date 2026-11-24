@@ -494,7 +494,7 @@ impl PhotographCache {
     /// files, or a file it reads is missing, not current, does not decode, or
     /// holds another record than the one the slot first read, and then marks
     /// the slot's mipmap not current ([`Self::mark_not_current`]), so the
-    /// photograph's next requests read it in core; and with
+    /// photograph's next `get` makes it again; and with
     /// [`GetError::Cancelled`] when `progress` is cancelled between files.
     ///
     /// A level of a mipmap held in memory that the slot no longer keeps is
@@ -557,8 +557,8 @@ impl PhotographCache {
             let made = match decoded {
                 Ok(made) => made,
                 Err(Failure::Changed(file)) => {
-                    // The mipmap is not current: from now on the slot reads
-                    // the photograph in core, as one whose files are stale.
+                    // The mipmap is not current: from now on the slot treats
+                    // the photograph as one whose files are stale.
                     self.mark_not_current(path, slot);
                     return Err(Failure::Changed(file));
                 }

@@ -392,16 +392,17 @@ impl Warnings {
 
 /// Builds behind a blocked mipmap directory are read from the files they
 /// made in memory, kept as file entries counted against the budget and
-/// evicted when other photographs need the room: over four photographs under
+/// evicted when other photographs need the room: over five photographs under
 /// a budget of three photographs' files, the bytes kept after each `get` stay
-/// within the budget and one photograph's files, and reading each
-/// photograph's every level makes no build again. A panel's read of a level
-/// evicted since is answered from a decode in core and makes nothing; a
-/// kernel's read of it makes the build again, once, reading the same pixels.
-/// Each photograph is warned about once, though five builds are made.
+/// within the budget and one photograph's files, less than keeping them all,
+/// and reading each photograph's every level makes no build again. A panel's
+/// read of a level evicted since is answered from a decode in core and makes
+/// nothing; a kernel's read of it makes the build again, once, reading the
+/// same pixels.
+/// Each photograph is warned about once, though six builds are made.
 #[test]
 fn builds_behind_a_blocked_mipmap_directory_stay_within_the_budget() {
-    let (_ws, paths, want, files_bytes) = blocked_workspace(4);
+    let (_ws, paths, want, files_bytes) = blocked_workspace(5);
     let budget = 3 * files_bytes;
     let cache = cache_of(budget);
     let warnings = Warnings(Mutex::new(Vec::new()));
@@ -416,7 +417,7 @@ fn builds_behind_a_blocked_mipmap_directory_stay_within_the_budget() {
         assert_eq!(levels_read(&photograph), want);
         photographs.push(photograph);
     }
-    assert_eq!(cache.stats().mipmaps_made, 4, "no build made again");
+    assert_eq!(cache.stats().mipmaps_made, 5, "no build made again");
 
     // The first photograph's levels have been evicted for the others'.
     let key = TileKey {
@@ -431,14 +432,14 @@ fn builds_behind_a_blocked_mipmap_directory_stay_within_the_budget() {
         panic!("a panel's decode");
     };
     assert!(same_tile(&tiles[0], &in_core[&key]), "decoded in core");
-    assert_eq!(cache.stats().mipmaps_made, 4, "a panel makes nothing");
+    assert_eq!(cache.stats().mipmaps_made, 5, "a panel makes nothing");
 
     assert_eq!(levels_read_with(&photographs[0], &progress), want);
     let stats = cache.stats();
-    assert_eq!(stats.mipmaps_made, 5, "made again once");
+    assert_eq!(stats.mipmaps_made, 6, "made again once");
     assert!(stats.bytes <= budget + files_bytes, "{stats:?}");
     let warnings = warnings.0.into_inner().unwrap();
-    assert_eq!(warnings.len(), 4, "{warnings:?}");
+    assert_eq!(warnings.len(), 5, "{warnings:?}");
     assert!(warnings.iter().all(|w| w.contains("held in memory")));
     cache.clear();
     assert_eq!(cache.stats().bytes, 0);

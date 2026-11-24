@@ -238,9 +238,10 @@ Why it is shaped this way:
   A caller with nothing to cancel passes `&Progress::none()`. `get` reports
   nothing through it but a mipmap's build, which is part of the call that
   makes it (§ "Making a mipmap"). The GUI thread must not wait on a decode,
-  so it asks whether they are there. `peek_state` adds the one thing a caller that starts
-  a decode on a miss needs: whether a decode was already tried and failed, so
-  it does not start another for a file that cannot be read.
+  so it asks whether they are there. `peek_state` adds the one thing a
+  caller that starts a decode on a miss needs: whether a decode was already
+  tried and failed, so it does not start another for a file that cannot be
+  read.
 - **Tiles, not pyramids.** A decode is cut into photograph tiles of
   `tile_size`, each with its one-pixel border, one level at a time, and only
   the tiles are kept: the tiles a request asked for (`try_decode_tiles`'
@@ -763,11 +764,14 @@ in-core photograph there, with no builder object or queue; the code is in
   again in memory in the slot, as a build is made and reserved, waiting
   while another caller makes it; the build is deterministic, so each
   level's record is the one first read (one that is not fails the read
-  with `Changed`), and it keeps every level it made, so one build serves
-  the rest of the read, and its own eviction spares the level asked for
-  whatever its size. So the bytes kept pass the budget by at most one
-  photograph's levels, and a kernel reading such a photograph a tile at a
-  time makes it again only when other photographs have needed the room. A
+  with `Changed`), and it keeps every level it made, so while they are
+  under half the budget one build serves the rest of the read; its own
+  eviction spares the level asked for whatever its size. So the bytes kept
+  pass the budget by at most one photograph's levels, and a kernel reading
+  such a photograph a tile at a time makes it again only when other
+  photographs have needed the room, or when its levels are over half the
+  budget, as a read's decode in core is then made again for a tile it
+  lost. A
   slot outside the map (a budget of 0, or one forgotten while a photograph
   reads through it) holds the levels it was made with, as an answer under a
   budget of 0 holds its decode, and makes them again at most once after it
@@ -1105,7 +1109,7 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   mipmap, the second waiting with nothing reserved; a maker cancelled during
   its encodes stopping within one level, the coarsest file not yet written,
   and the waiter that takes over making only the levels not written; a
-  build's phases reported through the caller's `Progress`; four builds
+  build's phases reported through the caller's `Progress`; five builds
   behind a blocked mipmap directory under a budget of three photographs'
   files, the bytes kept after each `get` within the budget and one
   photograph's files, no build made again while each is read, a panel's
