@@ -527,11 +527,13 @@ fn under_a_budget_of_0_a_panel_reads_a_build_held_in_memory_in_core() {
 /// taken as current on the coarsest file's word, after which the photograph
 /// reads; deleted again under the same original, it is a first find again,
 /// and the next build makes it again, so a mipmap directory deleted twice is
-/// made twice and the photograph stays readable. Under a budget too small to
-/// keep a file, and under a budget of 0.
+/// made twice and the photograph stays readable. The same holds for a file
+/// another process rewrites, each time with the same bytes that do not open
+/// as the level: its length stays the same and its modification time does
+/// not. Under a budget too small to keep a file, and under a budget of 0.
 #[test]
 fn a_file_a_read_found_missing_is_made_again_each_time() {
-    for budget in [1, 0] {
+    for (budget, rewrite) in [(1, false), (0, false), (1, true), (0, true)] {
         let ws = Workspace::new();
         let path = ws.photograph("a.jpg", &readable_jpeg());
         build(&path);
@@ -544,7 +546,11 @@ fn a_file_a_read_found_missing_is_made_again_each_time() {
                 col: round,
                 row: 0,
             };
-            std::fs::remove_file(&level_1).unwrap();
+            if rewrite {
+                std::fs::write(&level_1, [0u8; 64]).unwrap();
+            } else {
+                std::fs::remove_file(&level_1).unwrap();
+            }
             assert_eq!(
                 cache
                     .try_decode_tiles(&path, &[key], &Progress::none())
@@ -552,7 +558,7 @@ fn a_file_a_read_found_missing_is_made_again_each_time() {
                 Some(TileError::Changed {
                     path: level_1.clone()
                 }),
-                "{budget}, round {round}"
+                "{budget}, {rewrite}, round {round}"
             );
             assert_eq!(cache.layout(&path), PeekedLayout::Building, "{budget}");
 

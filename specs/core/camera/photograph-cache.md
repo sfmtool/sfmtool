@@ -1217,8 +1217,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   photograph whose build was held in memory answered its in-core layout and
   tiles from a decode in core, three times, with one build; and a file a
   read found missing made again by the next `get_many` rather than taken as
-  current from the coarsest file, twice when it is deleted twice, the
-  photograph readable after each; and a file left as it was by the build,
+  current from the coarsest file, twice when it is deleted twice, and twice
+  when it is rewritten twice with the same bytes that do not open as the
+  level, the photograph readable after each; and a file left as it was by the build,
   its record current and its scan spoiled, found not current again making
   the photograph unreadable, with no further build, until `forget` drops
   it; each under a budget too small to keep a file and under a budget of 0.
