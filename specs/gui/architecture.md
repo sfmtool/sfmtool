@@ -124,6 +124,7 @@ sfmtool/
 │   │       │   ├── sizing.rs     # Texture creation and resize
 │   │       │   ├── uniforms.rs   # Uniform buffer updates
 │   │       │   ├── gpu_types.rs  # GPU data struct definitions, pick tags, constants
+│   │       │   ├── overlay_ribbons.rs # The overlay ribbon store: one buffer, a region per overlay producer
 │   │       │   ├── compass.rs          # Orientation-compass mesh generation
 │   │       │   ├── distorted_mesh.rs   # Tessellated mesh for distorted cameras
 │   │       │   ├── upload/       # Per-resource GPU data upload
@@ -319,8 +320,9 @@ Pass 4:  Track rays (when a 3D point is selected)
 
 Pass 5:  Measurements, then the bench figure (while the 3D viewer draws a
          measurement or the focused item)
-  Input:  Measurement edge instances, then figure edge instances + centre
-          disc mesh + hw depth (sampled)
+  Input:  The overlay ribbon store's regions for each target (the
+          measurements' edge instances, then the figure's) + the figure's
+          centre disc mesh + hw depth (sampled)
   Output: The measurement layer, a Rgba8Unorm texture of its own cleared
           to transparent every frame; then EDL output color (alpha blending,
           reads depth for occlusion; neither writes a pick ID or depth)
@@ -341,7 +343,8 @@ For detailed specifications of each pass, see:
 - [scene-graph.md](scene-graph.md) § "Track rays and background image" —
   Track rays
 - [viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) — The bench figure, and
-  the measurements' pass drawn just before it
+  the measurements' pass drawn just before it, both drawn from the overlay
+  ribbon store
 
 ### GPU Readback
 

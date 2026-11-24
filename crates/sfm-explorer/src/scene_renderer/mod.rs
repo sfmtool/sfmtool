@@ -26,6 +26,7 @@ mod capture;
 mod compass;
 mod distorted_mesh;
 mod gpu_types;
+mod overlay_ribbons;
 mod pick_region;
 mod picking;
 mod pipelines;
@@ -135,8 +136,6 @@ pub(crate) struct SceneRenderer {
     bench_track_edge_pipeline: Option<wgpu::RenderPipeline>,
     measurement_pipeline: Option<wgpu::RenderPipeline>,
     bench_track_disc_pipeline: Option<wgpu::RenderPipeline>,
-    bench_track_edge_buffer: Option<wgpu::Buffer>,
-    bench_track_edge_count: u32,
     bench_track_disc_buffer: Option<wgpu::Buffer>,
     bench_track_disc_count: u32,
     bench_track_uniform_buffer: Option<wgpu::Buffer>,
@@ -145,10 +144,11 @@ pub(crate) struct SceneRenderer {
     /// The figure's own `4h`, kept from the upload so the frame's uniform write
     /// does not have to be handed the track again.
     bench_track_fog_distance: f32,
-    /// The drawn measurements' marks and lines, edges of the same pass drawn
-    /// before the figure ([`SceneRenderer::upload_measurements`]).
-    measurement_edge_buffer: Option<wgpu::Buffer>,
-    measurement_edge_count: u32,
+    /// The instances of the figure's edges and of the drawn measurements'
+    /// marks and lines, a region of one buffer each
+    /// ([`SceneRenderer::upload_bench_track`],
+    /// [`SceneRenderer::upload_measurements`]).
+    overlay_ribbons: overlay_ribbons::OverlayRibbons,
 
     // ── Frustum rendering ──
     frustum_pipeline: Option<wgpu::RenderPipeline>,
@@ -280,16 +280,13 @@ impl SceneRenderer {
             bench_track_edge_pipeline: None,
             measurement_pipeline: None,
             bench_track_disc_pipeline: None,
-            bench_track_edge_buffer: None,
-            bench_track_edge_count: 0,
             bench_track_disc_buffer: None,
             bench_track_disc_count: 0,
             bench_track_uniform_buffer: None,
             bench_track_bind_group_layout: None,
             bench_track_bind_group: None,
             bench_track_fog_distance: 0.0,
-            measurement_edge_buffer: None,
-            measurement_edge_count: 0,
+            overlay_ribbons: Default::default(),
             frustum_pipeline: None,
             frustum_uniform_buffer: None,
             frustum_bind_group_layout: None,

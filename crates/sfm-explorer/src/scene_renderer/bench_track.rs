@@ -5,14 +5,16 @@
 //!
 //! The figure itself is [`crate::viewer_3d::bench_track`]'s -- world points,
 //! world directions and colours, with no GPU in it. What this module adds is
-//! the three things the frame needs: the two vertex buffers, the camera block
-//! the shader projects through, and the pass that draws them onto the EDL
-//! output.
+//! the three things the frame needs: the figure's edges, written into its
+//! region of the [overlay ribbon store](super::overlay_ribbons), and its centre
+//! disc, in a vertex buffer of its own; the camera block the shader projects
+//! through; and the pass that draws them onto the EDL output.
 //!
 //! The measurements the 3D view shows are drawn in the same call, with
 //! the same shader and bind group: their marks and lines are ribbons
 //! ([`crate::viewer_3d::measurements::Ribbon`]) built on the CPU each frame
-//! and uploaded as edges of the figure's own kind. They differ from the
+//! and written into a region of their own in the same store, as edges of the
+//! figure's own kind. They differ from the
 //! figure's in two things the instance carries, their width and that the
 //! part behind the scene holds at `BEHIND_OPACITY` rather than fading, and
 //! in one the pass does not: they are a render pass of their own into a layer
@@ -30,15 +32,16 @@
 //! pass has one colour target and no depth attachment, so it writes no pick id
 //! and no depth: what a click picks is the scene under it.
 //!
-//! The figure is rebuilt and re-uploaded every frame it is drawn, because the
+//! The figure is rebuilt and written again every frame it is drawn, because the
 //! arrowhead's barbs turn to face the eye: there is no state it could be keyed
 //! on that a camera move does not invalidate. It is a few hundred instances.
 
 use wgpu::util::DeviceExt;
 
 use super::gpu_types::{
-    BenchDiscVertex, BenchEdgeInstance, BenchTrackUniforms, BENCH_LINE_HALF_WIDTH,
+    BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
 };
+use super::overlay_ribbons::{OverlayTarget, ProducerId};
 use super::SceneRenderer;
 use crate::viewer_3d::bench_track::Figure;
 use crate::viewer_3d::measurements::Ribbon;
@@ -46,10 +49,10 @@ use crate::viewer_3d::ViewportCamera;
 
 /// The edges `figure` draws: in its strokes' colours at the bench's width,
 /// fading with how far behind the scene they are.
-pub(super) fn figure_instances(figure: &Figure) -> Vec<BenchEdgeInstance> {
+pub(super) fn figure_instances(figure: &Figure) -> Vec<OverlayInstance> {
     figure
         .strokes()
-        .map(|stroke| BenchEdgeInstance {
+        .map(|stroke| OverlayInstance {
             endpoint_a: stroke.a,
             endpoint_b: stroke.b,
             color: stroke.color,
@@ -61,10 +64,10 @@ pub(super) fn figure_instances(figure: &Figure) -> Vec<BenchEdgeInstance> {
 
 /// The edges the measurements' `ribbons` draw: each at its own width, and
 /// held at `BEHIND_OPACITY` wherever it is behind the scene.
-pub(super) fn measurement_instances(ribbons: &[Ribbon]) -> Vec<BenchEdgeInstance> {
+pub(super) fn measurement_instances(ribbons: &[Ribbon]) -> Vec<OverlayInstance> {
     ribbons
         .iter()
-        .map(|ribbon| BenchEdgeInstance {
+        .map(|ribbon| OverlayInstance {
             endpoint_a: ribbon.a,
             endpoint_b: ribbon.b,
             color: ribbon.color,
@@ -80,33 +83,47 @@ pub(super) const MEASUREMENT_LAYER_LOAD: wgpu::LoadOp<wgpu::Color> =
     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
 
 impl SceneRenderer {
-    /// Upload the marks and lines of the measurements the 3D view draws, or
-    /// clear them when there are none.
-    pub(crate) fn upload_measurements(&mut self, device: &wgpu::Device, ribbons: &[Ribbon]) {
-        let edges = measurement_instances(ribbons);
-        self.measurement_edge_count = edges.len() as u32;
-        self.measurement_edge_buffer = (!edges.is_empty()).then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("measurement edges"),
-                contents: bytemuck::cast_slice(&edges),
-                usage: wgpu::BufferUsages::VERTEX,
-            })
-        });
+    /// Write the marks and lines of the measurements the 3D view draws into
+    /// their region of the overlay ribbon store, or empty it when there are
+    /// none.
+    pub(crate) fn upload_measurements(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        ribbons: &[Ribbon],
+    ) {
+        self.overlay_ribbons.write(
+            device,
+            queue,
+            ProducerId::Measurements,
+            OverlayTarget::MeasurementLayer,
+            &measurement_instances(ribbons),
+        );
     }
 
     /// How many instances and vertices the measurement and figure passes
     /// draw this frame.
     fn bench_pass_count(&self) -> u32 {
-        self.bench_track_edge_count + self.bench_track_disc_count + self.measurement_edge_count
+        self.overlay_ribbons.drawn_count(OverlayTarget::Scene)
+            + self.bench_track_disc_count
+            + self
+                .overlay_ribbons
+                .drawn_count(OverlayTarget::MeasurementLayer)
     }
 
-    /// Upload the figure the focused item draws, or clear it.
+    /// Write the figure the focused item draws into its region of the overlay
+    /// ribbon store, and upload its centre disc; or clear both.
     ///
     /// `None` -- a cluster-stage item, a track with no frame, or no focused
-    /// item at all -- uploads nothing and draws nothing.
-    pub(crate) fn upload_bench_track(&mut self, device: &wgpu::Device, figure: Option<&Figure>) {
+    /// item at all -- draws nothing.
+    pub(crate) fn upload_bench_track(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        figure: Option<&Figure>,
+    ) {
         let Some(figure) = figure else {
-            self.clear_bench_track();
+            self.clear_bench_track(device, queue);
             return;
         };
 
@@ -120,18 +137,17 @@ impl SceneRenderer {
             })
             .collect();
         if edges.is_empty() && disc.is_empty() {
-            self.clear_bench_track();
+            self.clear_bench_track(device, queue);
             return;
         }
 
-        self.bench_track_edge_count = edges.len() as u32;
-        self.bench_track_edge_buffer = (!edges.is_empty()).then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("bench track edges"),
-                contents: bytemuck::cast_slice(&edges),
-                usage: wgpu::BufferUsages::VERTEX,
-            })
-        });
+        self.overlay_ribbons.write(
+            device,
+            queue,
+            ProducerId::BenchFigure,
+            OverlayTarget::Scene,
+            &edges,
+        );
         self.bench_track_disc_count = disc.len() as u32;
         self.bench_track_disc_buffer = (!disc.is_empty()).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -143,10 +159,16 @@ impl SceneRenderer {
         self.bench_track_fog_distance = figure.fog_distance;
     }
 
-    /// Drop the figure's geometry: nothing on the bench to draw.
-    pub(crate) fn clear_bench_track(&mut self) {
-        self.bench_track_edge_buffer = None;
-        self.bench_track_edge_count = 0;
+    /// Drop the figure's geometry: nothing on the bench to draw. Its region of
+    /// the store is emptied and keeps its capacity.
+    fn clear_bench_track(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.overlay_ribbons.write(
+            device,
+            queue,
+            ProducerId::BenchFigure,
+            OverlayTarget::Scene,
+            &[],
+        );
         self.bench_track_disc_buffer = None;
         self.bench_track_disc_count = 0;
         self.bench_track_fog_distance = 0.0;
@@ -216,20 +238,19 @@ impl SceneRenderer {
 
         if let Some(view) = &self.measurement_layer_view {
             let mut pass = begin(encoder, "measurement pass", view, MEASUREMENT_LAYER_LOAD);
-            if let (Some(pipeline), Some(quad_vb), Some(edge_buf)) = (
-                &self.measurement_pipeline,
-                &self.quad_vertex_buffer,
-                &self.measurement_edge_buffer,
-            ) {
+            if let (Some(pipeline), Some(quad_vb)) =
+                (&self.measurement_pipeline, &self.quad_vertex_buffer)
+            {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, bind_group, &[]);
                 pass.set_vertex_buffer(0, quad_vb.slice(..));
-                pass.set_vertex_buffer(1, edge_buf.slice(..));
-                pass.draw(0..4, 0..self.measurement_edge_count);
+                self.overlay_ribbons
+                    .draw(&mut pass, OverlayTarget::MeasurementLayer);
             }
         }
 
-        if self.bench_track_edge_count + self.bench_track_disc_count == 0 {
+        if self.overlay_ribbons.drawn_count(OverlayTarget::Scene) + self.bench_track_disc_count == 0
+        {
             return;
         }
         let Some(edl_output_view) = &self.edl_output_view else {
@@ -253,16 +274,13 @@ impl SceneRenderer {
             pass.draw(0..self.bench_track_disc_count, 0..1);
         }
 
-        if let (Some(pipeline), Some(quad_vb), Some(edge_buf)) = (
-            &self.bench_track_edge_pipeline,
-            &self.quad_vertex_buffer,
-            &self.bench_track_edge_buffer,
-        ) {
+        if let (Some(pipeline), Some(quad_vb)) =
+            (&self.bench_track_edge_pipeline, &self.quad_vertex_buffer)
+        {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.set_vertex_buffer(0, quad_vb.slice(..));
-            pass.set_vertex_buffer(1, edge_buf.slice(..));
-            pass.draw(0..4, 0..self.bench_track_edge_count);
+            self.overlay_ribbons.draw(&mut pass, OverlayTarget::Scene);
         }
     }
 }

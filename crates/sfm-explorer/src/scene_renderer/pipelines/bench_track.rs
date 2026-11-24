@@ -93,7 +93,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
                     Some(QUAD_VERTEX_LAYOUT),
                     // Slot 1: one edge of the figure or a measurement (per-instance)
                     Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<BenchEdgeInstance>() as u64,
+                        array_stride: std::mem::size_of::<OverlayInstance>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &[
                             wgpu::VertexAttribute {

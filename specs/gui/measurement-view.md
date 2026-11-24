@@ -1003,7 +1003,11 @@ drawn at full strength, and a piece behind it at `BEHIND_OPACITY` (0.45) with
 no fade with distance, so a measurement far behind the cloud is as findable as
 one just behind it. Each straight piece is one camera-facing ribbon carrying
 its own colour and width (`viewer_3d::measurements::ribbons`): the line and
-its halo, and per mark a ring of 24 chords, its halo and the dot. A mark keeps
+its halo, and per mark a ring of 24 chords, its halo and the dot. The ribbons
+are built every frame and written into the measurements' region of the overlay
+ribbon store, the buffer the bench figure's edges share
+([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "The overlay ribbon
+store"). A mark keeps
 its size on screen, its ring built facing the eye at the endpoint's depth with
 its radius in points unprojected there, and the widths are the points above
 in physical pixels. The layer is a texture of its own, cleared to transparent

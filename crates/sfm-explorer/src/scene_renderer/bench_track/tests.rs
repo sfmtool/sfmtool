@@ -14,8 +14,9 @@
 use sfmtool_core::bench::EditableTrack;
 
 use super::super::gpu_types::{
-    BenchDiscVertex, BenchEdgeInstance, BenchTrackUniforms, BENCH_LINE_HALF_WIDTH,
+    BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
 };
+use super::super::overlay_ribbons::{OverlayRibbons, OverlayTarget, ProducerId};
 use super::super::SceneRenderer;
 use crate::scene::ImageRef;
 use crate::viewer_3d::bench_track::{self, Figure};
@@ -46,15 +47,18 @@ fn staged_figure() -> Figure {
 
 #[test]
 fn an_upload_holds_one_instance_per_stroke_and_the_disc_beside_it() {
-    let (device, _queue) = device();
+    let (device, queue) = device();
     let figure = staged_figure();
     let mut r = SceneRenderer::new();
 
-    r.upload_bench_track(&device, Some(&figure));
+    r.upload_bench_track(&device, &queue, Some(&figure));
 
-    assert_eq!(r.bench_track_edge_count, figure.strokes().count() as u32);
+    assert_eq!(
+        r.overlay_ribbons.drawn_count(OverlayTarget::Scene),
+        figure.strokes().count() as u32
+    );
     assert_eq!(r.bench_track_disc_count, figure.disc.len() as u32);
-    assert!(r.bench_track_edge_buffer.is_some());
+    assert!(r.overlay_ribbons.buffer().is_some());
     assert!(r.bench_track_disc_buffer.is_some());
     assert_eq!(r.bench_track_fog_distance, figure.fog_distance);
     device.poll(wgpu::PollType::Poll).expect("device poll");
@@ -62,7 +66,7 @@ fn an_upload_holds_one_instance_per_stroke_and_the_disc_beside_it() {
 
 #[test]
 fn a_cluster_stage_item_uploads_nothing() {
-    let (device, _queue) = device();
+    let (device, queue) = device();
     let (mut state, id) = crate::bench::tests::state();
     let seeded = state
         .start_bench_cluster(
@@ -83,27 +87,41 @@ fn a_cluster_stage_item_uploads_nothing() {
     assert!(figure.is_none(), "a cluster has no geometry to draw");
 
     let mut r = SceneRenderer::new();
-    r.upload_bench_track(&device, figure.as_ref());
+    r.upload_bench_track(&device, &queue, figure.as_ref());
 
-    assert_eq!(r.bench_track_edge_count, 0);
+    assert_eq!(r.overlay_ribbons.drawn_count(OverlayTarget::Scene), 0);
     assert_eq!(r.bench_track_disc_count, 0);
-    assert!(r.bench_track_edge_buffer.is_none());
+    assert!(
+        r.overlay_ribbons.buffer().is_none(),
+        "nothing was written, so the store made no buffer"
+    );
     assert!(r.bench_track_disc_buffer.is_none());
     device.poll(wgpu::PollType::Poll).expect("device poll");
 }
 
 #[test]
-fn an_upload_after_a_figure_is_gone_drops_the_buffers() {
-    let (device, _queue) = device();
+fn an_upload_after_a_figure_is_gone_draws_nothing_and_keeps_the_room() {
+    let (device, queue) = device();
     let mut r = SceneRenderer::new();
-    r.upload_bench_track(&device, Some(&staged_figure()));
-    assert!(r.bench_track_edge_count > 0);
+    let figure = staged_figure();
+    let figure_edges = figure.strokes().count() as u32;
+    r.upload_bench_track(&device, &queue, Some(&figure));
+    assert_eq!(
+        r.overlay_ribbons.drawn_count(OverlayTarget::Scene),
+        figure_edges
+    );
+    assert!(figure_edges > 0);
 
-    r.upload_bench_track(&device, None);
+    r.upload_bench_track(&device, &queue, None);
 
-    assert_eq!(r.bench_track_edge_count, 0);
+    assert_eq!(r.overlay_ribbons.drawn_count(OverlayTarget::Scene), 0);
     assert_eq!(r.bench_track_disc_count, 0);
-    assert!(r.bench_track_edge_buffer.is_none());
+    let (_, count, capacity) = r
+        .overlay_ribbons
+        .region(ProducerId::BenchFigure)
+        .expect("the figure's region");
+    assert_eq!(count, 0);
+    assert!(capacity >= figure_edges, "the region keeps its room");
     assert!(r.bench_track_disc_buffer.is_none());
 }
 
@@ -112,17 +130,18 @@ fn a_track_with_nothing_to_draw_uploads_nothing() {
     // An `EditableTrack` cannot be at the track stage with no observations and
     // no frame, so the empty figure is stated directly: the guard is about the
     // upload refusing a zero-length buffer, which wgpu rejects.
-    let (device, _queue) = device();
+    let (device, queue) = device();
     let mut r = SceneRenderer::new();
     let empty = EditableTrack::empty_cluster();
     let (state, id, _) = bench_track::tests::staged();
 
     r.upload_bench_track(
         &device,
+        &queue,
         bench_track::tests::figure_of(&state, id, &empty).as_ref(),
     );
 
-    assert_eq!(r.bench_track_edge_count, 0);
+    assert_eq!(r.overlay_ribbons.drawn_count(OverlayTarget::Scene), 0);
     device.poll(wgpu::PollType::Poll).expect("device poll");
 }
 
@@ -227,9 +246,32 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
             },
         )
     };
-    let edge_buffer = buffer("bench track edges", bytemuck::cast_slice(&edges));
     let disc_buffer = buffer("bench track disc", bytemuck::cast_slice(&disc));
-    let measurement_buffer = buffer("measurement edges", bytemuck::cast_slice(&measurements));
+    // Both targets' instances in the one store, the measurements written
+    // first so that the figure's write moves their region along: each pass
+    // then draws a range of the shared buffer, one of them away from its
+    // start.
+    let mut store = OverlayRibbons::default();
+    store.write(
+        &device,
+        &queue,
+        ProducerId::Measurements,
+        OverlayTarget::MeasurementLayer,
+        &measurements,
+    );
+    store.write(
+        &device,
+        &queue,
+        ProducerId::BenchFigure,
+        OverlayTarget::Scene,
+        &edges,
+    );
+    let scene: Vec<_> = store.draws(OverlayTarget::Scene).collect();
+    let layer: Vec<_> = store.draws(OverlayTarget::MeasurementLayer).collect();
+    assert_eq!(scene, [(ProducerId::BenchFigure, 0..edges.len() as u32)]);
+    assert_eq!(layer.len(), 1);
+    assert!(layer[0].1.start >= edges.len() as u32, "{layer:?}");
+    assert_eq!(layer[0].1.len(), measurements.len());
 
     let mut encoder = device.create_command_encoder(&Default::default());
     let begin = |encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView| {
@@ -255,8 +297,7 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
         pass.set_pipeline(&resources.measurement_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.set_vertex_buffer(0, quad.slice(..));
-        pass.set_vertex_buffer(1, measurement_buffer.slice(..));
-        pass.draw(0..4, 0..measurements.len() as u32);
+        store.draw(&mut pass, OverlayTarget::MeasurementLayer);
     }
     {
         let mut pass = begin(&mut encoder, &output);
@@ -268,8 +309,7 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
         pass.set_pipeline(&resources.edge_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.set_vertex_buffer(0, quad.slice(..));
-        pass.set_vertex_buffer(1, edge_buffer.slice(..));
-        pass.draw(0..4, 0..edges.len() as u32);
+        store.draw(&mut pass, OverlayTarget::Scene);
     }
     queue.submit([encoder.finish()]);
 
@@ -310,14 +350,14 @@ fn the_figure_fades_behind_the_scene_and_the_measurements_do_not() {
     assert_eq!(
         measurements,
         vec![
-            BenchEdgeInstance {
+            OverlayInstance {
                 endpoint_a: ribbons[0].a,
                 endpoint_b: ribbons[0].b,
                 color: ribbons[0].color,
                 half_width: 1.5,
                 fade: 0.0,
             },
-            BenchEdgeInstance {
+            OverlayInstance {
                 endpoint_a: ribbons[1].a,
                 endpoint_b: ribbons[1].b,
                 color: ribbons[1].color,
@@ -331,22 +371,42 @@ fn the_figure_fades_behind_the_scene_and_the_measurements_do_not() {
 
 #[test]
 fn an_upload_of_measurements_holds_one_instance_per_ribbon_and_nothing_for_none() {
-    let (device, _queue) = device();
+    let (device, queue) = device();
     let mut r = SceneRenderer::new();
 
-    r.upload_measurements(&device, &[ribbon(1.0), ribbon(2.0), ribbon(3.0)]);
-    assert_eq!(r.measurement_edge_count, 3);
-    assert!(r.measurement_edge_buffer.is_some());
-    assert_eq!(r.bench_track_edge_count, 0, "the figure's own edges apart");
+    r.upload_measurements(&device, &queue, &[ribbon(1.0), ribbon(2.0), ribbon(3.0)]);
+    assert_eq!(
+        r.overlay_ribbons
+            .drawn_count(OverlayTarget::MeasurementLayer),
+        3
+    );
+    assert!(r.overlay_ribbons.buffer().is_some());
+    assert_eq!(
+        r.overlay_ribbons.drawn_count(OverlayTarget::Scene),
+        0,
+        "the figure's own edges apart"
+    );
     assert_eq!(
         r.bench_pass_count(),
         3,
         "the pass draws them with no figure"
     );
 
-    r.upload_measurements(&device, &[]);
-    assert_eq!(r.measurement_edge_count, 0);
-    assert!(r.measurement_edge_buffer.is_none());
+    r.upload_measurements(&device, &queue, &[]);
+    assert_eq!(
+        r.overlay_ribbons
+            .drawn_count(OverlayTarget::MeasurementLayer),
+        0
+    );
+    let (_, count, capacity) = r
+        .overlay_ribbons
+        .region(ProducerId::Measurements)
+        .expect("the measurements' region");
+    assert_eq!(
+        (count, capacity >= 3),
+        (0, true),
+        "emptied, with its room kept"
+    );
     assert_eq!(r.bench_pass_count(), 0);
     device.poll(wgpu::PollType::Poll).expect("device poll");
 }

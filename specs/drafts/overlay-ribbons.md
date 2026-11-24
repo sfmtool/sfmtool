@@ -1,6 +1,8 @@
 # Overlay ribbons in the 3D view
 
-**Status:** Draft
+**Status:** Draft. Step 1, the store, is built and specified in
+[gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The overlay
+ribbon store"; steps 2 to 4 are not built.
 
 The 3D view draws several kinds of overlay figure into the scene. Today they are:
 - the focused bench item's figure;
@@ -50,14 +52,14 @@ Nothing in this draft is still open.
 ## What exists
 
 **The bench figure and the measurements.** They share one shader
-(`bench_track.wgsl`) and one instance format, `BenchEdgeInstance`: two
+(`bench_track.wgsl`) and one instance format, `OverlayInstance`: two
 homogeneous world endpoints, a colour, a half width in physical pixels and a
 `fade` flag. They are drawn in two passes. The measurements draw into their own
 layer texture, which egui paints over the scene, and the figure draws into the
 scene texture.
 
-Both are rebuilt on the CPU and re-uploaded every frame, each into a new buffer
-made with `create_buffer_init` (`SceneRenderer::upload_measurements`,
+Both are rebuilt on the CPU every frame and written into their regions of the
+overlay ribbon store, which step 1 built (`SceneRenderer::upload_measurements`,
 `upload_bench_track`). Their instances depend on the camera:
 - **A measurement mark.** Its ring is 24 chords placed in screen space and
   unprojected at the mark's depth. Its dot is a short ribbon. Every piece is
@@ -67,8 +69,8 @@ made with `create_buffer_init` (`SceneRenderer::upload_measurements`,
 - **The figure's arrowhead.** Its barbs turn to face the eye.
 
 With a few measurements none of this costs anything. With *Show all measurements*
-on and a thousand measurements, it is about 100,000 instances (5.6 MB) built,
-allocated and uploaded every frame while the camera orbits and nothing else
+on and a thousand measurements, it is about 100,000 instances (5.6 MB) built
+and uploaded every frame while the camera orbits and nothing else
 changes. The chord rings also overlap their own halo where chords meet, and the
 ribbons are hard-edged.
 
@@ -154,6 +156,19 @@ keys").
 
 ### One buffer, a region per producer
 
+*Built (step 1),* as
+[gui/viewer-3d-bench-layer.md](../gui/viewer-3d-bench-layer.md) § "The overlay
+ribbon store" describes, with the bench figure and the measurements as its two
+producers and today's edge fields in `OverlayInstance`. What the step settled
+that this section leaves open: a region's offset is in instances; a region
+starts at 64 instances and the buffer at 256; the store keeps a copy of each
+region's last instances, which a repack writes again at the region's new place;
+and a region is drawn as `draw(0..4, ...)`, today's four-corner strip, until
+step 2 changes the vertex layout. The figure's centre disc stays a vertex
+buffer of its own: it lies in the patch's plane and foreshortens with it, which
+a screen-aligned disc of step 2 does not, so it joins the store only if step 2
+gives it a kind of its own.
+
 The scene renderer owns one `OverlayRibbons` store:
 
 ```rust
@@ -204,9 +219,9 @@ pub(crate) enum OverlayTarget {
   region's count drops to 0. Its capacity is kept for next time.
 
 The store is the one place overlay geometry lives on the GPU. The per-overlay
-buffers go away: `measurement_edge_buffer`, `bench_track_edge_buffer` and
-`track_ray_edge_buffer`, with their counts. The track rays' own pass and pipeline
-go away too.
+buffers go away: `measurement_edge_buffer` and `bench_track_edge_buffer` went
+with step 1, and `track_ray_edge_buffer`, with its count, goes with step 3. The
+track rays' own pass and pipeline go away too.
 
 ### Producers and their keys
 
@@ -330,6 +345,11 @@ builds and uploads no instances. A test counter checks this, as for
    the fixed region order. The measurements and the bench figure move onto it,
    still built every frame, with today's instance contents in the new format.
    There is no visible change.
+
+   *Built.* `BenchEdgeInstance` became `OverlayInstance` with its fields
+   unchanged, so step 2 changes the fields and not the name. The tests of the
+   store's regions and of the pass contract are built
+   (§ "One buffer, a region per producer").
 2. **Instances independent of the camera.** This step brings:
    - widths and radii in points;
    - the pull toward the eye in the shader;
