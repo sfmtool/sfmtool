@@ -224,7 +224,7 @@ impl PhotographCache {
     /// Reads only the header, decodes nothing and never waits on a slot;
     /// a panel calls it on the rayon pool.
     pub fn request_layout(&self, path: &Path) {
-        let layout = header(path)
+        let layout = header(path, &self.setting_for(path))
             .map(|(width, height)| Arc::new(self.layout_for(width, height)))
             .map_err(|e| e.to_string());
         self.lock().layouts.insert(path.to_path_buf(), layout);
@@ -378,9 +378,17 @@ impl PhotographCache {
                 None => {}
             }
         }
-        // A file whose header cannot be read is made at once, as the failure
-        // remembered in its slot.
-        let size = header(path);
+        // A file whose header cannot be read, or whose workspace file cannot,
+        // is made at once, as the failure remembered in its slot.
+        let unslotted;
+        let setting = match &slot {
+            Some(slot) => &slot.setting,
+            None => {
+                unslotted = self.setting_for(path);
+                &unslotted
+            }
+        };
+        let size = header(path, setting);
         let mut share = Share::None;
         if let Ok((width, height)) = size {
             check_keys(path, &self.layout_for(width, height), keys)?;
@@ -396,7 +404,7 @@ impl PhotographCache {
                 self.shared.misses.fetch_add(1, Ordering::Relaxed);
                 // The reservation is given back when `share` drops, whatever
                 // the outcome.
-                size.and_then(|_| self.decode(path, progress, &mut share))
+                size.and_then(|_| self.decode(path, progress, &mut share, setting))
                     .map(|cut| answer_of(cut, asked))
             }
             Some(slot) => {
@@ -410,7 +418,8 @@ impl PhotographCache {
                     Claim::Making(making) => making,
                 };
                 self.shared.misses.fetch_add(1, Ordering::Relaxed);
-                let value = size.and_then(|_| self.decode(path, progress, &mut making.share));
+                let value =
+                    size.and_then(|_| self.decode(path, progress, &mut making.share, setting));
                 if let Err(GetError::Cancelled) = value {
                     // Dropping the hold gives the share back, leaves the slot
                     // as it was and wakes its waiters.

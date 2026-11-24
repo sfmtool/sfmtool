@@ -23,7 +23,10 @@ draft's steps 13d1 and 13d2, the tiles they peeked through `from_tiles`, as
 [gui/track-view.md](../gui/track-view.md) and
 [gui/track-table.md](../gui/track-table.md) say. The main draft's step 8,
 between steps 2 and 3, limits the cluster members' elongation (§ "The members' elongation limit"), and is
-built. The user
+built. The main draft's step 14, which reads out-of-core photographs from
+their mip level files, comes after every step here; its first part, 14a, has
+the cache refuse every photograph of a workspace whose `mipmap_options` is
+invalid, and changes no read this draft describes. The user
 has decided every open question (§ "Open questions"). It amends
 [core/camera/photograph-cache.md](../core/camera/photograph-cache.md) and the
 samplers of [core/camera/image-warping.md](../core/camera/image-warping.md).

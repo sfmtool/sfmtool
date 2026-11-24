@@ -279,7 +279,10 @@ unknown key, a value that is not a JSON integer (`95.0`, `"95"`, `true`) or
 one out of range is a `WorkspaceConfigError` from `read_mipmap_options` that
 names the file, the key and the value. There are no defaults inside the
 object, so what a workspace's mipmaps were made with is always in its file.
-Without the object there are no mipmaps.
+Without the object there are no mipmaps. The photograph cache reads the object
+once per workspace root and again when the file changes, and refuses every
+photograph of a workspace whose object is invalid until the file is fixed
+([photograph-cache.md § "A changed file and remembered failures"](photograph-cache.md#a-changed-file-and-remembered-failures)).
 
 ## How a mipmap is made
 

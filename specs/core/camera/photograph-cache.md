@@ -168,7 +168,7 @@ impl BuildReservation<'_> {
     pub fn release_one(&self);
 }
 
-pub enum GetError { NotFound(PathBuf), Unreadable(String),
+pub enum GetError { NotFound(PathBuf), Unreadable(String), Workspace(WorkspaceConfigError),
                     TooLarge { path: PathBuf, width: u32, height: u32 }, Cancelled }
 
 pub enum PeekedPhotograph { Decoded(Arc<TiledPhotograph>), Unreadable, NotDecoded }
@@ -569,6 +569,27 @@ appears or changes. `peek` and `peek_state` do not stat, since they run every
 frame, so they report a remembered failure until the next `get` notices the
 file has changed. `forget` and `clear` are the other ways to retry.
 
+**The workspace setting.** A photograph is read under its workspace's
+`mipmap_options` ([mipmaps.md § "The workspace setting"](mipmaps.md#the-workspace-setting)),
+which decides whether it is in core. When the cache makes a photograph's
+entry, it finds the photograph's workspace root as `find_workspace_for_path`
+does and reads that root's object with `read_mipmap_options`, once per root:
+it keeps what it read beside the workspace file's length and modification
+time, and reads the file again only when one of them changes, so a session
+reads one small file per workspace however many photographs it reads. An entry
+records the setting it was made under, and `get`, `get_many` and the tile
+requests make it again, as they do for a changed photograph, when the root's
+object is not the same any more; a workspace file rewritten with the same
+object changes nothing. While the workspace file cannot be read or parsed, or
+its `mipmap_options` is invalid, every photograph of that workspace is refused
+with `GetError::Workspace`, which names the file and the key, before any
+decode, and is remembered as a failure is until the workspace file changes;
+`request_layout` keeps it as the layout's failure, the tile requests answer
+it as `TileError::Unreadable`, and a read through a photograph the cache
+answered as `PhotographReadError::Unreadable` naming the photograph. A
+photograph outside every workspace has no setting. Every photograph is read
+in core so far: the setting decides only whether a photograph can be read.
+
 ## In the viewer
 
 SfM Explorer holds one cache, `AppState::photographs` in
@@ -717,7 +738,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   caller already holding it and the cache share one. A decode whose slot left
   the map meanwhile (forgotten, cleared or replaced by a newer file) still
   returns its tiles to the caller, but the cache neither keeps nor counts
-  them, and a slot that leaves the map drops its tiles.
+  them, and a slot that leaves the map drops its tiles. The workspace
+  settings the cache has read are behind a lock of their own, taken with no
+  other lock held and held while a workspace file is read, so callers that
+  find a file changed at once read it once.
 - **Cancellation, and a maker that stops.** The maker looks at its
   `Progress` once more after the decode, before it cuts the tiles; when it
   is cancelled it cuts nothing, remembers nothing, leaves the slot as it
@@ -823,6 +847,17 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   tile stopping with `Cancelled` and the next render reading it; and under a
   budget of 0 an answer holding every tile, two renders of it decoding the
   photograph once.
+- [photograph_cache/workspace_tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/workspace_tests.rs):
+  a photograph in a workspace whose `mipmap_options` is invalid refused by
+  `get`, `get_many`, `request_layout`, `try_decode_tiles` and `get_tile`
+  with the error naming the key and nothing decoded, with a budget and with a
+  budget of 0; once the file is fixed the next `get` decoding the
+  photograph's own pixels, and once it is broken again that photograph
+  refused by `get`, by `get_many` and by a read through the photograph
+  answered before, its tiles dropped; and the workspace file read once for
+  five photographs of one root, once more when it is written again with the
+  same object, which decodes nothing again, and once more for another
+  object, under which every photograph is decoded again.
 - [bench/tests/bulk_budget.rs](../../../crates/sfmtool-core/src/bench/tests/bulk_budget.rs),
   bulk kernels on one thread over six photographs written to a temporary
   directory: *Refit all points* under a budget of one photograph and under
@@ -933,8 +968,9 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   per open.
 - **No cache on disk.** Tiles are cut from the JPEGs in each session. A
   large photograph's reduced levels can be stored as
-  [mip level files](mipmaps.md), but the cache does not read them. Reading
-  the stored levels of large ones is proposed in
+  [mip level files](mipmaps.md), and the cache reads each workspace's
+  `mipmap_options`, but it does not read the files. Reading the stored levels
+  of large ones is proposed in
   [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md).
 - **The budget and the build budget are set only by their environment
   variables** (or a caller's `PhotographCacheOptions`), not in the viewer's

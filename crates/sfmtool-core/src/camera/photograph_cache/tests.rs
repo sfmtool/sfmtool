@@ -822,7 +822,7 @@ fn peek_state_does_not_wait_on_a_decode_in_flight() {
     let cache = PhotographCache::new(with_budget(GIB));
     // A slot whose decode has not finished, as `fetch` leaves it while the
     // decoding thread runs.
-    let slot = Arc::new(Slot::new(file_stamp(&a)));
+    let slot = Arc::new(Slot::new(file_stamp(&a), cache.setting_for(&a)));
     slot.lock().making = true;
     cache.lock().map.insert(a.clone(), slot);
     assert!(matches!(cache.peek_state(&a), PeekedPhotograph::NotDecoded));
@@ -849,7 +849,7 @@ fn decode_into_a_forgotten_slot_still_returns_and_charges_nothing() {
     let a = write_png(dir.path(), "a.png", 8, 8);
     let cache = PhotographCache::new(with_budget(GIB));
     let cut = || cut_image(ImageU8::read_rgb(&a).unwrap(), PHOTOGRAPH_TILE_SIZE);
-    let slot = Arc::new(Slot::new(file_stamp(&a)));
+    let slot = Arc::new(Slot::new(file_stamp(&a), cache.setting_for(&a)));
     // Not in the map, as after a `forget` during the decode.
     let got = cache
         .store(&mut cache.lock(), &a, &slot, Ok(cut()), Asked::Every)

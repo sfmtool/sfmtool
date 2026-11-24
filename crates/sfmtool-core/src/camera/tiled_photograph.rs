@@ -71,9 +71,10 @@ pub enum PhotographReadError {
         width: u32,
         height: u32,
     },
-    /// The photograph's file could not be read or decoded; `why` names the
-    /// file. `path` is `None` when the error came from a [`GetError`], whose
-    /// message alone names it.
+    /// The photograph's file could not be read or decoded, or its workspace
+    /// file could not be read or holds an invalid `mipmap_options`
+    /// ([`GetError::Workspace`]); `why` names the file. `path` is `None` when
+    /// the error came from a [`GetError`], whose message alone names it.
     Unreadable {
         path: Option<PathBuf>,
         why: String,
@@ -155,7 +156,8 @@ impl From<TileError> for PhotographReadError {
 }
 
 /// A failed `get` as a kernel reports it; `Unreadable` has no path, since
-/// [`GetError::Unreadable`]'s message alone names the file.
+/// the message of [`GetError::Unreadable`] alone names the file, and that of
+/// [`GetError::Workspace`] the workspace file.
 impl From<GetError> for PhotographReadError {
     fn from(e: GetError) -> Self {
         match e {
@@ -171,6 +173,10 @@ impl From<GetError> for PhotographReadError {
                 height,
             },
             GetError::Unreadable(why) => Self::Unreadable { path: None, why },
+            GetError::Workspace(e) => Self::Unreadable {
+                path: None,
+                why: e.to_string(),
+            },
         }
     }
 }

@@ -37,11 +37,14 @@ use std::time::{Duration, SystemTime};
 use rayon::prelude::*;
 
 use crate::camera::image::{image_dimensions, ImageU8};
-use crate::camera::mipmap::{PyramidLayout, MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
+use crate::camera::mipmap::{MipmapOptions, PyramidLayout, MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
 use crate::camera::tiled_photograph::{
     cut_image, tile_count, CutImage, PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
 };
 use crate::progress::{Cancelled, Progress};
+use crate::workspace::{
+    find_workspace_for_path, read_mipmap_options, WorkspaceConfigError, WORKSPACE_FILE_NAME,
+};
 
 mod tiles;
 
@@ -255,6 +258,11 @@ pub enum GetError {
     NotFound(PathBuf),
     /// The file could not be read or decoded; the message names it.
     Unreadable(String),
+    /// The photograph's workspace file cannot be read, or its
+    /// `mipmap_options` is invalid; the error names the file and the key.
+    /// Every photograph of that workspace is refused until the file is
+    /// fixed, since the object decides how each is read.
+    Workspace(WorkspaceConfigError),
     /// A side of 65536 px or more (over [`MAX_JPEG_SIDE`]), read from the
     /// header before any decode. Every photograph with such a side is
     /// refused, whatever its workspace, since no JPEG frame could hold its
@@ -275,6 +283,7 @@ impl std::fmt::Display for GetError {
         match self {
             Self::NotFound(path) => write!(f, "{}: no such file", path.display()),
             Self::Unreadable(why) => write!(f, "{why}"),
+            Self::Workspace(e) => write!(f, "{e}"),
             Self::TooLarge {
                 path,
                 width,
@@ -370,11 +379,16 @@ fn unreadable(path: &Path, e: ::image::ImageError) -> GetError {
     }
 }
 
-/// The photograph's size from its header, refused as [`GetError::TooLarge`]
-/// with a side over [`MAX_JPEG_SIDE`]: the header decides the refusal, so a
-/// photograph too large for the pyramid readers is never decoded.
-fn header(path: &Path) -> Result<(u32, u32), GetError> {
+/// The photograph's size from its header, refused as [`GetError::Workspace`]
+/// while `setting`, its workspace's, cannot be read, and as
+/// [`GetError::TooLarge`] with a side over [`MAX_JPEG_SIDE`]: the header and
+/// the setting decide the refusal, so a photograph is never decoded only to
+/// be refused.
+fn header(path: &Path, setting: &WorkspaceSetting) -> Result<(u32, u32), GetError> {
     let (width, height) = image_dimensions(path).map_err(|e| unreadable(path, e))?;
+    if let Err(e) = &setting.options {
+        return Err(GetError::Workspace(e.clone()));
+    }
     if width > MAX_JPEG_SIDE || height > MAX_JPEG_SIDE {
         return Err(GetError::TooLarge {
             path: path.to_path_buf(),
@@ -384,6 +398,27 @@ fn header(path: &Path) -> Result<(u32, u32), GetError> {
     }
     Ok((width, height))
 }
+
+/// The workspace setting a photograph is read under: its workspace root and
+/// that root's `mipmap_options`, which decide how each of its photographs is
+/// read. A slot records the setting it was made under and is made again when
+/// the setting changes, as it is when the photograph's file changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceSetting {
+    /// The photograph's workspace root, found when the slot was made; `None`
+    /// outside every workspace, where no setting applies.
+    root: Option<PathBuf>,
+    /// The root's `mipmap_options` (`None` when its file has none), or why
+    /// its workspace file could not be read or the object is invalid.
+    options: Result<Option<MipmapOptions>, WorkspaceConfigError>,
+}
+
+/// A workspace root's `mipmap_options` as last read, with the workspace
+/// file's length and modification time then.
+type KeptOptions = (
+    FileStamp,
+    Result<Option<MipmapOptions>, WorkspaceConfigError>,
+);
 
 /// A tile the cache keeps, with what its eviction order reads.
 struct Kept {
@@ -574,6 +609,10 @@ fn read_error(path: &Path, e: GetError) -> PhotographReadError {
             path: Some(path.to_path_buf()),
             why,
         },
+        GetError::Workspace(e) => PhotographReadError::Unreadable {
+            path: Some(path.to_path_buf()),
+            why: e.to_string(),
+        },
         e => e.into(),
     }
 }
@@ -692,14 +731,17 @@ struct Slot {
     /// Woken when `making` is cleared.
     ready: Condvar,
     stamp: FileStamp,
+    /// The workspace setting the slot was made under.
+    setting: WorkspaceSetting,
 }
 
 impl Slot {
-    fn new(stamp: FileStamp) -> Self {
+    fn new(stamp: FileStamp, setting: WorkspaceSetting) -> Self {
         Self {
             data: Mutex::new(SlotData::default()),
             ready: Condvar::new(),
             stamp,
+            setting,
         }
     }
 
@@ -831,6 +873,14 @@ struct Shared {
     decodes: AtomicU64,
     /// Estimated bytes of the whole decodes reserved now.
     build_reserved: AtomicU64,
+    /// Each workspace root's `mipmap_options` as last read, read again when
+    /// the root's workspace file changes. Its lock is taken with no other
+    /// lock held, and held while a workspace file is read.
+    workspaces: Mutex<HashMap<PathBuf, KeptOptions>>,
+    /// How many times a workspace file has been read for its
+    /// `mipmap_options`.
+    #[cfg(test)]
+    workspace_reads: AtomicU64,
     /// Called as a decode starts, once its header is read and the decode is
     /// reserved and before the pixels are read, as a caller starts to wait on
     /// a slot being made, and as a panel's decode has its reservation and is
@@ -899,6 +949,9 @@ impl PhotographCache {
                 misses: AtomicU64::new(0),
                 decodes: AtomicU64::new(0),
                 build_reserved: AtomicU64::new(0),
+                workspaces: Mutex::new(HashMap::new()),
+                #[cfg(test)]
+                workspace_reads: AtomicU64::new(0),
                 #[cfg(test)]
                 on_slot_event: None,
             }),
@@ -1223,7 +1276,7 @@ impl PhotographCache {
             return;
         }
         let cut = cut_image(image, self.shared.options.tile_size);
-        let slot = Arc::new(Slot::new(file_stamp(path)));
+        let slot = Arc::new(Slot::new(file_stamp(path), self.setting_for(path)));
         let mut inner = self.lock();
         inner.remove(path);
         inner.map.insert(path.to_path_buf(), Arc::clone(&slot));
@@ -1285,6 +1338,56 @@ impl PhotographCache {
         self.shared.tick.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// The workspace setting a photograph at `path` is read under now: its
+    /// workspace root, found by walking up the path as
+    /// [`find_workspace_for_path`] does, and that root's `mipmap_options`.
+    fn setting_for(&self, path: &Path) -> WorkspaceSetting {
+        let root = find_workspace_for_path(path);
+        let options = match &root {
+            Some(root) => self.options_at(root),
+            None => Ok(None),
+        };
+        WorkspaceSetting { root, options }
+    }
+
+    /// Whether `setting` is still its root's: the root's `mipmap_options`
+    /// are the same now. A photograph outside every workspace stays so for
+    /// its slot's life.
+    fn setting_is_current(&self, setting: &WorkspaceSetting) -> bool {
+        match &setting.root {
+            Some(root) => self.options_at(root) == setting.options,
+            None => true,
+        }
+    }
+
+    /// `root`'s `mipmap_options`: the ones kept for it while its workspace
+    /// file's length and modification time are those they were read at, and
+    /// otherwise read again and kept. Costs a stat of the file. The file is
+    /// read under the lock of the kept options, a lock taken with no other
+    /// held, so callers that find it changed at once read it once.
+    fn options_at(&self, root: &Path) -> Result<Option<MipmapOptions>, WorkspaceConfigError> {
+        let stamp = file_stamp(&root.join(WORKSPACE_FILE_NAME));
+        let mut workspaces = self.workspaces();
+        if let Some((kept, options)) = workspaces.get(root) {
+            if *kept == stamp {
+                return options.clone();
+            }
+        }
+        #[cfg(test)]
+        self.shared.workspace_reads.fetch_add(1, Ordering::Relaxed);
+        let options = read_mipmap_options(root);
+        workspaces.insert(root.to_path_buf(), (stamp, options.clone()));
+        options
+    }
+
+    fn workspaces(&self) -> MutexGuard<'_, HashMap<PathBuf, KeptOptions>> {
+        // Nothing panics while the lock is held, so poisoning is ignored.
+        self.shared
+            .workspaces
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// `path`'s slot when it is in the map, without a stat of the file.
     fn mapped(&self, path: &Path) -> Option<Arc<Slot>> {
         self.lock().map.get(path).map(Arc::clone)
@@ -1292,8 +1395,10 @@ impl PhotographCache {
 
     /// Decode `path` and cut its tiles, polling `progress` between the two:
     /// [`GetError::Cancelled`] when it was cancelled during the decode.
-    /// Reads the header first and, when `share` holds nothing, reserves the
-    /// decode with [`Self::reserve_builds`] before reading the pixels.
+    /// Reads the header first, refusing the photograph as [`header`] does
+    /// under `setting`, its workspace's, and, when `share` holds nothing,
+    /// reserves the decode with [`Self::reserve_builds`] before reading the
+    /// pixels.
     ///
     /// The image is dropped once its level-0 tiles are cut, and each next
     /// level is made from the tiles of the one before, so the cutting holds
@@ -1314,8 +1419,9 @@ impl PhotographCache {
         path: &Path,
         progress: &Progress<'_>,
         share: &mut Share<'r>,
+        setting: &WorkspaceSetting,
     ) -> Result<CutImage, GetError> {
-        let (width, height) = header(path)?;
+        let (width, height) = header(path, setting)?;
         if let Share::None = share {
             *share = Share::Own(self.reserve_builds(whole_decode_bytes(width, height), 1));
         }
@@ -1329,9 +1435,10 @@ impl PhotographCache {
         Ok(cut_image(image, self.shared.options.tile_size))
     }
 
-    /// The photograph at `path` when its slot is made from the file as it is
-    /// now and keeps a tile of it, or the failure it remembers, counted as a
-    /// hit; `None` otherwise. Reads nothing but the file's stamp and
+    /// The photograph at `path` when its slot is made from the file and the
+    /// workspace setting as they are now and keeps a tile of it, or the
+    /// failure it remembers, counted as a hit; `None` otherwise. Reads
+    /// nothing but the stamps of the file and of its workspace file, and
     /// never waits on a decode.
     fn made_now(&self, path: &Path) -> Option<Result<Arc<TiledPhotograph>, GetError>> {
         if self.shared.options.budget_bytes == 0 {
@@ -1342,6 +1449,9 @@ impl PhotographCache {
             Some(slot) if slot.stamp == stamp => Arc::clone(slot),
             _ => return None,
         };
+        if !self.setting_is_current(&slot.setting) {
+            return None;
+        }
         let tick = self.next_tick();
         let mut data = slot.lock();
         if data.making {
@@ -1356,17 +1466,33 @@ impl PhotographCache {
         Some(value.and_then(|got| got.photograph(self, path)))
     }
 
-    /// `path`'s slot made from the file as it is now: the mapped one when its
-    /// stamp matches the file's, otherwise a new empty slot in its place.
+    /// `path`'s slot made from the file and the workspace setting as they are
+    /// now: the mapped one when its stamp matches the file's and its setting
+    /// is current, otherwise a new empty slot in its place.
     fn slot_for(&self, path: &Path) -> Arc<Slot> {
         // Stat with the lock released; it is a system call.
         let stamp = file_stamp(path);
+        let mapped = self
+            .lock()
+            .map
+            .get(path)
+            .filter(|slot| slot.stamp == stamp)
+            .map(Arc::clone);
+        if let Some(slot) = mapped {
+            if self.setting_is_current(&slot.setting) {
+                return slot;
+            }
+        }
+        // The setting is found and read with no lock held. Another caller may
+        // have put a slot made under the same file and setting in the map
+        // meanwhile, which is then the one.
+        let setting = self.setting_for(path);
         let mut inner = self.lock();
         match inner.map.get(path) {
-            Some(slot) if slot.stamp == stamp => Arc::clone(slot),
+            Some(slot) if slot.stamp == stamp && slot.setting == setting => Arc::clone(slot),
             _ => {
                 inner.remove(path);
-                let slot = Arc::new(Slot::new(stamp));
+                let slot = Arc::new(Slot::new(stamp, setting));
                 inner.map.insert(path.to_path_buf(), Arc::clone(&slot));
                 slot
             }
@@ -1399,7 +1525,8 @@ impl PhotographCache {
     ) -> (Result<Got, GetError>, Found) {
         if self.shared.options.budget_bytes == 0 {
             self.shared.misses.fetch_add(1, Ordering::Relaxed);
-            let value = self.decode(path, progress, &mut share);
+            let setting = self.setting_for(path);
+            let value = self.decode(path, progress, &mut share, &setting);
             return (value.map(|cut| answer_of(cut, asked)), Found::Decoded);
         }
         let slot = self.slot_for(path);
@@ -1443,7 +1570,7 @@ impl PhotographCache {
             }
         };
         self.shared.misses.fetch_add(1, Ordering::Relaxed);
-        let value = self.decode(path, progress, &mut making.share);
+        let value = self.decode(path, progress, &mut making.share, &slot.setting);
         if let Err(GetError::Cancelled) = value {
             // Dropping the hold leaves the slot as it was and wakes its
             // waiters.
@@ -1636,3 +1763,6 @@ mod tests;
 
 #[cfg(test)]
 mod read_tests;
+
+#[cfg(test)]
+mod workspace_tests;
