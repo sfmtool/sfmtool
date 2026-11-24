@@ -265,10 +265,9 @@ impl From<Cancelled> for BuildSiftFilesError {
 ///
 /// In a workspace whose file has `mipmap_options`, each image it decodes that
 /// is out of core under the object and whose mipmap is not current gets its
-/// mipmap made from that decode
-/// ([`build_mipmaps`](crate::camera::mipmap::build_mipmaps)), before the
-/// extraction. A mipmap that cannot be made is a warning through `progress`
-/// naming the image, and the `.sift` file is still written.
+/// mipmap made from that decode ([`build_mipmaps`]), before the extraction.
+/// A mipmap that cannot be made is a warning through `progress` naming the
+/// image, and the `.sift` file is still written.
 ///
 /// When there is something to write, it first refuses version 1 settings
 /// (options with no `image_to_gray`). When every file is up to date it writes
