@@ -3221,24 +3221,35 @@ in core. Step 17 turns the tier on.
       at most the rayon pool's size, calls `get_many` on it with its own
       `Progress` and ends, the source queueing it again while the list is
       not empty; it pushes no version, and the Background Tasks panel shows
-      it as *Building mipmaps: {done} of {total}*. Step 15 adds the rest of
-      the task. Tests: a panel that needs a photograph without a current
-      mipmap adds it to the front of *Build mipmaps*' list once and draws
-      the spinner, twenty such panels add twenty photographs to the one
-      task's list, and no rayon task a panel starts makes or waits on a
-      mipmap; no GUI-thread reader requests a tile of a photograph that is
-      `Building`, and none calls `get` for an out-of-core photograph; a
-      kernel in another task makes a missing mipmap on its own job thread,
-      and waits on the slot when *Build mipmaps* is making it; the task runs
-      on the fast queue, makes one chunk a run, is queued again while its
-      list is not empty and pushes no version; and a panel's spinner ends
-      once the task has made its photograph's mipmap.
+      it as *Building mipmaps: {done} of {total}*. The viewer cancels every
+      quiet task running in the queue a task someone asked for is queued in
+      (`AppState::give_way_to`), so the job gives way from the first: a
+      cancelled job puts the photographs of its chunk it had not finished
+      back at the front of the list, and its source queues it again behind
+      the displacing task, so no photograph a panel queued is lost. The
+      source has its place in the `QuietRank` order, after the camera model
+      proposal's job and before the evaluations, and does not wait for its
+      node (`waits_for_its_node` answers `false`), so it runs on a locked
+      node, since it reads photographs and not the node's version. Step 15
+      adds the rest of the task. Tests: a panel that needs a photograph
+      without a current mipmap adds it to the front of *Build mipmaps*'
+      list once and draws the spinner, twenty such panels add twenty
+      photographs to the one task's list, and no rayon task a panel starts
+      makes or waits on a mipmap; no GUI-thread reader requests a tile of a
+      photograph that is `Building`, and none calls `get` for an out-of-core
+      photograph; a kernel in another task makes a missing mipmap on its own
+      job thread, and waits on the slot when *Build mipmaps* is making it;
+      the task runs on the fast queue, makes one chunk a run, is queued
+      again while its list is not empty, pushes no version and runs on a
+      locked node; it gives way to an asked-for task, leaving no slot
+      marked as being made and the photographs of its chunk at the front of
+      its list; and a panel's spinner ends once the task has made its
+      photograph's mipmap.
 15. **Makers**: `sfm sift` and `build_sift_file`, the rest of the viewer's
-    *Build mipmaps* quiet task, whose job and shared list 14e builds (the
-    list filled when a reconstruction opens, the selected image first, then
-    the Image Browser strip's, then the rest; its place in the `QuietRank`
-    order; a cancelled chunk's photographs put back at the front; and its
-    giving way under the quiet-task rules), `sfm ws mipmaps` with `--prune`
+    *Build mipmaps* quiet task, whose job, shared list, `QuietRank` place
+    and giving way 14e builds (the list filled when a reconstruction opens,
+    the selected image first, then the Image Browser strip's, then the
+    rest), `sfm ws mipmaps` with `--prune`
     and `--check` (its `--enable` waits for step 17, since it writes the
     object), and the thumbnail from the coarsest mip level file.
     Tests: `sfm sift` on a small-threshold synthetic workspace writes the
@@ -3246,9 +3257,7 @@ in core. Step 17 turns the tier on.
     run, takes a photograph a panel adds to the front of its list in its
     next run without cancelling the running one, lets a waiting quiet task
     of higher `QuietRank` (a camera model proposal's job) start between its
-    chunks while it has a long list, runs on a locked node, and gives way to
-    an asked-for task, leaving no slot marked as being made and the
-    photographs of its chunk at the front of its list;
+    chunks while it has a long list;
     `--prune` deletes an orphan and
     keeps a current mipmap, and deletes every mip level file in a workspace without the
     object; `--check` writes nothing.
@@ -3392,8 +3401,8 @@ decisions.
     - (a) 14e also builds the task as far as the list needs it: a quiet
       source on the fast queue whose job takes one chunk from the front of
       the list, calls `get_many` on it and ends, queued again while the list
-      is not empty; step 15 then adds the order at open, its `QuietRank`
-      tests, the giving way and the rest of its test list.
+      is not empty; step 15 then adds the order at open and the rest of its
+      test list.
     - (b) the panels' queueing moves from 14e to step 15, beside the task,
       and 14e has the panels draw *Building mipmap…* for a photograph that
       is `Building` without queueing it.
@@ -3404,4 +3413,12 @@ decisions.
     job taking one chunk from the front of the list, calling `get_many` on
     it and ending, queued again while the list is not empty, so no part
     leaves a panel waiting on work nothing will do; step 15 adds the rest
-    of the task (§ "Implementation steps", 14e and 15).
+    of the task (§ "Implementation steps", 14e and 15). Since the viewer
+    already cancels every quiet task running in the queue an asked-for task
+    is queued in, 14e's job gives way from the first, so 14e also puts a
+    cancelled chunk's unfinished photographs back at the front of the list
+    and gives the source its `QuietRank` place and its answer to
+    `waits_for_its_node`: without them a photograph lost in a cancelled
+    chunk would never be queued again, and its panel would draw the spinner
+    for good, which (a) was chosen to rule out. This follows from (a) and
+    needs no further decision.
