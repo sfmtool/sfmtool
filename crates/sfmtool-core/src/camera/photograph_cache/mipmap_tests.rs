@@ -1,0 +1,499 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! An out-of-core photograph read from its mip level files: 300 x 200
+//! synthetic photographs in a temporary workspace whose `mipmap_options`
+//! sets a threshold of 64, read with tiles of 32, so each is out of core with
+//! levels 1 to 4 stored, and its mipmap made with `build_mipmaps`.
+
+use std::time::Duration;
+
+use jpeg_encoder::SamplingFactor;
+
+use crate::camera::mipmap::test_support::{encode_jpeg, synthetic_rgb, JpegOptions};
+use crate::camera::mipmap::{
+    build_mipmaps, mipmap_location, ExpectedMipLevel, MipLevelFile, MipmapOptions, OriginalRegions,
+    MIPMAP_DIR_NAME,
+};
+use crate::camera::sampler::{read_source_rect, test_pool, LevelRect};
+use crate::camera::tiled_photograph::cut_level;
+use crate::progress::Progress;
+
+use super::tests::every_key;
+use super::*;
+
+const TILE: u32 = 32;
+
+fn options() -> MipmapOptions {
+    MipmapOptions {
+        out_of_core_long_side: 64,
+        jpeg_quality: 95,
+        full_resolution_jpeg_quality: 95,
+    }
+}
+
+/// A temporary workspace whose file has [`options`].
+struct Workspace {
+    dir: tempfile::TempDir,
+}
+
+impl Workspace {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let o = options();
+        std::fs::write(
+            dir.path().join(WORKSPACE_FILE_NAME),
+            format!(
+                r#"{{"version": 2, "mipmap_options": {{"out_of_core_long_side": {},
+                "jpeg_quality": {}, "full_resolution_jpeg_quality": {}}}}}"#,
+                o.out_of_core_long_side, o.jpeg_quality, o.full_resolution_jpeg_quality
+            ),
+        )
+        .unwrap();
+        Self { dir }
+    }
+
+    /// Write `bytes` at `name` in the workspace's `images` and return its
+    /// path.
+    fn photograph(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let images = self.dir.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        let path = images.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// Every file under the mipmap directory, with its bytes, sorted by path.
+    fn mipmap_files(&self) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![self.dir.path().join(MIPMAP_DIR_NAME)];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let bytes = std::fs::read(&path).unwrap();
+                    out.push((path, bytes));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+}
+
+/// Make `photograph`'s mipmap, writing its files.
+fn build(photograph: &Path) {
+    let built = build_mipmaps(photograph, None, &options(), TILE, &Progress::none()).unwrap();
+    assert_eq!(built.not_written, None);
+}
+
+/// Make `photograph`'s mipmap again with another record in every file: the
+/// original's modification time is moved while it is made, and put back, so
+/// the files are current for the original and their records name another
+/// time.
+fn rebuild_with_another_record(photograph: &Path) {
+    let time = std::fs::metadata(photograph).unwrap().modified().unwrap();
+    let set = |t| {
+        std::fs::File::options()
+            .write(true)
+            .open(photograph)
+            .unwrap()
+            .set_modified(t)
+            .unwrap()
+    };
+    set(time + Duration::from_secs(10));
+    build(photograph);
+    set(time);
+}
+
+/// A region-readable JPEG: 4:2:0 with an interval of the 19 MCUs of a row.
+fn readable_jpeg() -> Vec<u8> {
+    encode_jpeg(
+        &synthetic_rgb(300, 200),
+        JpegOptions {
+            sampling: SamplingFactor::F_2_2,
+            restart_interval: 19,
+            ..JpegOptions::default()
+        },
+    )
+}
+
+/// A JPEG with no restart markers, which gets a `-mip0`.
+fn restartless_jpeg() -> Vec<u8> {
+    encode_jpeg(&synthetic_rgb(300, 200), JpegOptions::default())
+}
+
+fn cache_of(budget_bytes: u64) -> PhotographCache {
+    PhotographCache::new(PhotographCacheOptions {
+        budget_bytes,
+        build_budget_bytes: GIB,
+        tile_size: TILE,
+    })
+}
+
+/// The out-of-core layout of the test photographs.
+fn out_of_core_layout() -> PyramidLayout {
+    PyramidLayout::for_size(300, 200, Some(&options()), TILE).unwrap()
+}
+
+/// The path of `photograph`'s mip level file of `level`.
+fn level_file(photograph: &Path, level: usize) -> PathBuf {
+    mipmap_location(photograph)
+        .unwrap()
+        .level_path(level, options().quality_for_level(level))
+}
+
+/// Every level of `photograph`'s pyramid as its files hold it: level 0 the
+/// region decode of the original, or the decode of its `-mip0`; levels 1 to
+/// `K` the region decodes of their files, whole; and each level below `K`
+/// box-filtered from the one above it.
+fn files_levels(photograph: &Path) -> Vec<ImageU8> {
+    let layout = out_of_core_layout();
+    let relative = mipmap_location(photograph).unwrap().relative().to_string();
+    let open = |level: usize| {
+        let expected = ExpectedMipLevel::new(&layout, &relative, level).unwrap();
+        MipLevelFile::open(&level_file(photograph, level), &expected).unwrap()
+    };
+    let (w, h) = layout.level_size(0);
+    let bytes: Arc<[u8]> = std::fs::read(photograph).unwrap().into();
+    let level0 = match OriginalRegions::from_bytes(bytes) {
+        Ok(original) => original.decode_region(0, 0, w, h).unwrap(),
+        Err(_) => open(0).decode_region(0, 0, w, h).unwrap(),
+    };
+    let mut levels = vec![level0];
+    let k = layout.stored_levels();
+    for level in 1..=k {
+        let (w, h) = layout.level_size(level);
+        levels.push(open(level).decode_region(0, 0, w, h).unwrap());
+    }
+    for _ in k + 1..layout.levels() {
+        let next = levels.last().unwrap().downsample_2x();
+        levels.push(next);
+    }
+    levels
+}
+
+/// Every tile of `layout` cut from `levels`, its whole levels.
+fn tiles_of(layout: &PyramidLayout, levels: &[ImageU8]) -> HashMap<TileKey, Arc<PhotographTile>> {
+    let mut tiles = HashMap::new();
+    for (level, image) in levels.iter().enumerate() {
+        cut_level(layout, level, image, &mut tiles);
+    }
+    tiles
+}
+
+fn same_tile(a: &PhotographTile, b: &PhotographTile) -> bool {
+    a.key == b.key && a.origin == b.origin && a.size == b.size && a.pixels.data() == b.pixels.data()
+}
+
+/// Level `level` of `photograph`, read whole through a render entry point.
+fn read_level(photograph: &TiledPhotograph, level: usize) -> Result<Vec<u8>, PhotographReadError> {
+    let (x1, y1) = photograph.layout().level_size(level);
+    let rect = LevelRect {
+        x0: 0,
+        y0: 0,
+        x1,
+        y1,
+    };
+    let read = read_source_rect(photograph, test_pool(), level, rect, &Progress::none())?;
+    Ok(read.image().data().to_vec())
+}
+
+/// Every tile, level and region of an out-of-core photograph whose mipmap is
+/// current is the same pixels as its files hold, with nothing decoded whole:
+/// levels 1 to `K` from their files, the levels below `K` box-filtered from
+/// level `K`, and level 0 from the original when it is region-readable or
+/// from its `-mip0` otherwise; with a budget, and with one of 0, under which
+/// each request reads the files again. Its layout is the out-of-core one.
+#[test]
+fn a_current_mipmap_is_read_from_its_files() {
+    for (name, jpeg) in [
+        ("readable.jpg", readable_jpeg()),
+        ("restartless.jpg", restartless_jpeg()),
+    ] {
+        let ws = Workspace::new();
+        let path = ws.photograph(name, &jpeg);
+        build(&path);
+        let levels = files_levels(&path);
+        let layout = out_of_core_layout();
+        let expected = tiles_of(&layout, &levels);
+        assert_eq!(expected.len(), 102, "every tile of the 8 levels");
+        // The in-core pixels of level 1 are not the file's, so the test
+        // tells the two apart.
+        let in_core = ImageU8::read_rgb(&path).unwrap().downsample_2x();
+        assert_ne!(in_core.data(), levels[1].data(), "{name}");
+        for budget in [GIB, 0] {
+            let cache = cache_of(budget);
+            cache.request_layout(&path);
+            match cache.layout(&path) {
+                PeekedLayout::Known(known) => assert_eq!(*known, layout, "{name}"),
+                other => panic!("{name}: {other:?}"),
+            }
+            for key in every_key(&layout) {
+                let tile = cache.get_tile(&path, key, &Progress::none()).unwrap();
+                assert!(
+                    same_tile(&tile, &expected[&key]),
+                    "{name} {key:?}, {budget}"
+                );
+            }
+            let photograph = cache.get(&path, &Progress::none()).unwrap();
+            assert_eq!(*photograph.layout(), layout);
+            for (level, image) in levels.iter().enumerate() {
+                assert_eq!(read_level(&photograph, level).unwrap(), image.data());
+                let whole = cache.get_level(&path, level, &Progress::none()).unwrap();
+                assert_eq!(whole.data(), image.data(), "{name} level {level}");
+            }
+            let stats = cache.stats();
+            assert_eq!(stats.decodes, 0, "{name}: nothing decoded whole");
+            if budget > 0 {
+                assert_eq!(stats.tiles, 102);
+                // Levels 0 to K, the original standing for level 0 when it
+                // is region-readable, its `-mip0` otherwise.
+                assert_eq!(stats.files, 5, "{name}");
+                let tile_bytes: u64 = expected.values().map(|t| tile_bytes(t)).sum();
+                assert!(stats.bytes > tile_bytes, "the files are counted");
+            }
+        }
+    }
+}
+
+/// Under a budget that holds the coarse tiles and little else, reading every
+/// tile of levels 0 and 1 after them evicts tiles and file entries read
+/// later than the coarse tiles, and never a tile of level `K` or a level
+/// below it.
+#[test]
+fn the_coarsest_level_outlives_every_other_entry() {
+    let ws = Workspace::new();
+    let path = ws.photograph("a.jpg", &readable_jpeg());
+    build(&path);
+    let layout = out_of_core_layout();
+    let k = layout.stored_levels();
+    let budget = 60_000;
+    let cache = cache_of(budget);
+    let coarse = |level: usize| TileKey {
+        level: level as u8,
+        col: 0,
+        row: 0,
+    };
+    cache.get_tile(&path, coarse(k), &Progress::none()).unwrap();
+    for key in every_key(&layout).into_iter().filter(|key| key.level <= 1) {
+        cache.get_tile(&path, key, &Progress::none()).unwrap();
+    }
+    let stats = cache.stats();
+    assert!(stats.bytes <= budget, "{stats:?}");
+    assert!(stats.tiles < 90, "the finer tiles were evicted: {stats:?}");
+    for level in k..layout.levels() {
+        assert!(
+            matches!(cache.peek_tile(&path, coarse(level)), PeekedTile::Ready(_)),
+            "level {level} is kept"
+        );
+    }
+}
+
+/// A kernel's read of a file replaced, after the read first opened it, by
+/// one with another record fails with `Changed` naming the file, both a read
+/// through the photograph `get` answered (from one cache) and a `get_tile`
+/// (from another); after that the slot's mipmap is not current, and the next
+/// `get_tile` reads the photograph in core. A read through a photograph after
+/// its original changed fails with `Changed` naming the original. Under a
+/// budget too small to keep a file, so each read opens it again, and under a
+/// budget of 0, where a `get_tile` decides from the files as they are, the
+/// rebuilt files being current.
+#[test]
+fn a_file_changed_during_a_kernel_s_read_fails_it_with_changed() {
+    let key = TileKey {
+        level: 1,
+        col: 0,
+        row: 0,
+    };
+    // A read of level 2, which keeps only its own tile under a budget of 1,
+    // evicts level 1's.
+    let level_2 = TileKey {
+        level: 2,
+        col: 0,
+        row: 0,
+    };
+    for budget in [1, 0] {
+        let ws = Workspace::new();
+        let path = ws.photograph("a.jpg", &readable_jpeg());
+        build(&path);
+        let reader = cache_of(budget);
+        let photograph = reader.get(&path, &Progress::none()).unwrap();
+        assert!(read_level(&photograph, 1).is_ok());
+        reader.get_tile(&path, level_2, &Progress::none()).unwrap();
+        let cache = cache_of(budget);
+        let before = cache.get_tile(&path, key, &Progress::none()).unwrap();
+        cache.get_tile(&path, level_2, &Progress::none()).unwrap();
+
+        rebuild_with_another_record(&path);
+        let mip1 = level_file(&path, 1);
+        match read_level(&photograph, 1) {
+            Err(PhotographReadError::Changed { path: named }) => assert_eq!(named, mip1),
+            other => panic!("budget {budget}: {other:?}"),
+        }
+        match cache.get_tile(&path, key, &Progress::none()) {
+            Err(TileError::Changed { path: named }) => {
+                assert!(budget > 0);
+                assert_eq!(named, mip1);
+                let tile = cache.get_tile(&path, key, &Progress::none()).unwrap();
+                assert_eq!(cache.stats().decodes, 1, "read in core");
+                assert!(!same_tile(&tile, &before), "the in-core pixels");
+            }
+            // The rebuilt files hold the same pixels.
+            Ok(tile) => {
+                assert_eq!(budget, 0);
+                assert!(same_tile(&tile, &before));
+                assert_eq!(cache.stats().decodes, 0);
+            }
+            Err(other) => panic!("budget {budget}: {other:?}"),
+        }
+
+        // The original changed: every file is stale for it.
+        let photograph = cache_of(budget).get(&path, &Progress::none()).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let last = bytes.len() - 3;
+        bytes[last] ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        match read_level(&photograph, 0) {
+            Err(PhotographReadError::Changed { path: named }) => assert_eq!(named, path),
+            other => panic!("budget {budget}: {other:?}"),
+        }
+    }
+}
+
+/// An in-core photograph of the same workspace reads as before: decoded
+/// whole once, its tiles those of the decode's pyramid, its layout in core,
+/// and no mipmap made.
+#[test]
+fn an_in_core_photograph_in_the_same_workspace_reads_as_before() {
+    let ws = Workspace::new();
+    let small = synthetic_rgb(60, 40);
+    let path = ws.photograph("small.jpg", &encode_jpeg(&small, JpegOptions::default()));
+    let cut = cut_image(ImageU8::read_rgb(&path).unwrap(), TILE);
+    let cache = cache_of(GIB);
+    cache.request_layout(&path);
+    match cache.layout(&path) {
+        PeekedLayout::Known(layout) => {
+            assert!(!layout.is_out_of_core());
+            assert_eq!(*layout, cut.layout);
+        }
+        other => panic!("{other:?}"),
+    }
+    for key in every_key(&cut.layout) {
+        let tile = cache.get_tile(&path, key, &Progress::none()).unwrap();
+        assert!(same_tile(&tile, &cut.tiles[&key]), "{key:?}");
+    }
+    assert_eq!(cache.stats().decodes, 1);
+    assert_eq!(cache.stats().files, 0);
+    assert!(ws.mipmap_files().is_empty());
+}
+
+/// `request_layout` answers the in-core layout for an out-of-core
+/// photograph whose mipmap is missing and the out-of-core one once its
+/// mipmap is current; the two have the same levels, sizes and tile grid.
+/// With a budget and with one of 0.
+#[test]
+fn request_layout_answers_the_layout_the_tiles_are_served_under() {
+    for budget in [GIB, 0] {
+        let ws = Workspace::new();
+        let path = ws.photograph("a.jpg", &readable_jpeg());
+        let cache = cache_of(budget);
+        let layout = |cache: &PhotographCache| {
+            cache.request_layout(&path);
+            match cache.layout(&path) {
+                PeekedLayout::Known(layout) => layout,
+                other => panic!("{other:?}"),
+            }
+        };
+        let in_core = layout(&cache);
+        assert!(!in_core.is_out_of_core(), "budget {budget}");
+        build(&path);
+        cache.forget(&path);
+        let out = layout(&cache);
+        assert!(out.is_out_of_core(), "budget {budget}");
+        assert_eq!(in_core.levels(), out.levels());
+        for level in 0..out.levels() {
+            assert_eq!(in_core.level_size(level), out.level_size(level));
+            assert_eq!(in_core.tiles(level), out.tiles(level));
+        }
+    }
+}
+
+/// A panel's decode of an out-of-core photograph whose mipmap is missing,
+/// or whose files are replaced with another record after its first tiles
+/// were answered, or whose level-1 file is removed then, answers its tiles
+/// and never `Changed`: from the files while they are current, and
+/// otherwise from a whole decode in core, after which its layout is the
+/// in-core one. It makes no mipmap. Under a budget too small to keep a
+/// file, and under a budget of 0, where each request decides from the files
+/// as they are.
+#[test]
+fn a_panel_s_decode_never_answers_changed() {
+    let key = |level: u8, col: u32| TileKey { level, col, row: 0 };
+    let in_core_tiles = |path: &Path| cut_image(ImageU8::read_rgb(path).unwrap(), TILE).tiles;
+    for budget in [1, 0] {
+        // Missing.
+        let ws = Workspace::new();
+        let path = ws.photograph("a.jpg", &readable_jpeg());
+        let cache = cache_of(budget);
+        let Ok(TryDecode::Decoded(tiles)) =
+            cache.try_decode_tiles(&path, &[key(1, 0)], &Progress::none())
+        else {
+            panic!("budget {budget}: decoded");
+        };
+        assert!(same_tile(&tiles[0], &in_core_tiles(&path)[&key(1, 0)]));
+        assert_eq!(cache.stats().decodes, 1);
+        assert!(ws.mipmap_files().is_empty(), "no mipmap made");
+
+        for replace in ["another record", "level 1 removed"] {
+            let ws = Workspace::new();
+            let path = ws.photograph("a.jpg", &readable_jpeg());
+            build(&path);
+            let cache = cache_of(budget);
+            let files = files_levels(&path);
+            let from_files = tiles_of(&out_of_core_layout(), &files);
+            let Ok(TryDecode::Decoded(tiles)) =
+                cache.try_decode_tiles(&path, &[key(1, 0)], &Progress::none())
+            else {
+                panic!("{replace}, budget {budget}: decoded");
+            };
+            assert!(same_tile(&tiles[0], &from_files[&key(1, 0)]));
+            match replace {
+                "another record" => rebuild_with_another_record(&path),
+                _ => std::fs::remove_file(level_file(&path, 1)).unwrap(),
+            }
+            let on_disk = ws.mipmap_files();
+            let Ok(TryDecode::Decoded(tiles)) =
+                cache.try_decode_tiles(&path, &[key(1, 1)], &Progress::none())
+            else {
+                panic!("{replace}, budget {budget}: decoded");
+            };
+            // The rebuilt files are current, so a request that decides from
+            // the files as they are reads them.
+            let read_from_files = budget == 0 && replace == "another record";
+            let (want, decodes) = if read_from_files {
+                (from_files[&key(1, 1)].clone(), 0)
+            } else {
+                (in_core_tiles(&path)[&key(1, 1)].clone(), 1)
+            };
+            assert!(same_tile(&tiles[0], &want), "{replace}, budget {budget}");
+            assert_eq!(cache.stats().decodes, decodes, "{replace}, {budget}");
+            // With a budget the slot remembers its mipmap is not current;
+            // under a budget of 0 the layout is decided from the coarsest
+            // file, which is current.
+            cache.request_layout(&path);
+            match cache.layout(&path) {
+                PeekedLayout::Known(layout) => {
+                    assert_eq!(layout.is_out_of_core(), budget == 0, "{replace}");
+                }
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(ws.mipmap_files(), on_disk, "no mipmap made");
+        }
+    }
+}

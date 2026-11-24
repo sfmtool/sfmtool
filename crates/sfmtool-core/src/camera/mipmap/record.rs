@@ -200,7 +200,7 @@ impl MipmapSource {
     /// The record's facts written for these: tests 2 to 4 of when a mip
     /// level file is current, so far as they concern the original. `Err`
     /// says why the file is stale.
-    pub(super) fn check(&self, record: &MipLevelRecord) -> Result<(), String> {
+    pub(crate) fn check(&self, record: &MipLevelRecord) -> Result<(), String> {
         // Test 2: the same path, or one that differs only in letter case,
         // which the hash then decides.
         let case_only = if record.source == self.relative {

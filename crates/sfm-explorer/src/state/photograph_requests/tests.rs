@@ -1028,3 +1028,272 @@ fn a_tile_set_takes_nothing_until_every_tile_is_there() {
     assert_eq!(requests.kept_tiles(), 0, "taken together");
     assert_eq!(cache.stats().decodes, 2);
 }
+
+// ── An out-of-core photograph without a current mipmap ──────────────────
+
+/// A `Changed` a decode answers, which only a kernel's read can, is kept as
+/// an unreadable photograph is, with its file's stamp, and the path is not
+/// forgotten: the next looks answer it as unreadable, start no header read
+/// or decode, only a check of the file, which finds it unchanged.
+#[test]
+fn a_changed_read_is_remembered_with_the_file_stamp_not_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = photo_in(dir.path());
+    let cache = tile_cache(1 << 30, 1 << 30);
+    let (requests, queue) = PhotographRequests::queued();
+    let source = PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    known_layout(source, &queue);
+    let changed = TileError::Changed { path: path.clone() };
+    lock(&requests.tiles).failed_with(&cache, &path, changed);
+    assert!(
+        matches!(cache.layout(&path), PeekedLayout::Known(_)),
+        "the layout is kept"
+    );
+    let ctx = egui::Context::default();
+    for look in 0..3 {
+        assert!(
+            matches!(display_layout(source, &ctx), DisplayLayout::Unreadable),
+            "look {look}"
+        );
+        assert_eq!(queue.run_off_this_thread(), 1, "a check of the file");
+    }
+    assert_eq!(cache.stats().misses, 0, "nothing decoded");
+}
+
+/// The `mipmap_options` of [`out_of_core_photo`]'s workspace: a photograph
+/// with a side over 64 px is out of core.
+fn mipmap_options() -> sfmtool_core::camera::MipmapOptions {
+    sfmtool_core::camera::MipmapOptions {
+        out_of_core_long_side: 64,
+        jpeg_quality: 95,
+        full_resolution_jpeg_quality: 95,
+    }
+}
+
+/// A 300 x 200 PNG in a workspace at `dir` whose `mipmap_options` puts it
+/// out of core. A PNG is not region-readable, so its mipmap has a `-mip0`.
+fn out_of_core_photo(dir: &Path) -> PathBuf {
+    let o = mipmap_options();
+    std::fs::write(
+        dir.join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
+        format!(
+            r#"{{"version": 2, "mipmap_options": {{"out_of_core_long_side": {},
+            "jpeg_quality": {}, "full_resolution_jpeg_quality": {}}}}}"#,
+            o.out_of_core_long_side, o.jpeg_quality, o.full_resolution_jpeg_quality
+        ),
+    )
+    .unwrap();
+    let path = dir.join("large.png");
+    image::RgbImage::from_fn(300, 200, |x, y| {
+        image::Rgb([(x * 7) as u8, (y * 5) as u8, (x ^ y) as u8])
+    })
+    .save(&path)
+    .unwrap();
+    path
+}
+
+/// Make the mipmap of `path` with tiles of 32 px, the cache's.
+fn build_mipmap(path: &Path) {
+    sfmtool_core::camera::build_mipmaps(path, None, &mipmap_options(), 32, &Progress::none())
+        .unwrap();
+}
+
+/// Make `path`'s mipmap again with another record in every file: the
+/// original's modification time moved while it is made, and put back.
+fn rebuild_with_another_record(path: &Path) {
+    let time = std::fs::metadata(path).unwrap().modified().unwrap();
+    let set = |t| {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap()
+    };
+    set(time + Duration::from_secs(10));
+    build_mipmap(path);
+    set(time);
+}
+
+/// Every file under `dir`'s mipmap directory, with its bytes, sorted.
+fn mipmap_files(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.join(sfmtool_core::camera::mipmap::MIPMAP_DIR_NAME)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                out.push((path, bytes));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// End a frame of `ctx`, so egui, which asks for one repaint however many
+/// are requested before the next frame, tells the next request again.
+fn end_frame(ctx: &egui::Context) {
+    ctx.run_ui(egui::RawInput::default(), |_| {})
+        .textures_delta
+        .clear();
+}
+
+/// How many times each panel looks at the photograph, every look running
+/// the tasks the looks started: more than its reads need, so a panel that
+/// asked again on every look would start more tasks than the bound.
+const LOOKS: usize = 10;
+
+/// Image Detail, then Track View, then the 3D background ask for an
+/// out-of-core photograph over many looks: one whose mipmap is missing, and
+/// one whose files are replaced with another record after Image Detail's
+/// tiles were answered. Under a budget of 0 and under one smaller than the
+/// photograph and than any of its files, each panel draws, none is answered
+/// as unreadable (which a `Changed` would make it), the looks start no more
+/// tasks and repaints than the reads need, and the mipmap directory is as
+/// it was.
+#[test]
+fn panels_draw_an_out_of_core_photograph_without_a_current_mipmap() {
+    let level0 = |col, row| TileKey { level: 0, col, row };
+    // Two tiles of the left of level 0, and a rectangle of its right that
+    // covers others.
+    let detail_keys = [level0(0, 0), level0(1, 0)];
+    let right = LevelRect {
+        x0: 200,
+        y0: 100,
+        x1: 260,
+        y1: 150,
+    };
+    for case in ["missing", "replaced"] {
+        for budget in [0, 20_000] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = out_of_core_photo(dir.path());
+            if case == "replaced" {
+                build_mipmap(&path);
+            }
+            let cache = Arc::new(PhotographCache::new(
+                sfmtool_core::camera::PhotographCacheOptions {
+                    budget_bytes: budget,
+                    build_budget_bytes: 1 << 30,
+                    tile_size: 32,
+                },
+            ));
+            let (requests, queue) = PhotographRequests::queued();
+            let source = PhotographSource {
+                cache: &cache,
+                requests: &requests,
+                path: &path,
+            };
+            let ctx = egui::Context::default();
+            // The repaints egui asks for itself on its first frames are not
+            // counted.
+            for _ in 0..3 {
+                end_frame(&ctx);
+            }
+            let repaints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = Arc::clone(&repaints);
+            ctx.set_request_repaint_callback(move |_| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            });
+            let mut tasks = 0;
+            let what = format!("{case}, budget {budget}");
+
+            // Image Detail: the layout, then its tiles, each kept once drawn
+            // as its textures keep them.
+            let mut drawn: HashMap<TileKey, Arc<PhotographTile>> = HashMap::new();
+            for _ in 0..LOOKS {
+                match display_layout(source, &ctx) {
+                    DisplayLayout::Known(_) => {
+                        let missing: Vec<TileKey> = detail_keys
+                            .iter()
+                            .copied()
+                            .filter(|key| !drawn.contains_key(key))
+                            .collect();
+                        let tiles = display_tiles(source, &missing, &ctx);
+                        for (key, tile) in missing.iter().zip(tiles) {
+                            match tile {
+                                DisplayTile::Ready(tile) => {
+                                    drawn.insert(*key, tile);
+                                }
+                                DisplayTile::Loading => {}
+                                DisplayTile::Unreadable => panic!("{what}: tile unreadable"),
+                            }
+                        }
+                    }
+                    DisplayLayout::Loading => {}
+                    DisplayLayout::Unreadable => panic!("{what}: layout unreadable"),
+                }
+                tasks += queue.run_off_this_thread();
+                end_frame(&ctx);
+            }
+            assert_eq!(drawn.len(), detail_keys.len(), "{what}: Image Detail drew");
+            if case == "replaced" {
+                rebuild_with_another_record(&path);
+            }
+            let on_disk = mipmap_files(dir.path());
+
+            // Track View: a render of the right of level 0, once.
+            let pool = RegionPool::with_capacity(u64::MAX);
+            let mut needs = Vec::new();
+            let mut rendered = None;
+            for _ in 0..LOOKS {
+                if rendered.is_none() {
+                    let read =
+                        read_peeked(source, &mut needs, &ctx, |src| read_rect(src, &pool, right));
+                    match read {
+                        PeekedRead::Read(read) => rendered = Some(read.unwrap()),
+                        PeekedRead::Loading => {}
+                        PeekedRead::Unreadable => panic!("{what}: render unreadable"),
+                    }
+                }
+                tasks += queue.run_off_this_thread();
+                end_frame(&ctx);
+            }
+            assert!(rendered.is_some(), "{what}: Track View drew");
+
+            // The 3D background: level 1 whole, once.
+            let mut level = None;
+            for _ in 0..LOOKS {
+                if level.is_none() {
+                    let layout = match display_layout(source, &ctx) {
+                        DisplayLayout::Known(layout) => layout,
+                        other => panic!("{what}: {other:?}"),
+                    };
+                    match display_level(source, &layout, 1, &ctx) {
+                        DisplayLevel::Ready(pixels) => level = Some(pixels),
+                        DisplayLevel::Loading => {}
+                        DisplayLevel::Unreadable => panic!("{what}: level unreadable"),
+                    }
+                }
+                tasks += queue.run_off_this_thread();
+                end_frame(&ctx);
+            }
+            assert_eq!(
+                level.map(|l| (l.width(), l.height())),
+                Some((150, 100)),
+                "{what}: the background drew"
+            );
+
+            // A header read and a decode for Image Detail, up to three
+            // decodes for Track View (its first tile, the tiles it needs,
+            // and those again if they were not all there together), and
+            // one for the background: far fewer than the looks.
+            assert!(tasks <= 7, "{what}: {tasks} tasks");
+            // A task asks for one repaint, and egui asks for one more pass
+            // after the frame it gave: far fewer than one a look.
+            let repainted = repaints.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(repainted <= 2 * tasks, "{what}: {repainted} repaints");
+            assert_eq!(mipmap_files(dir.path()), on_disk, "{what}: no mipmap made");
+        }
+    }
+}
