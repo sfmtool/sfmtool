@@ -34,8 +34,8 @@ def _run_cluster_patches(
     from ._progress import _poll_progress
     from ._sfmtool.fileio import read_matches, write_matches
     from ._sfmtool.matching import refine_cluster_patches as _refine
-    from ._sfmtool.patches import ImagePyramidSet
-    from ._sfmtool.photographs import PhotographCache
+    from .patches import ImagePyramidSet
+    from .photographs import PhotographCache
 
     data = read_matches(in_path)
     if not data["has_clusters"]:

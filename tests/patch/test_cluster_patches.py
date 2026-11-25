@@ -473,7 +473,7 @@ def test_cluster_patches_through_the_photograph_cache_writes_the_file_the_arrays
     read before."""
     import datetime
 
-    import sfmtool._sfmtool.patches as patches_module
+    import sfmtool.patches as patches_module
     from sfmtool.fileio import read_image_rgb
 
     clusters = _clusters_of(seoul_bull_workspace)
@@ -502,6 +502,8 @@ def test_cluster_patches_through_the_photograph_cache_writes_the_file_the_arrays
     monkeypatch.setattr(patches_module, "ImagePyramidSet", _Arrays)
     from_arrays = runner.invoke(main, [*args, str(tmp_path / "arrays.matches")])
     assert from_arrays.exit_code == 0, from_arrays.output
+    # The arrays reached the kernel: the command's cache decoded nothing.
+    assert "Photographs: 0 whole decodes" in from_arrays.output
 
     assert (tmp_path / "cache.matches").read_bytes() == (
         tmp_path / "arrays.matches"
