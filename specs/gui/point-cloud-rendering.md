@@ -356,6 +356,10 @@ point splat pass. For each point pixel:
    depth response = max(0, (center_depth - neighbor_depth) / point_size)   (a point there)
    empty response = 1                                                      (no point there)
    ```
+   "No point there" means a linear depth of 0 or less: no geometry, or a
+   frustum, image quad, surfel or point at infinity, none of which writes a
+   positive depth (see "Background and Frustum Handling" below). A dark point
+   beside one of them takes its rim on that side.
 4. Average each part over the neighbours' total weight, and turn the sum and
    the empty part alone into shades:
    ```
