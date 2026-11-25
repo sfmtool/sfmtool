@@ -19,7 +19,7 @@ use crate::measurements::fixture::{measured_state, POINTS};
 use crate::measurements::{EndpointSide, MeasurementRef};
 use crate::platform::ScrollInput;
 use crate::scene::ReconId;
-use crate::scene_renderer::OverlayInstance;
+use crate::scene_renderer::{pack_rgba8, OverlayInstance};
 use crate::state::AppState;
 
 use super::super::Viewer3D;
@@ -594,17 +594,10 @@ fn a_measurement_draws_its_line_and_marks_as_instances() {
         STORED_RGB[2],
     ));
     let halo = super::encoded_rgba(HALO);
-    assert!((halo[3] - 170.0 / 255.0).abs() < 1e-6 && halo[..3] == [0.0; 3]);
-    let level = |v: u8| f32::from(v) / 255.0;
-    assert_eq!(
-        grey,
-        [
-            level(STORED_RGB[0]),
-            level(STORED_RGB[1]),
-            level(STORED_RGB[2]),
-            1.0
-        ]
-    );
+    // egui's premultiplied bytes as they are: the halo's black at alpha 170,
+    // and the opaque grey.
+    assert_eq!(halo, [0, 0, 0, 170]);
+    assert_eq!(grey, [STORED_RGB[0], STORED_RGB[1], STORED_RGB[2], 255]);
 
     let (a, b) = (at(Point3::from(POINTS[0])), at(Point3::from(POINTS[1])));
     let (half, halo_half) = (LINE_WIDTH / 2.0, (LINE_WIDTH + HALO_EXTRA_WIDTH) / 2.0);
@@ -683,7 +676,7 @@ fn halos_come_before_strokes_across_measurements() {
     state.show_all_measurements = true;
     let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
     assert!(viewer.measurements.drawn.len() > 1);
-    let halo = super::encoded_rgba(crate::measurement_marks::HALO);
+    let halo = pack_rgba8(super::encoded_rgba(crate::measurement_marks::HALO));
     let pieces = super::instances(&viewer.measurements);
     let rank = |p: &OverlayInstance| match (p.color == halo, p.kind) {
         (true, _) => 0,
@@ -697,12 +690,12 @@ fn halos_come_before_strokes_across_measurements() {
     assert_eq!(halos, strokes, "a halo under every stroke");
     assert!(ranks.contains(&2));
     // Each measurement's stroke is in the layer's order.
-    let lines: Vec<[f32; 4]> = pieces
+    let lines: Vec<u32> = pieces
         .iter()
         .filter(|p| p.kind == OverlayInstance::SEGMENT && p.color != halo)
         .map(|p| p.color)
         .collect();
-    let expected: Vec<[f32; 4]> = viewer
+    let expected: Vec<u32> = viewer
         .measurements
         .drawn
         .iter()
@@ -713,7 +706,7 @@ fn halos_come_before_strokes_across_measurements() {
                 .count()
                 == 2
         })
-        .map(|d| super::encoded_rgba(d.color))
+        .map(|d| pack_rgba8(super::encoded_rgba(d.color)))
         .collect();
     assert_eq!(lines, expected);
 }
@@ -730,7 +723,7 @@ fn a_line_stops_at_the_outer_edge_of_each_end_s_ring() {
     state.select_endpoint(m, EndpointSide::A);
     state.show_all_measurements = true;
     let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
-    let halo = super::encoded_rgba(crate::measurement_marks::HALO);
+    let halo = pack_rgba8(super::encoded_rgba(crate::measurement_marks::HALO));
     let pieces = super::instances(&viewer.measurements);
     let segments: Vec<_> = pieces
         .iter()
@@ -785,7 +778,7 @@ fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
     let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
     let layer = &viewer.measurements;
     assert!(layer.drawn.len() > 1, "every measurement is drawn");
-    let halo = super::encoded_rgba(crate::measurement_marks::HALO);
+    let halo = pack_rgba8(super::encoded_rgba(crate::measurement_marks::HALO));
     let mut roles = Vec::new();
     for drawn in &layer.drawn {
         let one = crate::measurement_marks::MeasurementLayer {
@@ -800,11 +793,12 @@ fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
         match drawn.role {
             Role::Selected => {
                 assert_eq!(stroke.half_width, EMPHASISED_LINE_WIDTH / 2.0);
-                assert_eq!(stroke.color[3], 1.0);
+                assert_eq!(stroke.color.to_le_bytes()[3], 255);
             }
             Role::Other => {
                 assert_eq!(stroke.half_width, LINE_WIDTH / 2.0);
-                assert!((stroke.color[3] - OTHER_OPACITY).abs() < 0.01, "{stroke:?}");
+                let alpha = f32::from(stroke.color.to_le_bytes()[3]) / 255.0;
+                assert!((alpha - OTHER_OPACITY).abs() < 0.01, "{stroke:?}");
             }
             Role::Item => panic!("no item is focused"),
         }
@@ -818,9 +812,9 @@ fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
     item.width = ITEM_LINE_WIDTH;
     let pieces =
         super::instances(&crate::measurement_marks::MeasurementLayer { drawn: vec![item] });
-    let violet = super::encoded_rgba(crate::bench::verdict_color(
+    let violet = pack_rgba8(super::encoded_rgba(crate::bench::verdict_color(
         sfmtool_core::bench::Verdict::In,
-    ));
+    )));
     let line = pieces
         .iter()
         .find(|p| p.kind == OverlayInstance::SEGMENT && p.color != halo)

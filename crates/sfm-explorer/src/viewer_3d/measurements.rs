@@ -143,22 +143,20 @@ fn homogeneous(p: &Point3<f64>) -> [f32; 4] {
     [p.x as f32, p.y as f32, p.z as f32, 1.0]
 }
 
-/// `color` as sRGB-encoded values, not premultiplied, as the measurements'
-/// pipeline takes it.
+/// `color` as the measurements' pipeline takes it: egui's own bytes,
+/// sRGB-encoded and premultiplied, which the pipeline draws as they are
+/// (`vs_measurement` in `bench_track.wgsl`), with no decoding into linear light.
 ///
 /// That pipeline draws into the measurements' layer
-/// (`MEASUREMENT_TARGET_FORMAT`), cleared to transparent, with straight alpha,
-/// so one piece leaves `c·a` there with alpha `a`. Dividing egui's
-/// premultiplied bytes `p` by `a` here, without rounding, leaves `p` itself,
-/// and egui composites the layer over the scene as it composited `p` when it
-/// painted the measurement: a translucent colour shows as egui painted it, not
-/// only an opaque one.
-pub(crate) fn encoded_rgba(color: Color32) -> [f32; 4] {
-    let [r, g, b, a] = color.to_array().map(f32::from);
-    if a == 0.0 {
-        return [0.0; 4];
-    }
-    [r / a, g / a, b / a, a / 255.0]
+/// (`MEASUREMENT_TARGET_FORMAT`), cleared to transparent, with premultiplied
+/// alpha, so one piece leaves egui's premultiplied bytes `p` there with alpha
+/// `a`, and egui composites the layer over the scene as it composited `p` when
+/// it painted the measurement: a translucent colour shows as egui painted it,
+/// not only an opaque one. The bytes are kept premultiplied rather than
+/// divided by `a`, because a division rounded back to a byte would move a
+/// translucent colour off the bytes egui painted.
+pub(crate) fn encoded_rgba(color: Color32) -> [u8; 4] {
+    color.to_array()
 }
 
 impl Viewer3D {

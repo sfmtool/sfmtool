@@ -66,7 +66,10 @@ struct PointInstance {
 }
 ```
 
-16 bytes per point. 10M points = 160 MB of GPU buffer. The alpha byte carries
+16 bytes per point. 10M points = 160 MB of GPU buffer. The colour bytes are the
+stored sRGB colour, which the vertex shader decodes into linear light where it
+unpacks them ([architecture.md](architecture.md) § "Colour spaces"), so the
+sRGB target draws the stored colour. The alpha byte carries
 the points-at-infinity flag (see [Points at Infinity](#points-at-infinity)).
 
 A second instance buffer steps alongside it, one `u32` per point, the **mask

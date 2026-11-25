@@ -99,6 +99,31 @@ fn in_this_draw(word: u32, dimmed_draw: bool, highlighted: bool, filter_mode: u3
     return dimmed_draw && filter_mode == FILTER_DIM;
 }
 
+// Colours. A colour held as u8 is sRGB-encoded; a colour a scene shader
+// computes with is linear light, because the scene's colour targets are
+// `Rgba8UnormSrgb` and encode what the shader writes. So a packed u8 colour is
+// decoded where it is unpacked, in f32 (srgb_to_linear), and a colour constant
+// below that names an sRGB colour is written as that colour's linear value.
+// See specs/gui/architecture.md § "Colour spaces".
+
+// The linear-light value of sRGB-encoded channels in [0, 1]: the exact
+// piecewise sRGB transfer function of IEC 61966-2-1, not a power-law
+// approximation, so a decoded byte is encoded back by the target to the same
+// byte.
+fn srgb_to_linear(encoded: vec3<f32>) -> vec3<f32> {
+    let low = encoded / 12.92;
+    let high = pow((encoded + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, encoded <= vec3<f32>(0.04045));
+}
+
+// A colour packed as four u8, R in the low byte and A in the high one, with
+// sRGB-encoded channels and straight alpha: its rgb in linear light, and its
+// alpha, which no transfer function applies to.
+fn unpack_srgb_rgba(packed: u32) -> vec4<f32> {
+    let encoded = unpack4x8unorm(packed);
+    return vec4<f32>(srgb_to_linear(encoded.rgb), encoded.a);
+}
+
 // The selection's yellow and the hover's cyan, which a called-out point
 // (MASK_HIGHLIGHTED) takes too. points.wgsl draws a highlighted splat in one,
 // and patch.wgsl a highlighted surfel's outline. Each channel is 0 or 1, the
@@ -119,9 +144,12 @@ const BEHIND_OPACITY: f32 = 0.45;
 // selection's yellow and the hover's cyan do. A saturated red for a point the
 // stroke being held has painted, and a pale red for one under the circle
 // before a press: the same hue, so the preview reads as what a press would do,
-// and lighter, so it reads as not done yet.
-const BRUSH_PAINTED_COLOR: vec3<f32> = vec3<f32>(1.0, 0.1, 0.1);
-const BRUSH_UNDER_COLOR: vec3<f32> = vec3<f32>(1.0, 0.6, 0.6);
+// and lighter, so it reads as not done yet. Each is the linear value of the
+// sRGB colour its comment names, so the screen shows that colour.
+// sRGB (255, 89, 89)
+const BRUSH_PAINTED_COLOR: vec3<f32> = vec3<f32>(1.000000, 0.099899, 0.099899);
+// sRGB (255, 203, 203)
+const BRUSH_UNDER_COLOR: vec3<f32> = vec3<f32>(1.000000, 0.597202, 0.597202);
 
 // The camera model proposal's preview flags, matching `FLAG_*` in
 // `camera_model_proposal/preview.rs`: the `w` of a preview buffer row. A row
@@ -134,7 +162,7 @@ const PREVIEW_LOSES: f32 = 2.0;
 // The failure colour, `FAILURE_RGB` in `scene.rs` ([235, 30, 30]): a finite
 // point the proposed camera's retriangulation turns into a direction is drawn
 // in `mix(colour, FAILURE_COLOR, preview_s)`, over its tint. Written as the
-// linear value of that sRGB colour, because the colour target is
-// `Rgba8UnormSrgb` and encodes what the shader writes, so the screen shows
-// (235, 30, 30), the red the proposal banner draws its lines in.
+// linear value of that sRGB colour, so the screen shows (235, 30, 30), the red
+// the proposal banner draws its lines in.
+// sRGB (235, 30, 30)
 const FAILURE_COLOR: vec3<f32> = vec3<f32>(0.830770, 0.012983, 0.012983);

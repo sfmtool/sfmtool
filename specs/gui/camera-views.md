@@ -241,7 +241,9 @@ glow, depth-aware transparency, and animation.
 
 ### Vertex shader
 
-- Reads edge endpoints (world space) and `color_packed` from instance buffer
+- Reads edge endpoints (world space) and `color_packed` from instance buffer,
+  and decodes its sRGB colour bytes into linear light (`unpack_srgb_rgba`,
+  [architecture.md](architecture.md) § "Colour spaces")
 - Selects endpoint A or B based on quad corner `x` (-1 or 1)
 - Projects both endpoints to clip space
 - Computes perpendicular direction in NDC for ribbon-quad expansion

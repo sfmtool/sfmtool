@@ -484,7 +484,7 @@ frame where a drawn surfel is highlighted
   the same depth for a fragment. A highlighted surfel at infinity sits behind
   every finite thing, so its band is drawn wherever finite geometry covers it.
 - **Colour and opacity.** The band's colours and precedence (`outline_color`),
-  at `BEHIND_OPACITY` in straight alpha, the opacity and blend the bench figure
+  at `BEHIND_OPACITY` in straight alpha, the opacity the bench figure
   is drawn through the scene with. The bench figure fades further with depth
   behind the scene, over four of its half-lengths, down to a floor of 0.15;
   the outline does not. A surfel's half-length is about the spacing of the

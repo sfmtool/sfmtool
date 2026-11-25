@@ -991,7 +991,7 @@ point_size: f32           // per-recon auto size × global 2^point_size_log2
 point_pick_base: u32
 image_pick_base: u32
 pickable: u32             // 0 → emit PICK_TAG_NONE (node.interactive off)
-tint_color: vec4<f32>     // rgb = tint, a = strength; a = 0 → original colors
+tint_color: vec4<f32>     // rgb = tint in linear light, a = strength; a = 0 → original colors
 show_infinity: f32        // global HUD ∞ toggle AND node.show_points_at_infinity
 preview_s: f32            // the camera model proposal's preview blend
 filter_mode: u32          // FILTER_DIM | FILTER_HIDE, for the Track Table filter
@@ -1391,8 +1391,10 @@ tint is telling two nodes apart, which a pre-vetted mutually-distinguishable set
 does by construction and a picker leaves to a user who can, and eventually will,
 pick two blues.
 
-**Composition rule.** `tint_color` is the palette color in `rgb` and a strength
-in `a`, and every scene shader composites the same way:
+**Composition rule.** `tint_color` is the palette color in `rgb`, decoded from
+its sRGB bytes into linear light by `NodeTint::to_uniform`, and a strength in
+`a`, and every scene shader composites the same way, in linear light
+([architecture.md](architecture.md) § "Colour spaces"):
 
 ```wgsl
 color = mix(color, tint_color.rgb, tint_color.a)

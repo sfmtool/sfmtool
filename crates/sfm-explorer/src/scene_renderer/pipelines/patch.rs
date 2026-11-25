@@ -210,10 +210,11 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
     );
 
     // The hidden part of a highlighted surfel's outline, after the EDL pass:
-    // the EDL output alone as its target, in straight alpha as the bench
-    // figure blends, so it writes no linear depth and no pick id; and the
-    // scene's depth read-only, tested `Less`, which under reversed-Z passes
-    // only where something nearer than the outline was drawn.
+    // the EDL output alone as its target, in straight alpha, which composites
+    // as the bench figure's premultiplied pieces do; it writes no linear
+    // depth and no pick id; and the scene's depth read-only, tested `Less`,
+    // which under reversed-Z passes only where something nearer than the
+    // outline was drawn.
     let edl_output = [Some(wgpu::ColorTargetState {
         format: EDL_OUTPUT_FORMAT,
         blend: Some(wgpu::BlendState::ALPHA_BLENDING),

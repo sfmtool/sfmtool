@@ -102,14 +102,11 @@ fn place(in: VertexInput) -> VertexOutput {
         out.alpha = DIM_ALPHA;
     }
 
-    // Unpack color from u32 (R in low byte, then G, B), then tint. The
+    // Unpack the stored sRGB colour into linear light, then tint. The
     // selection and hover overrides in the fragment shader are applied *after*
-    // this and so are never tinted: they exist to be told apart.
-    out.color = tinted(vec3<f32>(
-        f32((in.color_packed >>  0u) & 0xFFu) / 255.0,
-        f32((in.color_packed >>  8u) & 0xFFu) / 255.0,
-        f32((in.color_packed >> 16u) & 0xFFu) / 255.0,
-    ));
+    // this and so are never tinted: they exist to be told apart. The alpha
+    // byte is the infinity flag below, not an opacity.
+    out.color = tinted(unpack_srgb_rgba(in.color_packed).rgb);
     // Global pick index: this node's base plus the local instance index. The
     // instance buffer stores nothing about it, so moving the base is a uniform
     // rewrite and never a buffer rewrite.

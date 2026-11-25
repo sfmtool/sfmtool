@@ -50,7 +50,8 @@
 use wgpu::util::DeviceExt;
 
 use super::gpu_types::{
-    mat4_to_cols, BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
+    mat4_to_cols, pack_rgba8, BenchDiscVertex, BenchTrackUniforms, OverlayInstance,
+    BENCH_LINE_HALF_WIDTH,
 };
 use super::overlay_ribbons::{OverlayTarget, ProducerId};
 use super::SceneRenderer;
@@ -202,7 +203,7 @@ impl SceneRenderer {
             .iter()
             .map(|vertex| BenchDiscVertex {
                 position: vertex.at,
-                color: vertex.color,
+                color: pack_rgba8(vertex.color),
             })
             .collect();
         if edges.is_empty() && disc.is_empty() {
@@ -269,8 +270,8 @@ impl SceneRenderer {
     ///
     /// The measurements' layer is cleared to transparent every frame, whether
     /// or not there is a measurement to draw, and their pieces are drawn into
-    /// it with straight-alpha blending, which over a transparent layer keeps
-    /// the layer premultiplied. egui paints it over the scene texture as it
+    /// it with premultiplied blending, as the egui bytes they carry are, so
+    /// the layer holds premultiplied values. egui paints it over the scene texture as it
     /// paints its own textures, so a translucent mark or line composites on
     /// encoded values as egui painted it before. The figure is drawn onto the
     /// scene texture over the rays: the disc first and the segments over it,

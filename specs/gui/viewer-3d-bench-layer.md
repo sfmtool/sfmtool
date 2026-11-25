@@ -198,7 +198,7 @@ geometry at, which puts a direction just in front of the reversed-Z far plane
 and behind every finite thing.
 
 Two things differ from the target indicator this pass otherwise follows. The
-blend is **ordinary alpha rather than additive**, and there is no glow: the
+blend is **alpha compositing rather than additive**, and there is no glow: the
 three bench violets carry meaning, and additive light over a bright point cloud
 washes them all toward white. And the hue does not shift when the figure is
 occluded, for the same reason. A verdict's colour stays that verdict's colour,
@@ -240,9 +240,12 @@ And they are drawn **into a layer of their own**, with the
 same shader and bind group: a `MEASUREMENT_TARGET_FORMAT` (`Rgba8Unorm`)
 texture the panel's size, cleared to transparent every frame, which the 3D
 view paints over the scene texture, the grid and the axes, where the egui
-overlay they replaced was painted. The straight-alpha blend over a
-transparent layer leaves egui's premultiplied colour in it, and egui
-composites the layer as it composited the overlay, so a translucent colour
+overlay they replaced was painted. Their pipeline is built on the shader's
+`vs_measurement` entry, which draws each piece's colour as the bytes egui
+holds it in, premultiplied and sRGB-encoded, with no decoding into linear
+light (the exception [architecture.md](architecture.md) § "Colour spaces"
+names); the premultiplied blend over a transparent layer leaves those bytes
+in it, and egui composites the layer as it composited the overlay, so a translucent colour
 (the dimmed others of *Show all measurements*, the halo) shows as egui painted
 it, whatever the window surface's format. The layer is not a second view of
 the scene texture: a pass through an `Rgba8Unorm` view of the
@@ -286,7 +289,8 @@ built from nothing that depends on the camera
 pub(crate) struct OverlayInstance {
     pub(crate) a: [f32; 4],     // a segment's one end; a barb's tip; a ring's or a disc's centre
     pub(crate) b: [f32; 4],     // a segment's other end; a barb's foot
-    pub(crate) color: [f32; 4], // not premultiplied, in the target's colour space
+    pub(crate) color: u32,      // four bytes, R first: sRGB with straight alpha on the
+                                // scene, egui's premultiplied bytes in the measurements' layer
     pub(crate) half_width: f32, // half the stroke's width, in panel points
     pub(crate) radius: f32,     // a ring's or a disc's radius, in panel points; a barb's signed tan angle
     pub(crate) kind: u32,       // SEGMENT, RING, DISC or BARB
@@ -308,6 +312,13 @@ decides is the shader's, from the camera block it is handed each frame, so a
 producer builds its instances once from what it draws and a camera move writes
 nothing:
 
+- **Colours as bytes.** A piece's colour is four bytes packed into one word,
+  R in the low byte as a point's is (`pack_rgba8`). On the scene texture they
+  are sRGB with straight alpha, which `vs_overlay` decodes into linear light
+  and premultiplies; in the measurements' layer they are egui's premultiplied
+  bytes, which `vs_measurement` draws as they are. Every entry hands the
+  fragment shader a premultiplied colour, so the one premultiplied blend
+  serves both targets ([architecture.md](architecture.md) § "Colour spaces").
 - **Sizes in points.** Widths and radii are in panel points, turned into pixels
   by the block's `pixels_per_point`, so an instance stays the same across a
   change of the window's scale.
