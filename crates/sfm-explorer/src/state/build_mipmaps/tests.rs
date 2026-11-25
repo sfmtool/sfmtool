@@ -491,12 +491,24 @@ fn saved_out_of_core_recon() -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) {
 }
 
 /// A state whose photograph cache makes one build at a time, so each run of
-/// *Build mipmaps* takes one photograph, with `saved` open.
-fn opened(saved: &Path) -> (AppState, ReconId) {
+/// *Build mipmaps* takes one photograph, with `saved` open, and `paths` as
+/// the opened reconstruction spells them: its workspace directory is
+/// canonicalized, which can differ from the temporary directory's spelling
+/// (a short `RUNNER~1` on Windows, `/var` for `/private/var` on macOS).
+fn opened(saved: &Path, paths: &[PathBuf]) -> (AppState, ReconId, Vec<PathBuf>) {
     let mut state = AppState::new();
     state.photographs = cache_for(1 << 30, 1);
     let id = state.open_now(saved).expect("the file opens");
-    (state, id)
+    let workspace = &state
+        .node(id)
+        .expect("the opened node")
+        .recon()
+        .workspace_dir;
+    let paths = paths
+        .iter()
+        .map(|path| workspace.join(path.file_name().expect("a file name")))
+        .collect();
+    (state, id, paths)
 }
 
 /// Record the file names of each chunk *Build mipmaps* takes in `events`,
@@ -533,7 +545,7 @@ fn record_chunks(state: &mut AppState, events: &Arc<Mutex<Vec<String>>>) -> mpsc
 #[test]
 fn an_open_fills_the_list_and_the_first_run_makes_the_selected_images_mipmap() {
     let (_dir, saved, paths) = saved_out_of_core_recon();
-    let (mut state, id) = opened(&saved);
+    let (mut state, id, paths) = opened(&saved, &paths);
     assert_eq!(state.photograph_requests.mipmaps_waiting(), paths);
     let entry = state.action_log.entries().next_back().unwrap();
     assert_eq!(
@@ -578,7 +590,7 @@ fn an_open_fills_the_list_and_the_first_run_makes_the_selected_images_mipmap() {
 #[test]
 fn a_photograph_a_panel_queues_is_taken_by_the_next_run_and_the_running_one_goes_on() {
     let (_dir, saved, paths) = saved_out_of_core_recon();
-    let (mut state, _) = opened(&saved);
+    let (mut state, _, paths) = opened(&saved, &paths);
     let events = Arc::new(Mutex::new(Vec::new()));
     let release = record_chunks(&mut state, &events);
     state.drive_build_mipmaps();
@@ -613,7 +625,7 @@ fn a_photograph_a_panel_queues_is_taken_by_the_next_run_and_the_running_one_goes
 #[test]
 fn a_waiting_proposal_job_starts_between_two_chunks_of_a_long_list() {
     let (_dir, saved, paths) = saved_out_of_core_recon();
-    let (mut state, id) = opened(&saved);
+    let (mut state, id, paths) = opened(&saved, &paths);
     let events = Arc::new(Mutex::new(Vec::new()));
     let release = record_chunks(&mut state, &events);
     state.drive_build_mipmaps();
@@ -658,7 +670,7 @@ fn a_waiting_proposal_job_starts_between_two_chunks_of_a_long_list() {
 #[test]
 fn closing_a_node_takes_off_the_list_the_photographs_no_other_node_has() {
     let (_dir, saved, paths) = saved_out_of_core_recon();
-    let (mut state, first) = opened(&saved);
+    let (mut state, first, paths) = opened(&saved, &paths);
     let second = state.open_now(&saved).expect("the file opens again");
     assert_eq!(state.photograph_requests.mipmaps_waiting(), paths);
     state.close_node(first).unwrap();
@@ -686,7 +698,7 @@ fn an_open_in_a_workspace_without_mipmap_options_queues_nothing() {
         r#"{"version": 2}"#,
     )
     .unwrap();
-    let (state, _) = opened(&saved);
+    let (state, _, paths) = opened(&saved, &paths);
     assert!(state.photograph_requests.mipmaps_waiting().is_empty());
     for path in &paths {
         assert_eq!(state.photographs.layout(path), PeekedLayout::NotKnown);
