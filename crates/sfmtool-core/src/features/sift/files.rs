@@ -14,7 +14,10 @@
 //! readings ([`image_readings_from_rgb`](super::image_readings_from_rgb)),
 //! taken from the decode the thumbnail is made from. It refuses version 1
 //! settings, options with no `image_to_gray`, from which no `.sift` file is
-//! written (see `specs/workspace/workspace.md`).
+//! written (see `specs/workspace/workspace.md`). In a workspace whose file has
+//! `mipmap_options`, it also makes the mipmap of each out-of-core photograph it
+//! decodes, from that decode (see `specs/core/features/sift.md` § "Building
+//! `.sift` files").
 //!
 //! It runs several images at once in the way that extractor does (see
 //! `specs/cli/image-feature/sift-command.md` § Extraction-orchestration
@@ -37,7 +40,11 @@ use sfmtool_sift_format::{
 use super::image_readings::image_readings_from_gray;
 use super::{extract_sift, gray_from_rgb, FeatureOptionsError, SiftParams};
 use crate::camera::image::{image_dimensions, ImageU8};
-use crate::progress::{Cancelled, Progress};
+use crate::camera::mipmap::{
+    build_mipmaps, check_mipmap, mipmap_location, MipmapError, MipmapSource, PyramidLayout,
+    PHOTOGRAPH_TILE_SIZE,
+};
+use crate::progress::{Cancelled, Event, Progress};
 use crate::reconstruction::thumbnail::thumbnail_from_rgb;
 use crate::{progress_info, progress_status, progress_warn, THUMBNAIL_SIZE};
 
@@ -256,6 +263,12 @@ impl From<Cancelled> for BuildSiftFilesError {
 /// decode, which equals OpenCV's for any photograph at least
 /// [`THUMBNAIL_SIZE`] on each side.
 ///
+/// In a workspace whose file has `mipmap_options`, each image it decodes that
+/// is out of core under the object and whose mipmap is not current gets its
+/// mipmap made from that decode ([`build_mipmaps`]), before the extraction.
+/// A mipmap that cannot be made is a warning through `progress` naming the
+/// image, and the `.sift` file is still written.
+///
 /// When there is something to write, it first refuses version 1 settings
 /// (options with no `image_to_gray`). When every file is up to date it writes
 /// nothing and refuses nothing.
@@ -439,6 +452,7 @@ pub(crate) fn build_sift_file(
     let (image_file_xxh128, image_file_size) =
         xxh128_of_file(image_path).map_err(|e| image_error(e.to_string()))?;
     progress.check_cancel()?;
+    make_mipmap(image_path, &image, progress)?;
 
     // The readings, the extraction and the write go on the rayon pool, which
     // this thread waits on rather than adding to; `rayon::scope` runs its body
@@ -502,6 +516,96 @@ pub(crate) fn build_sift_file(
             problem: e.to_string(),
         },
     )
+}
+
+/// Make the mipmap of the photograph at `image_path` from `image`, its
+/// decode, when the photograph is out of core under its workspace's
+/// `mipmap_options` and its mipmap is not current. In a workspace without the
+/// object, or with no workspace, it does nothing.
+///
+/// It runs before the extraction, while the decode is held anyway, so a build
+/// adds no decode and raises no image's peak memory: the decode, the reduced
+/// levels and the encoded files are a few bytes per source pixel, against the
+/// tens the extraction holds once the decode is dropped
+/// ([`BYTES_PER_SOURCE_PIXEL_UNDOUBLED`]). A mipmap is a cache that any reader
+/// of the photograph makes again, so a build that fails, or an invalid
+/// `mipmap_options`, is a warning through `progress` naming the photograph,
+/// and the `.sift` file is still written. Only the build's messages reach
+/// `progress`, not its phases or counts, which would replace the image count
+/// [`build_sift_files`] reports.
+///
+/// # Errors
+///
+/// [`Cancelled`] when the caller cancels during the build, which then writes
+/// no further file.
+fn make_mipmap(image_path: &Path, image: &ImageU8, progress: &Progress) -> Result<(), Cancelled> {
+    let Some(location) = mipmap_location(image_path) else {
+        return Ok(());
+    };
+    let options = match crate::workspace::read_mipmap_options(location.root()) {
+        Ok(Some(options)) => options,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            progress_warn!(
+                progress,
+                "No mipmap was made for {}: {error}",
+                image_path.display()
+            );
+            return Ok(());
+        }
+    };
+    // `None` for a side over 65535 px, which the build refuses below.
+    let layout = PyramidLayout::for_size(
+        image.width(),
+        image.height(),
+        Some(&options),
+        PHOTOGRAPH_TILE_SIZE,
+    );
+    if let Some(layout) = &layout {
+        if !layout.is_out_of_core() {
+            return Ok(());
+        }
+        let current = MipmapSource::read(image_path, &location)
+            .and_then(|source| check_mipmap(&source, &location, layout))
+            .is_ok();
+        if current {
+            return Ok(());
+        }
+    }
+    let messages = |event: Event<'_>| {
+        if let Event::Message { .. } = event {
+            progress.forward(event);
+        }
+    };
+    let quiet = progress.tapped(&messages);
+    match build_mipmaps(
+        image_path,
+        Some(image),
+        &options,
+        PHOTOGRAPH_TILE_SIZE,
+        &quiet,
+        &mut |_| {},
+    ) {
+        Ok(built) => {
+            if let Some(why) = built.not_written {
+                progress_warn!(
+                    progress,
+                    "The mipmap of {} was not written: {why}",
+                    image_path.display()
+                );
+            }
+            Ok(())
+        }
+        Err(MipmapError::Cancelled) => Err(Cancelled),
+        Err(error) => {
+            progress_warn!(
+                progress,
+                "No mipmap was made for {}: {error}",
+                image_path.display()
+            );
+            Ok(())
+        }
+    }
 }
 
 /// The XXH128 of a file's bytes as 32 lowercase hex digits, and its size.

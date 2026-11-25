@@ -488,3 +488,105 @@ fn a_reading_that_is_not_finite_fails_naming_the_image_and_the_conversion() {
     }
     assert!(!options.sift_path_for_image(&images[0]).exists());
 }
+
+/// A temporary workspace whose file holds `mipmap_options` (none when it is
+/// `None`), with a 300 x 200 photograph and a 60 x 40 one under `images/`,
+/// JPEGs without restart markers. Returns the directory and the two paths.
+fn mipmap_workspace(mipmap_options: Option<&str>) -> (tempfile::TempDir, [PathBuf; 2]) {
+    use crate::camera::mipmap::test_support::{encode_jpeg, synthetic_rgb, JpegOptions};
+    let dir = tempfile::tempdir().unwrap();
+    let object = mipmap_options.map_or(String::new(), |o| format!(r#", "mipmap_options": {o}"#));
+    std::fs::write(
+        dir.path().join(crate::workspace::WORKSPACE_FILE_NAME),
+        format!(r#"{{"version": 2{object}}}"#),
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("images")).unwrap();
+    let photograph = |name: &str, width, height| {
+        let path = dir.path().join("images").join(name);
+        let bytes = encode_jpeg(&synthetic_rgb(width, height), JpegOptions::default());
+        std::fs::write(&path, bytes).unwrap();
+        path
+    };
+    let paths = [
+        photograph("large.jpg", 300, 200),
+        photograph("small.jpg", 60, 40),
+    ];
+    (dir, paths)
+}
+
+/// A threshold of 64: the 300 x 200 photograph is out of core, the 60 x 40
+/// one in core.
+const SMALL_THRESHOLD: &str =
+    r#"{"out_of_core_long_side": 64, "jpeg_quality": 95, "full_resolution_jpeg_quality": 95}"#;
+
+/// In a workspace with `mipmap_options`, a `.sift` build makes the mipmap of
+/// each out-of-core photograph it reads, and reports only the build's
+/// messages, not its phases.
+#[test]
+fn a_build_in_a_workspace_with_mipmap_options_makes_the_out_of_core_mipmaps() {
+    use crate::camera::mipmap::{check_mipmap, photograph_layout, MIPMAP_DIR_NAME};
+    let (dir, images) = mipmap_workspace(Some(SMALL_THRESHOLD));
+    let options = BuildSiftFilesOptions::sfmtool_defaults();
+    let phases = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Enter { phase, .. } = event {
+            phases.lock().unwrap().push(phase);
+        }
+    };
+    let report = build_sift_files(&images, &options, &Progress::to(&sink)).unwrap();
+    assert_eq!(report.extracted, 2);
+    assert_eq!(phases.into_inner().unwrap(), ["build_sift_files"]);
+    for image in &images {
+        assert!(options.sift_path_for_image(image).is_file());
+    }
+
+    let (layout, location) = photograph_layout(&images[0], PHOTOGRAPH_TILE_SIZE).unwrap();
+    let location = location.expect("the large photograph is out of core");
+    let source = MipmapSource::read(&images[0], &location).unwrap();
+    // Not region-readable, so `-mip0` is written beside the reduced level.
+    assert!(!check_mipmap(&source, &location, &layout).unwrap());
+    let mut names: Vec<String> = std::fs::read_dir(dir.path().join(MIPMAP_DIR_NAME).join("images"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["large.jpg-mip0-q95.jpg", "large.jpg-mip1-q95.jpg"]);
+}
+
+/// Without `mipmap_options` nothing is made, and a mipmap that cannot be
+/// made is a warning naming the photograph, with the `.sift` still written.
+#[test]
+fn no_mipmap_is_made_without_the_object_and_a_failed_one_is_a_warning() {
+    use crate::camera::mipmap::MIPMAP_DIR_NAME;
+    let options = BuildSiftFilesOptions::sfmtool_defaults();
+    let (dir, images) = mipmap_workspace(None);
+    build_sift_files(&images, &options, &Progress::none()).unwrap();
+    assert!(!dir.path().join(MIPMAP_DIR_NAME).exists());
+
+    let invalid =
+        r#"{"out_of_core_long_side": 64, "jpeg_quality": 0, "full_resolution_jpeg_quality": 95}"#;
+    let (dir, images) = mipmap_workspace(Some(invalid));
+    let warnings = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Message { text, .. } = event {
+            warnings.lock().unwrap().push(text.to_string());
+        }
+    };
+    let report = build_sift_files(&images, &options, &Progress::to(&sink)).unwrap();
+    assert_eq!(report.extracted, 2);
+    for image in &images {
+        assert!(options.sift_path_for_image(image).is_file());
+    }
+    assert!(!dir.path().join(MIPMAP_DIR_NAME).exists());
+    let warnings = warnings.into_inner().unwrap();
+    for image in &images {
+        let named = format!("No mipmap was made for {}", image.display());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with(&named) && w.contains("jpeg_quality")),
+            "{warnings:?}"
+        );
+    }
+}

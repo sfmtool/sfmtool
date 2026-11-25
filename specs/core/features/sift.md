@@ -799,8 +799,9 @@ The options carry a workspace's own `feature_options` object rather than a
 `SiftParams`, because the object is what each file records: a `.sift` file's
 `feature_tool_metadata.feature_options` is that object as the workspace wrote
 it, and a `SiftParams` does not convert back to it. The caller hands it the
-options and the folder; nothing in this crate reads `.sfm-workspace.json`,
-whose one reader is the Python `load_workspace_config`, with the version checks
+options and the folder, and it reads nothing of `.sfm-workspace.json` but
+the `mipmap_options` object (below); the file's reader for everything else is
+the Python `load_workspace_config`, with the version checks
 ([workspace.md § Loading checks](../../workspace/workspace.md#loading-checks)).
 The viewer takes them from the node's `.sfmr` record.
 
@@ -854,6 +855,26 @@ comparing the content hashes of the files the two write for the same images:
 - The file is written by `sfmtool_sift_format::write_sift` at
   `SIFT_ZSTD_LEVEL`, 5, the level the format crate declares and the Python
   bindings default to.
+
+**Mipmaps.** In a workspace whose file has `mipmap_options`, each image it
+decodes that is out of core under the object and whose mipmap is not current
+gets its mipmap made from that decode (`build_mipmaps` with the decode as its
+`decoded` argument, [mipmaps.md](../camera/mipmaps.md#how-a-mipmap-is-made)),
+so the viewer's *Build SIFT Files* and `pick-images` leave a workspace whose
+photographs the viewer reads a tile at a time from the start. The build runs
+after the decode, the hash and the thumbnail and before the gray conversion,
+while the decode is held anyway: its decode, reduced levels and encoded files
+are a few bytes per source pixel, below what the extraction holds after the
+decode is dropped, so no image's peak memory rises and `K` below is
+unchanged. A mipmap is a cache that any reader of the photograph makes when
+it needs one, so a build that fails, or an invalid `mipmap_options`, is a
+warning through the caller's `Progress` naming the image, and the `.sift` file
+is still written; a build cancelled by the caller is the run's cancellation.
+The build reports only its messages through the caller's `Progress`, not its
+phases and counts, which would replace the image count. In a workspace
+without the object nothing is read for mipmaps but the workspace file, which
+is read for each image decoded, and nothing is written for them; with no
+workspace nothing is read or written for them; and the files are as before.
 
 It runs images concurrently in the way the Python backend does (see
 [`sfm sift` § Extraction-orchestration
@@ -953,7 +974,11 @@ byte-for-byte test above is what keeps the two writers in agreement.
   round-tripping through `sfmtool-sift-format`.
 - **`.sift` building:** Rust tests in `features/sift/files/tests.rs` build files
   for seoul_bull images copied into a temporary workspace and check their
-  contents, the up-to-date skip, progress, cancellation and error order; the
+  contents, the up-to-date skip, progress, cancellation and error order, and
+  on synthetic photographs in temporary workspaces the mipmaps: made for an
+  out-of-core photograph and not an in-core one under a threshold of 64, with
+  no phase of the build reported; none without `mipmap_options`; and a warning
+  naming each image, with its `.sift` still written, for an invalid object; the
   PyO3 test `tests/rust_bindings/sift/test_build_sift_files_rust_bindings.py`
   checks that `build_sift_files` and the Python `sfmtool` backend write files
   with equal content hashes, including thumbnails on OpenCV's integer and 2 x 2
