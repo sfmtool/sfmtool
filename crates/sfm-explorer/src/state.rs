@@ -1213,6 +1213,7 @@ impl AppState {
         };
         self.scene.retain(|n| n.id != id);
         self.forget_recon(id);
+        self.forget_closed_mipmaps();
         if self.selected_recon == Some(id) {
             // Fall back to the first remaining node; an empty scene means no
             // selection, and panels show their empty-state text.
@@ -1263,6 +1264,7 @@ impl AppState {
         self.sift_cache.clear();
         self.sift_indexes.clear();
         self.cluster_patches.clear();
+        self.forget_closed_mipmaps();
         if closed > 0 {
             self.action_log
                 .record(Kind::File, format!("Closed all ({closed})"));

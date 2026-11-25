@@ -28,10 +28,15 @@
 //!   and Track View read the bitmaps and references as they would a file's
 //!   own, so each marks the row a display bitmap is the tile of, while no save
 //!   writes the bitmaps or the display picks (a save writes the file's `-1`
-//!   for those) and no content hash covers them.
+//!   for those) and no content hash covers them;
+//! - **`mipmaps`**, for a file with a photograph in a workspace whose file
+//!   has `mipmap_options`: each such photograph's layout read into the
+//!   photograph cache ([`not_current`]), keeping the out-of-core ones whose
+//!   mipmaps are not current.
 //!
 //! The GUI thread then appends one node per file, in the order asked for
-//! ([`AppState::append_opened`]).
+//! ([`AppState::append_opened`]), and puts each node's photographs that need
+//! mipmaps on *Build mipmaps*' list ([`AppState::queue_opened_mipmaps`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -49,6 +54,7 @@ use crate::background::{Finished, Job, Operation};
 use crate::display_thumbnails::DisplayThumbnails;
 use crate::scene::{ReconId, SceneNode};
 
+use super::build_mipmaps::{in_mipmap_workspaces, not_current};
 use super::AppState;
 
 #[cfg(test)]
@@ -71,6 +77,10 @@ pub(crate) struct Loaded {
     /// a file with its own, whose node shares that column, and for one where
     /// neither a `.sift` nor a photograph could supply a single row.
     pub(crate) display_thumbnails: Option<Arc<DisplayThumbnails>>,
+    /// The out-of-core photographs whose mipmaps are not current, in image
+    /// order, which *Build mipmaps* is to make once the node is appended.
+    /// Empty in a workspace without `mipmap_options`.
+    pub(crate) mipmaps: Vec<PathBuf>,
 }
 
 /// Why a file's open stopped short of a value.
@@ -156,6 +166,7 @@ impl AppState {
                 Ok(Loaded {
                     recon,
                     display_thumbnails,
+                    mipmaps,
                 }) => {
                     log::info!(
                         "Loaded {} points, {} images from {}",
@@ -168,6 +179,7 @@ impl AppState {
                         node.display_thumbnails = display_thumbnails;
                     }
                     made.push(self.append_node(node));
+                    self.queue_opened_mipmaps(mipmaps);
                 }
                 Err(message) => {
                     log::error!("{message}");
@@ -263,11 +275,20 @@ pub(crate) fn load_for_display(
     let wants_bitmaps = recon.point_set.patch_u_halfvec_xyz.is_some()
         && recon.point_set.patch_bitmaps_y_x_rgba.is_none()
         && recon.keypoints_xy().is_some();
-    // Weighed by what each costs: a thumbnail is mostly a `.sift` read, and a
-    // bitmap column is a decode of every photograph and a render per point.
-    let [thumbnails, bitmaps] = rest.split([
+    // Only a photograph in a workspace with `mipmap_options` can be out of
+    // core, so an open in any other reads no photograph's header for it.
+    let mipmap_candidates = in_mipmap_workspaces(&recon);
+    // Weighed by what each costs: a thumbnail is mostly a `.sift` read, a
+    // bitmap column is a decode of every photograph and a render per point,
+    // and a mipmap check is a header and a small file read.
+    let [thumbnails, bitmaps, mipmaps_share] = rest.split([
         if wants_thumbnails { 1.0 } else { 0.0 },
         if wants_bitmaps { 8.0 } else { 0.0 },
+        if mipmap_candidates.is_empty() {
+            0.0
+        } else {
+            0.5
+        },
     ]);
 
     let mut display_thumbnails = None;
@@ -311,10 +332,23 @@ pub(crate) fn load_for_display(
             recon.point_set.reference_observations = Some(column.reference_observations);
         }
     }
+    // After the bitmaps, whose reads make the mipmaps they need.
+    let mut mipmaps = Vec::new();
+    if !mipmap_candidates.is_empty() {
+        let mut phase = mipmaps_share.phase("mipmaps");
+        mipmaps = not_current(&mipmap_candidates, photographs, &phase)?;
+        progress_note!(
+            phase,
+            "{} of {} photographs need their mipmaps made",
+            mipmaps.len(),
+            mipmap_candidates.len()
+        );
+    }
     progress.set_fraction(1.0);
     Ok(Loaded {
         recon,
         display_thumbnails,
+        mipmaps,
     })
 }
 

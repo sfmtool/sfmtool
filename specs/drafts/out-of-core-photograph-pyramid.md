@@ -843,11 +843,14 @@ the budget, so the panel never asks for more than the cache can keep.
   the reconstruction's out-of-core photographs whose files are missing or
   stale (found by a `stat`, the original's header and markers for the region
   test, and one small read each): the selected image first, then the images
-  the Image Browser strip shows, then the rest in image order. A panel that
-  needs a photograph whose mipmap is not current **adds it to the front of
-  the list**: the next run takes it in its chunk, the running chunk being
-  left to finish, and when no run is running or waiting one is queued, under
-  the quiet-task rule that a source keeps at most one waiting entry. While it
+  the Image Browser strip shows, then the rest in image order, behind the
+  photographs a panel has queued and ahead of an earlier open's. Closing a
+  node takes the photographs no node left in the scene has off the list
+  (§ "Open questions" 19). A panel that needs a photograph whose mipmap is
+  not current **adds it to the front of the list**: the next run takes it in
+  its chunk, the running chunk being left to finish, and when no run is
+  running or waiting one is queued, under the quiet-task rule that a source
+  keeps at most one waiting entry. While it
   runs, the Background Tasks panel's quiet line shows it as it shows every
   quiet task, as *Building mipmaps: {done} of {total}*.
 - **A kernel** inside another background task that needs an out-of-core
@@ -3683,7 +3686,60 @@ in core. Step 17 turns the tier on.
       adds to the front of its list in its next run without cancelling the
       running one; and lets a waiting quiet task of higher `QuietRank` (a
       camera model proposal's job) start between its chunks while it has a
-      long list.
+      long list. **Built.**
+      **As built** ([build_mipmaps.rs](../../crates/sfm-explorer/src/state/build_mipmaps.rs),
+      [open.rs](../../crates/sfm-explorer/src/state/open.rs)): the open's
+      worker, after its patch bitmaps (whose reads make the mipmaps they
+      need), reads with `PhotographCache::request_layout` the layout of each
+      photograph in a workspace whose file has `mipmap_options`, on the rayon
+      pool, in a phase `mipmaps` noting `{k} of {n} photographs need their
+      mipmaps made`, and `Loaded` carries those that are `Building`. Which
+      workspaces have the object is found from each image folder's
+      workspace file, read once, so in a workspace without it no
+      photograph's header is read. The GUI thread puts them on the list as
+      it appends the node (`AppState::queue_opened_mipmaps`), in image
+      order. No image of a node that has just opened is selected (appending
+      it selects the node, which clears the image selection), and the Image
+      Browser strip shows it from its first image, so image order is the
+      plan's order: the strip's images first, and the selected image first
+      once there is one, since Image Detail queues it, which moves a path
+      the open queued from further back to the front (`MipmapList` keeps
+      the panels' part of the list and the opens' apart for this). A second
+      open's photographs go ahead of an earlier open's leftovers, since its
+      node is the one selected. Closing a node, or Close All, takes every
+      photograph that no node left in the scene has off the list
+      (`AppState::forget_closed_mipmaps`; § "Open questions" 19): no later
+      run takes one that waits, and a cancelled run does not put back one
+      of its chunk unless an open or a panel queued it again before the run
+      ended, which adds no second copy, though a running chunk is left to
+      finish; the quiet line counts such a photograph neither as done nor
+      in the total. The plan did
+      not name this: the 14e1 list kept a closed node's paths and went on
+      making them, and with the list now holding a whole reconstruction that
+      could be minutes of builds of photographs nothing on screen shows;
+      `sfm ws mipmaps` (15e) is the way to prepare a workspace whose
+      reconstruction is not open. The open's layout reads stay in the cache,
+      so a panel that shows one of the photographs reads none of them again.
+      Nothing here starves another task: a run still gives way to a task
+      someone asks for in the fast queue, and since it ends after each
+      chunk, the first waiting quiet task in `QuietRank`, whatever its rank,
+      starts before the next chunk (the queue starts it when the run ends,
+      before the next frame queues the next run). Tests
+      (`state::build_mipmaps::tests`, in a temporary workspace with a 64 px
+      threshold and 300 x 200 PNGs): the open queues the five out-of-core
+      photographs without a mipmap, and not the in-core one, the one with a
+      current mipmap or the missing one, and an image selected before the
+      first run starts is that run's chunk; a photograph a panel queues
+      while a run is held is the next run's chunk, the held run not asked to
+      stop; a proposal's job queued while a run is held starts between that
+      run and the next, with the list still long; closing one of two nodes
+      of the same file keeps the list, and closing both or Close All empties
+      it; a workspace without the object queues nothing and reads no layout;
+      the list keeps the panels' part ahead of the opens', the newest open's
+      first; and a photograph a running chunk took, dropped by a close and
+      queued again by an open or a panel before the run ends, is on the list
+      once whether the run makes it or is cancelled, one not queued again is
+      not put back, and the quiet line counts a dropped one in neither number.
     - **15c, the thumbnail from the coarsest mip level file.** The display
       thumbnail of an out-of-core photograph whose coarsest mip level file
       is current is made from that file; one whose file is not current gets
@@ -3964,3 +4020,19 @@ decisions.
     *Decided by the user:* (a), as § "Who makes the mipmaps, and when" has
     every reader of the cache make the mipmaps it needs, and the export
     already makes them for its patch bitmaps. Step 15c builds it.
+19. **A closed node's photographs on *Build mipmaps*' list.** Found while
+    building 15b: the open puts a whole reconstruction's out-of-core
+    photographs without a current mipmap on the list, which can be minutes
+    of builds, and the plan does not say what happens to them when the node
+    is closed first. The options:
+    - (a) drop on close: closing a node, or Close All, takes every
+      photograph that no node left in the scene has off the list, so no
+      later run makes it, and `sfm ws mipmaps` (15e) prepares a workspace
+      whose reconstruction is not open;
+    - (b) keep building: the list keeps a closed node's photographs and the
+      task goes on making them, as the 14e1 list did.
+
+    *Decided by the user:* (a), as built in 15b
+    (`AppState::forget_closed_mipmaps`). A chunk a run has already taken
+    is left to finish, but a cancelled run does not put a closed node's
+    photographs back unless an open or a panel queued them again first.
