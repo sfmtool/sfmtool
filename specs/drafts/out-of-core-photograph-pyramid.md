@@ -3710,7 +3710,10 @@ in core. Step 17 turns the tier on.
       photograph that no node left in the scene has off the list
       (`AppState::forget_closed_mipmaps`; § "Open questions" 19): no later
       run takes one that waits, and a cancelled run does not put back one
-      of its chunk, though a running chunk is left to finish. The plan did
+      of its chunk unless an open or a panel queued it again before the run
+      ended, which adds no second copy, though a running chunk is left to
+      finish; the quiet line counts such a photograph neither as done nor
+      in the total. The plan did
       not name this: the 14e1 list kept a closed node's paths and went on
       making them, and with the list now holding a whole reconstruction that
       could be minutes of builds of photographs nothing on screen shows;
@@ -3731,7 +3734,12 @@ in core. Step 17 turns the tier on.
       stop; a proposal's job queued while a run is held starts between that
       run and the next, with the list still long; closing one of two nodes
       of the same file keeps the list, and closing both or Close All empties
-      it; a workspace without the object queues nothing and reads no layout.
+      it; a workspace without the object queues nothing and reads no layout;
+      the list keeps the panels' part ahead of the opens', the newest open's
+      first; and a photograph a running chunk took, dropped by a close and
+      queued again by an open or a panel before the run ends, is on the list
+      once whether the run makes it or is cancelled, one not queued again is
+      not put back, and the quiet line counts a dropped one in neither number.
     - **15c, the thumbnail from the coarsest mip level file.** The display
       thumbnail of an out-of-core photograph whose coarsest mip level file
       is current is made from that file; one whose file is not current gets
@@ -4027,4 +4035,4 @@ decisions.
     *Decided by the user:* (a), as built in 15b
     (`AppState::forget_closed_mipmaps`). A chunk a run has already taken
     is left to finish, but a cancelled run does not put a closed node's
-    photographs back.
+    photographs back unless an open or a panel queued them again first.

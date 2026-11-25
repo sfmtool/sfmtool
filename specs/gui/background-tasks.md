@@ -427,7 +427,8 @@ once while it is there, and draws its waiting state; the code is in
   one.
 - **Its line.** While a run is running, the quiet line says what it does
   and how far it has got, how many photographs have been answered of how
-  many queued since the list was last empty: `quiet Building mipmaps: 3 of
+  many queued since the list was last empty, leaving out a photograph a
+  close took off the list while a run had it: `quiet Building mipmaps: 3 of
   10` (§ "Quiet line").
 
 ## What the user sees

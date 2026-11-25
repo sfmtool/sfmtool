@@ -717,7 +717,8 @@ fn an_opens_photographs_wait_behind_the_panels_and_ahead_of_an_earlier_opens() {
 /// A photograph a running chunk took, dropped from the list by a close and
 /// queued again before the run ends, by an open or by a panel, is never on
 /// the list twice: a run that makes it leaves no copy waiting, and one that
-/// is cancelled puts it back once. One no one queues again is not put back.
+/// is cancelled puts it back once. One no one queues again is not put back,
+/// and the quiet line counts it neither as done nor in the total.
 #[test]
 fn a_photograph_queued_again_while_its_chunk_runs_is_on_the_list_once() {
     let x = || PathBuf::from("x");
@@ -756,4 +757,14 @@ fn a_photograph_queued_again_while_its_chunk_runs_is_on_the_list_once() {
     assert!(list.waiting().is_empty(), "dropped and not queued again");
     list.queue(&x());
     assert_eq!(list.waiting(), [x()], "a panel queues it afresh");
+
+    let mut list = super::MipmapList::default();
+    list.queue_opened(vec![PathBuf::from("a"), x(), PathBuf::from("y")]);
+    list.take(1);
+    list.answered(Path::new("a"));
+    list.take(1);
+    list.keep_only(|path| path != Path::new("x"));
+    assert_eq!(list.progress_label(), "Building mipmaps: 1 of 2");
+    list.answered(&x());
+    assert_eq!(list.progress_label(), "Building mipmaps: 1 of 2");
 }
