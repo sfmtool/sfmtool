@@ -3,6 +3,7 @@
 
 use std::ops::Range;
 
+use super::gpu_types::BG_COLOR;
 use super::recon::ReconResources;
 use super::SceneRenderer;
 
@@ -208,14 +209,6 @@ impl SceneRenderer {
             return;
         };
 
-        // BG_COLOR as wgpu::Color (linear sRGB ≈ (30, 30, 35))
-        let bg_color = wgpu::Color {
-            r: 0.013,
-            g: 0.013,
-            b: 0.017,
-            a: 1.0,
-        };
-
         // ── Pass 0: Background image (camera view only) ──
         // Renders the camera's photograph into edl_output, cleared to BG_COLOR
         // so letterbox/pillarbox bars match the normal background.
@@ -227,7 +220,7 @@ impl SceneRenderer {
                     view: edl_output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(bg_color),
+                        load: wgpu::LoadOp::Clear(BG_COLOR),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -444,7 +437,7 @@ impl SceneRenderer {
             let edl_load_op = if has_bg_image {
                 wgpu::LoadOp::Load
             } else {
-                wgpu::LoadOp::Clear(bg_color)
+                wgpu::LoadOp::Clear(BG_COLOR)
             };
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

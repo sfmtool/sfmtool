@@ -277,8 +277,8 @@ impl SceneRenderer {
             let uniforms = EdlUniforms {
                 screen_size: [w as f32, h as f32],
                 radius: edl_line_thickness,
-                strength: 0.7,
-                opacity: 1.0,
+                strength: EDL_STRENGTH,
+                opacity: EDL_OPACITY,
                 point_size,
                 target_view_pos: [target_view_pos[0], target_view_pos[1]],
                 target_view_z: target_view_pos[2],

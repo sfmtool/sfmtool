@@ -477,6 +477,24 @@ pub(super) struct TargetIndicatorUniforms {
     pub(crate) screen_size_ps: [f32; 4],    // xy = screen_size, z = point_size, w = line_half_width
 }
 
+/// The 3D view's background in linear light, which the sRGB target shows as
+/// (30, 30, 35): the clear colour of the scene's output, and the colour the
+/// EDL pass's `BACKGROUND_COLOR` names to decide whether a point is darker than
+/// the background.
+pub(super) const BG_COLOR: wgpu::Color = wgpu::Color {
+    r: 0.013,
+    g: 0.013,
+    b: 0.017,
+    a: 1.0,
+};
+
+/// The EDL pass's `strength`: the decay rate of its shade with the depth
+/// response, which is in units of the point size.
+pub(super) const EDL_STRENGTH: f32 = 0.7;
+
+/// The EDL pass's `opacity`: how much of its shade a point pixel takes.
+pub(super) const EDL_OPACITY: f32 = 1.0;
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct EdlUniforms {

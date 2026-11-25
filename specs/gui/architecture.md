@@ -344,8 +344,8 @@ Pass 1e: The Track Table filter's dimmed points and surfels
 
 Pass 2:  EDL post-process
   Input:  Color + linear depth textures
-  Output: EDL output texture (edge darkening + supernova glow; loaded after
-          Pass 0, cleared to BG_COLOR otherwise)
+  Output: EDL output texture (edge darkening, a dark point's light rim +
+          supernova glow; loaded after Pass 0, cleared to BG_COLOR otherwise)
 
 Pass 2b: Hidden outlines (while a drawn surfel is highlighted)
   Input:  Patch instances + hw depth (read-only, compared Less)

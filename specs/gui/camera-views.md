@@ -864,7 +864,11 @@ rendered.
   - Frustum pixels (`depth <= 0`): `vec4(color.rgb, alpha)`. The
     `color.rgb` from Pass 1 is already premultiplied.
   - Point pixels (`depth > 0`): apply EDL shading and supernova, then
-    output `vec4((color.rgb * shade_factor + supernova) * alpha, alpha)`.
+    output `vec4(edl_shade(color.rgb, alpha, response) + supernova * alpha, alpha)`,
+    where `edl_shade` is the premultiplied colour times the shade plus a dark
+    point's rim times its alpha
+    ([point-cloud-rendering.md](point-cloud-rendering.md#algorithm) §
+    "Algorithm").
     The blend hardware adds `background × (1 − alpha)`, reproducing the
     same composite formula but against the actual background content.
 

@@ -636,7 +636,7 @@ fn the_splat_and_the_outline_share_the_highlight_colours_and_the_bench_stroke() 
 
 /// The sRGB transfer function, `IEC 61966-2-1`, in `f64`: the reference the
 /// shaders' decode is checked against.
-fn srgb_to_linear_reference(encoded: f64) -> f64 {
+pub(super) fn srgb_to_linear_reference(encoded: f64) -> f64 {
     if encoded <= 0.04045 {
         encoded / 12.92
     } else {
