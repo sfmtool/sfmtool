@@ -544,7 +544,7 @@ impl PhotographRequests {
     }
 
     /// Start `task` where these requests start theirs: on the rayon pool, or
-    /// in the tests on the queue [`Self::queued`] holds back.
+    /// in the tests on the queue `Self::queued` holds back.
     pub(super) fn spawn(&self, task: impl FnOnce() + Send + 'static) {
         (self.spawn)(Box::new(task));
     }
