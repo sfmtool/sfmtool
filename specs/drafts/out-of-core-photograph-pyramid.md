@@ -845,11 +845,12 @@ the budget, so the panel never asks for more than the cache can keep.
   test, and one small read each): the selected image first, then the images
   the Image Browser strip shows, then the rest in image order, behind the
   photographs a panel has queued and ahead of an earlier open's. Closing a
-  node takes the photographs no node left in the scene has off the list. A panel that
-  needs a photograph whose mipmap is not current **adds it to the front of
-  the list**: the next run takes it in its chunk, the running chunk being
-  left to finish, and when no run is running or waiting one is queued, under
-  the quiet-task rule that a source keeps at most one waiting entry. While it
+  node takes the photographs no node left in the scene has off the list
+  (§ "Open questions" 19). A panel that needs a photograph whose mipmap is
+  not current **adds it to the front of the list**: the next run takes it in
+  its chunk, the running chunk being left to finish, and when no run is
+  running or waiting one is queued, under the quiet-task rule that a source
+  keeps at most one waiting entry. While it
   runs, the Background Tasks panel's quiet line shows it as it shows every
   quiet task, as *Building mipmaps: {done} of {total}*.
 - **A kernel** inside another background task that needs an out-of-core
@@ -3706,9 +3707,11 @@ in core. Step 17 turns the tier on.
       the panels' part of the list and the opens' apart for this). A second
       open's photographs go ahead of an earlier open's leftovers, since its
       node is the one selected. Closing a node, or Close All, takes every
-      photograph that no node left in the scene has off the list, waiting or
-      in a running chunk (`AppState::forget_closed_mipmaps`), which the plan
-      did not name: the 14e1 list kept a closed node's paths and went on
+      photograph that no node left in the scene has off the list
+      (`AppState::forget_closed_mipmaps`; § "Open questions" 19): no later
+      run takes one that waits, and a cancelled run does not put back one
+      of its chunk, though a running chunk is left to finish. The plan did
+      not name this: the 14e1 list kept a closed node's paths and went on
       making them, and with the list now holding a whole reconstruction that
       could be minutes of builds of photographs nothing on screen shows;
       `sfm ws mipmaps` (15e) is the way to prepare a workspace whose
@@ -4009,3 +4012,19 @@ decisions.
     *Decided by the user:* (a), as § "Who makes the mipmaps, and when" has
     every reader of the cache make the mipmaps it needs, and the export
     already makes them for its patch bitmaps. Step 15c builds it.
+19. **A closed node's photographs on *Build mipmaps*' list.** Found while
+    building 15b: the open puts a whole reconstruction's out-of-core
+    photographs without a current mipmap on the list, which can be minutes
+    of builds, and the plan does not say what happens to them when the node
+    is closed first. The options:
+    - (a) drop on close: closing a node, or Close All, takes every
+      photograph that no node left in the scene has off the list, so no
+      later run makes it, and `sfm ws mipmaps` (15e) prepares a workspace
+      whose reconstruction is not open;
+    - (b) keep building: the list keeps a closed node's photographs and the
+      task goes on making them, as the 14e1 list did.
+
+    *Decided by the user:* (a), as built in 15b
+    (`AppState::forget_closed_mipmaps`). A chunk a run has already taken
+    is left to finish, but a cancelled run does not put a closed node's
+    photographs back.

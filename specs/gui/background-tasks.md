@@ -381,10 +381,11 @@ once while it is there, and draws its waiting state; the code is in
   workspace without `mipmap_options` reads no photograph for it and queues
   nothing.
 - **Emptied on close.** Closing a node, or Close All, takes every photograph
-  that no node left in the scene has off the list, waiting or in the chunk
-  a run has taken, so the task makes no mipmap that nothing on screen can
-  show (`AppState::forget_closed_mipmaps`). The same photographs opened in
-  two nodes stay until both are closed.
+  that no node left in the scene has off the list
+  (`AppState::forget_closed_mipmaps`): no later run takes one that waits,
+  and a run that has taken one in its chunk goes on to make it but does
+  not put it back if it is cancelled. The same photographs opened in two
+  nodes stay until both are closed.
 
 - **One chunk a run.** Each run takes one chunk from the front of the list,
   as many photographs as the cache's build budget lets it make at once
@@ -975,9 +976,9 @@ of the bar. Each file's stages sit under a phase `open` of its own:
 
 The file's share of the bar splits 1 : 9 between the read and the rest, and the
 rest 1 : 8 : 0.5 between thumbnails, bitmaps and mipmaps, a stage the file does
-not need taking a weight of zero. The `mipmaps` stage runs after the bitmaps,
-whose reads make the mipmaps they need. The thumbnail rows come from each image's verified `.sift`
-first and its photograph second
+not need taking a weight of zero. The `mipmaps` stage runs after the
+bitmaps, whose reads make the mipmaps they need. The thumbnail rows come from
+each image's verified `.sift` first and its photograph second
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
 loading"). The bitmaps are the render `sfm xform --add-patch-bitmaps` runs,
 `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`: each point

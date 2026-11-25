@@ -405,7 +405,7 @@ impl AppState {
 
     /// Take every photograph that no node in the scene has off *Build
     /// mipmaps*' list, after a node is closed: no panel waits on it any
-    /// more, so the task does not make its mipmap.
+    /// more, so no later run makes its mipmap.
     pub(crate) fn forget_closed_mipmaps(&self) {
         let mut list = lock(&self.photograph_requests.mipmaps);
         if list.queued.is_empty() {
