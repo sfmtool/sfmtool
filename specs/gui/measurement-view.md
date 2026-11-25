@@ -1072,12 +1072,12 @@ in-memory reconstruction can hold, draws no mark and so no line. An item with
 one endpoint placed, such as a new one, draws that mark alone.
 
 **Hover and click.** Hovering a mark or a line in either view shows the
-measurement's row text beside the pointer, right of and below it where that
-fits and on another side of it where it does not (G6), the Scene tree row's for
-a stored measurement and, for the item, its label with the reading, or with
-where each endpoint is while one is not placed or no stated distance is given;
-the pointer takes the pointing hand. A click on a stored measurement's line selects the
-measurement (G1); a click on a mark selects the measurement and that endpoint,
+measurement's row text beside the pointer: the Scene tree row's for a stored
+measurement and, for the item, its label with the reading, or with where each
+endpoint is while one is not placed or no stated distance is given. The text
+sits right of and below the pointer where that fits and on another side of it
+where it does not (G6), and the pointer takes the pointing hand. A click on a
+stored measurement's line selects the measurement (G1); a click on a mark selects the measurement and that endpoint,
 as a click on the endpoint block does (§ "Endpoint gestures"), and a
 double-click on it does what a double-click on the block does, camera view
 through the endpoint's image turned toward its pixel. On the focused item a
