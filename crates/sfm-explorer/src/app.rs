@@ -808,10 +808,10 @@ impl App {
         );
 
         // The focused item, as the figure the 3D viewer built out of
-        // what the dock handed it. Rebuilt and re-uploaded every frame rather
-        // than gated on a change the way the rays are: the arrowhead's barbs
-        // turn to face the eye, so a camera move alone invalidates it, and it
-        // is a few hundred instances.
+        // what the dock handed it. Handed over every frame and written only
+        // when it differs from the figure last written: nothing in it depends
+        // on the camera, the arrowhead's barbs turning to face the eye in the
+        // shader, so a frame that changed only the view writes nothing.
         self.scene_renderer
             .upload_bench_track(device, queue, self.viewer_3d.bench_figure.as_ref());
         // The measurements' rings, dots and lines, only when the 3D viewer

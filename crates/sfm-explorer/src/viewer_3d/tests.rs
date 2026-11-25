@@ -1263,7 +1263,10 @@ fn normal_segment(staged: &Staged) -> (egui::Pos2, egui::Pos2) {
     let arrow = figure(&staged.viewer)
         .normal
         .expect("a finite patch frame carries its normal");
-    (on_panel(staged, arrow[0].a), on_panel(staged, arrow[0].b))
+    (
+        on_panel(staged, arrow.shaft.a),
+        on_panel(staged, arrow.shaft.b),
+    )
 }
 
 /// Where observation `observation`'s circle sits, in panel px.
@@ -1274,6 +1277,41 @@ fn circle(staged: &Staged, observation: usize) -> egui::Pos2 {
         .find(|mark| mark.observation == observation)
         .expect("that observation draws a mark");
     on_panel(staged, mark.segment.b)
+}
+
+/// The figure a frame builds does not depend on the camera: orbiting off the
+/// normal, to the side, nearly down it and straight down it, and zooming in
+/// all leave it equal to the figure the first view built, so the upload, which
+/// writes only a figure that differs, writes nothing for it
+/// (`scene_renderer::bench_track::tests::an_upload_of_the_figure_last_written_writes_nothing`).
+#[test]
+fn a_camera_move_leaves_the_bench_figure_as_it_was() {
+    let mut staged = staged();
+    let track = staged.track();
+    let patch_frame = patch_frame_of(&track);
+    let before = figure(&staged.viewer).clone();
+    assert!(
+        before.normal.is_some(),
+        "the arrow is part of what is compared"
+    );
+
+    for (degrees, standoff) in [
+        (30.0, STANDOFF),
+        (80.0, STANDOFF),
+        (0.5, STANDOFF),
+        (0.0, 4.0),
+    ] {
+        look_off_normal(&mut staged.viewer, &patch_frame, degrees, standoff);
+        staged.settle(&track);
+        assert_eq!(
+            figure(&staged.viewer),
+            &before,
+            "{degrees} degrees off the normal, {standoff} half-lengths out"
+        );
+    }
+    staged.viewer.camera.fov *= 0.5;
+    staged.settle(&track);
+    assert_eq!(figure(&staged.viewer), &before, "zoomed in");
 }
 
 /// What one gesture over the bench figure produced.

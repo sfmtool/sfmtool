@@ -6,8 +6,10 @@
 // per observation) and the drawn measurements' marks and lines; and the bench
 // figure's filled centre disc,
 // from a vertex buffer of its own. Each overlay piece is one instance: a
-// segment, drawn as a ribbon facing the eye, or a ring or a disc, drawn as a
-// quad facing the eye with its shape cut out of it in the fragment shader.
+// segment, drawn as a ribbon facing the eye; a barb, a segment whose far end
+// this shader places each frame so that the arrowhead faces the eye; or a ring
+// or a disc, drawn as a quad facing the eye with its shape cut out of it in the
+// fragment shader.
 // Sizes are in panel points, and edges are anti-aliased over about one point.
 // A segment can be cut short on screen at either end by an inset in points,
 // which a measurement's line is so that it stops at its rings.
@@ -52,6 +54,12 @@ const FLOOR_OPACITY: f32 = 0.15;
 // OverlayInstance::kind.
 const KIND_SEGMENT: u32 = 0u;
 const KIND_RING: u32 = 1u;
+const KIND_DISC: u32 = 2u;
+const KIND_BARB: u32 = 3u;
+
+// Below this sine of the angle between a barb's shaft and its line of sight,
+// the cross product a barb's side is taken from names no direction.
+const BARB_MIN_SINE: f32 = 1.0e-5;
 
 // OverlayInstance::flags. HOLD is FADE's absence.
 const FLAG_FADE: u32 = 1u;
@@ -159,7 +167,7 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
     out.shape = vec3<f32>(f32(in.kind), radius_px, half_px);
     out.past_ends = vec2<f32>(NOT_CUT, NOT_CUT);
 
-    if in.kind != KIND_SEGMENT {
+    if in.kind == KIND_RING || in.kind == KIND_DISC {
         // A ring or a disc: a quad facing the eye about its projected centre.
         // One whose centre is behind the near plane draws nothing.
         let v = to_view(in.a, pull);
@@ -177,6 +185,16 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
 
     var va = to_view(in.a, pull);
     var vb = to_view(in.b, pull);
+    if in.kind == KIND_BARB {
+        // A barb: the segment from its tip to its far end, which stands to the
+        // side of its foot that faces this frame's eye. Drawn and covered as a
+        // segment from here on.
+        if in.a.w == 0.0 || in.b.w == 0.0 {
+            return clipped(in.color);
+        }
+        vb = vec4<f32>(barb_end(va.xyz, vb.xyz, in.radius), 1.0);
+        out.shape = vec3<f32>(f32(KIND_SEGMENT), 0.0, half_px);
+    }
     // How far in from each end the segment is drawn, in pixels. An end
     // clipped at the near plane is drawn from where it is clipped: what it
     // was inset from, a measurement's ring, is behind the eye and not drawn.
@@ -266,6 +284,31 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
         select(NOT_CUT, along - drawn_len, cut_b),
     );
     return out;
+}
+
+// Where a barb ends, in view space, where the eye is the origin: `tan_angle`
+// times its length back along the shaft, from `tip` to `foot`, out to one side
+// of `foot`. The side is square to the shaft and as square to the line of
+// sight as it can be, along shaft x (eye - tip), so the arrowhead never goes
+// edge-on; geometry::arrow squares Image Detail's barbs to its camera the same
+// way. Where the shaft points straight at the eye that product names no
+// direction, and the side square to both the shaft and the view's vertical
+// stands in, across the screen; then the view's horizontal, for a shaft along
+// the vertical. The sign of `tan_angle` picks the side.
+fn barb_end(tip: vec3<f32>, foot: vec3<f32>, tan_angle: f32) -> vec3<f32> {
+    let shaft = tip - foot;
+    let back = length(shaft);
+    if back == 0.0 {
+        return foot;
+    }
+    var side = cross(shaft, -tip);
+    if length(side) <= BARB_MIN_SINE * back * length(tip) {
+        side = cross(shaft, vec3<f32>(0.0, 1.0, 0.0));
+        if length(side) <= BARB_MIN_SINE * back {
+            side = cross(shaft, vec3<f32>(1.0, 0.0, 0.0));
+        }
+    }
+    return foot + normalize(side) * (tan_angle * back);
 }
 
 // The place on the segment from clip_a to clip_b, both in front of the eye,

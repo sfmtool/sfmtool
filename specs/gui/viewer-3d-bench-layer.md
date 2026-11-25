@@ -67,8 +67,8 @@ figure (§ "Depth against the scene"), and has no handle in this view
 **While a handle is held, what is drawn is the preview.** The figure is rebuilt
 from the track the release would push, through the same call the release goes
 through, so there is one answer rather than a drawn guess beside a pushed
-result. The figure is also rebuilt after the frame's input has moved the camera,
-because the arrowhead's barbs are squared to the eye.
+result. Nothing in the figure depends on the camera: the arrowhead's barbs are
+squared to the eye by the shader (§ "The overlay ribbon store").
 
 ## What is drawn
 
@@ -91,8 +91,13 @@ half-length states the whole of its size.
   length, ending in an arrowhead of two barbs. Each barb runs from `a` back to
   `a - 0.5h n +/- 0.2h b`, where `b` is the unit vector along `n x (eye - a)`:
   perpendicular to the normal and as square to the viewer as it can be, so the
-  head never goes edge-on. When the normal points straight at the eye that cross
-  product vanishes and the patch's own `u` stands in.
+  head never goes edge-on. The shader works `b` out each frame from the tip,
+  the foot `a - 0.5h n` and the barbs' angle, so the figure holds nothing that
+  depends on the eye. When the normal points straight at the eye that cross
+  product vanishes, and the unit vector square to the normal and to the view's
+  vertical stands in, so the head lies across the screen. Image Detail, which
+  draws the same arrow through `bench::geometry::arrow` on the CPU, takes the
+  patch's own `u` there instead.
 - **One mark per observation**, all of them whatever their verdict, each in that
   observation's own verdict colour. An observation already judged *in* is
   exactly the one whose answer is worth having in view. The mark is the reverse
@@ -210,13 +215,13 @@ rather than the store's rings, which face the eye. The filled centre disc is a
 **triangle list** in that plane, for the same reason. A triangle cannot be
 clipped a vertex at a time the way a segment can, so a disc vertex behind the
 near plane drops its whole triangle; the disc is an eighth of a half-length
-across, so its three corners agree in every view but a grazing one. The figure
-is rebuilt on the CPU every frame it is drawn, since the barbs turn to face the
-eye and there is no state to key it on that a camera move does not invalidate.
-It is a few hundred instances. Its segments are written into the figure's
-region of the store, and its disc into a vertex buffer of its own, made again
-each frame: a disc is three vertices per triangle rather than an instance,
-drawn by a pipeline of its own.
+across, so its three corners agree in every view but a grazing one. The
+arrowhead's two barbs are each one **barb** instance of the store, which the
+shader turns to face the eye. The figure's segments and barbs are written into
+the figure's region of the store, and its disc into a vertex buffer of its own:
+a disc is three vertices per triangle rather than an instance, drawn by a
+pipeline of its own. Both are written only when the figure changes (§ "The
+overlay ribbon store").
 
 **The same shader draws the 3D view's measurements**, in the same call
 ([`measurement-view.md`](measurement-view.md) § "Drawing measurements"). Their
@@ -279,12 +284,12 @@ built from nothing that depends on the camera
 ```rust
 #[repr(C)]
 pub(crate) struct OverlayInstance {
-    pub(crate) a: [f32; 4],     // a segment's one end; a ring's or a disc's centre
-    pub(crate) b: [f32; 4],     // a segment's other end
+    pub(crate) a: [f32; 4],     // a segment's one end; a barb's tip; a ring's or a disc's centre
+    pub(crate) b: [f32; 4],     // a segment's other end; a barb's foot
     pub(crate) color: [f32; 4], // not premultiplied, in the target's colour space
     pub(crate) half_width: f32, // half the stroke's width, in panel points
-    pub(crate) radius: f32,     // a ring's or a disc's radius, in panel points
-    pub(crate) kind: u32,       // SEGMENT, RING or DISC
+    pub(crate) radius: f32,     // a ring's or a disc's radius, in panel points; a barb's signed tan angle
+    pub(crate) kind: u32,       // SEGMENT, RING, DISC or BARB
     pub(crate) flags: u32,      // HOLD or FADE, and PULL_TOWARD_EYE
     pub(crate) inset: [f32; 2], // how far in from a and from b a segment is drawn, in panel points
 }
@@ -292,6 +297,9 @@ pub(crate) struct OverlayInstance {
 // A measurement's ring about its endpoint, which the pass turns to face the eye.
 OverlayInstance::ring(centre, color, MARK_RADIUS, LINE_WIDTH / 2.0,
     OverlayInstance::HOLD | OverlayInstance::PULL_TOWARD_EYE)
+// One barb of the bench figure's arrowhead, which the pass also turns to face it.
+OverlayInstance::barb(tip, foot, BARB_TAN_ANGLE as f32, color,
+    BENCH_LINE_HALF_WIDTH, OverlayInstance::FADE)
 ```
 
 Places are homogeneous world points, `w = 1` for a place and `w = 0` for a
@@ -337,6 +345,21 @@ nothing:
   anti-aliased over a point as the sides are, while an end that is not cut
   stays square where it is, which is how the figure's segments, never inset,
   meet at its corners.
+- **Barbs** are segments whose far end the shader places. A barb's `a` is an
+  arrowhead's tip and its `b` the foot, the point of the shaft its far end
+  stands beside; its `radius` is the tangent of its angle to the shaft, signed
+  by the side it stands on. In view space, where the eye is the origin, the
+  shader stands the far end `|tip - foot| * radius` from the foot along the unit
+  vector of `(tip - foot) x (eye - tip)`, square to the shaft and as square to
+  the line of sight as it can be, and from there draws, clips and covers the
+  barb as the segment from the tip to that end. Where that product is shorter
+  than `1e-5` of the two lengths it is taken from, the shaft pointing at the
+  eye, the side square to the shaft and to the view's vertical stands in (to
+  its horizontal, for a shaft along the vertical). A barb with a direction for
+  either end draws nothing. The side is the only thing about a barb that
+  depends on the eye, so an arrowhead turned this way needs no camera in its
+  instances. The kind keeps `radius`, which a segment does not use, rather than
+  widening every instance by a field of its own.
 - **Rings and discs** are one instance each. The shader projects the centre and
   expands a square of `radius + half_width` points, plus the anti-aliasing's
   point, aligned to the screen around it; the fragment shader draws the annulus
@@ -374,7 +397,7 @@ nothing:
   target, and the measurements on their layer. The scene target's pass draws
   its regions one at a time (`draw_producer`), since the figure's centre disc,
   which is not in the store, is drawn between them: the rays, then the disc,
-  then the figure's segments.
+  then the figure's segments and barbs.
 - **Order within a region.** A producer lays out its own instances with every
   halo first, then every stroke, then every dot, so one item's halo never
   crosses another's stroke.
@@ -385,14 +408,23 @@ changes, which is what it keys its instances on:
 | Producer | Target | Writes |
 |---|---|---|
 | Track rays | `Scene` | when its key changes: the selected point and the version that holds it (`app::selected_point_source`), whether that point is live and its node visible (`app::track_ray_source`), and the node's display transform |
-| Bench figure | `Scene` | every frame it is drawn: the arrowhead's barbs turn to face the eye, so a camera move changes it |
+| Bench figure | `Scene` | when the figure changes: the figure itself is the key (`viewer_3d::bench_track::Figure`), handed to the upload every frame and compared with the figure last written, its centre disc's buffer included |
 | Measurements | `MeasurementLayer` | when its key changes: each drawn node's document serial, display transform and tint, the selected measurement and endpoint, the focused item's `Arc`, *Show all measurements*, and the visible nodes (`measurement_marks::MeasurementLayerKey`) |
 
 The measurements' key and the track rays' cover everything their instances are
 built from, so orbiting, zooming and resizing the panel build nothing and write
 nothing for either ([`measurement-view.md`](measurement-view.md) § "Drawing
-measurements"). The figure's centre disc is not in the store (§ "Depth against
-the scene").
+measurements"). The bench figure is built every frame, since the handles read
+it ([`viewer_3d/mod.rs`](../../crates/sfm-explorer/src/viewer_3d/mod.rs)), from
+the focused item, the preview a held handle draws, the node's edited
+reconstruction, similarity and the selected observation row; and nothing in it
+depends on the camera, the barbs turning in the shader. So it is its own key: a
+key of what it is built from would have to name the track, the preview and the
+version, where the figure, a few hundred points, says exactly what is drawn. A
+camera move, a zoom or a resize leaves it equal, and the upload writes neither
+its region nor its centre disc, which is not in the store (§ "Depth against the
+scene"); the disc lies in the patch's plane and depends on the camera no more
+than the segments do.
 
 **The track rays** are one segment per observation of the selected point, from
 the observing camera's centre to the nearest point on its observation ray to the
@@ -407,10 +439,6 @@ profile at 100% scale of the glow, 1.5 pixels to either side, that the rays
 were drawn with before.
 While the camera model proposal's preview moves the selected point, the scene
 pass leaves the rays' region undrawn.
-
-[`../drafts/overlay-ribbons.md`](../drafts/overlay-ribbons.md) describes the
-step that is left: whether the figure's barbs should turn in the shader so that
-its key no longer holds the camera.
 
 ## The handles
 
@@ -806,6 +834,7 @@ Every value here is a constant of the module named beside it, not a setting.
 | `NORMAL_LENGTH` | `2.0` | how far the normal's segment stands off the square, in half-lengths |
 | `BARB_BACK` | `0.25` | how far back along the normal the barbs reach, as a fraction of its length |
 | `BARB_SIDE` | `0.1` | how far to either side they reach, in the same units |
+| `BARB_TAN_ANGLE` | `BARB_SIDE / BARB_BACK` | the tangent of each barb's angle to the normal, which a barb instance carries |
 | `MAX_BEARING_ANGLE_DEG` | `85.0` | how far from a bearing a pointer may point, in degrees |
 | `AIM_ANGLE_DEG` | `45.0` | how near the line of sight the normal must lie for the arrowhead to aim |
 | `AIM_LEVER` | `2 * NORMAL_LENGTH` | the aim's lever, in half-lengths, stated in terms of the arrow's own length |
@@ -816,7 +845,8 @@ literal, because the arrow a person sees and the travel their pointer turns it
 by are two facts about one handle and a second literal could drift from the
 first silently. The arrow's three constants live with the geometry rather than
 with this layer because Image Detail draws the same arrow, through
-`bench::geometry::arrow`, the one construction both panels build it by.
+`bench::geometry::arrow`, which builds on `bench::geometry::arrow_shaft`, the
+tip and foot the 3D viewport hands its shader.
 
 ## Testing
 
@@ -835,8 +865,10 @@ wgpu's `noop` backend, where wgpu-core still performs its full validation while
 wgpu-hal stubs the driver: a vertex layout that disagrees with the instance
 struct, or a uniform block whose Rust side has drifted from the WGSL, is a
 validation error there rather than a blank pass on a real GPU. The same tests
-check that the figure's pieces are segments at the bench's width in points with
-the `FADE` flag and no pull, that the measurements' upload holds the instances
+check that the figure's pieces are segments and two barbs at the bench's width
+in points with the `FADE` flag and no pull, that an upload of the figure last
+written writes neither its region nor its disc while a changed figure is
+written, that the measurements' upload holds the instances
 it is handed and empties its region for none, and that the camera block carries
 the projection, the pixels per point and the pull fraction the frame handed it.
 The pass contract runs the renderer's own pass over all three producers'
@@ -849,7 +881,13 @@ on no `noop` device, so it is checked by eye, with MCP screenshots of the
 viewport showing a square lying on a surface, one in front of it and one behind
 it, rings and lines of measurements in front of and behind the scene, and a
 line that stops at its rings and runs off the view where it is clipped
-([`mcp-server.md`](mcp-server.md)). `scene_renderer/pipelines/tests.rs` holds
+([`mcp-server.md`](mcp-server.md)). Where a barb's far end goes is checked by
+a mirror of the shader's `barb_end` in Rust, whose lines and the barb branch of
+`vs_overlay` are pinned in the shader's text, against `bench::geometry::arrow`
+squared to the same eye from views off the normal and nearly down it, and
+straight down it against the screen's horizontal. `viewer_3d/tests.rs` checks
+that orbiting, zooming and looking down the normal leave the figure a frame
+builds equal. `scene_renderer/pipelines/tests.rs` holds
 the shader's insets to their rules in its source: an end clipped at the near
 plane not inset, a segment shorter than its insets dropped, the cut ends placed
 on the segment and anti-aliased.

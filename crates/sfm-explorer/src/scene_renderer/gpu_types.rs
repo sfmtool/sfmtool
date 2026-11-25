@@ -109,8 +109,8 @@ pub(super) struct CompassEdgeInstance {
 
 /// One piece of an overlay figure, as the
 /// [overlay ribbon store](super::overlay_ribbons::OverlayRibbons) holds it: a
-/// segment, a ring or a disc of a track ray, of the bench figure or of a drawn
-/// measurement.
+/// segment, a barb, a ring or a disc of a track ray, of the bench figure or of
+/// a drawn measurement.
 ///
 /// Nothing in it depends on the camera. Its places are homogeneous world
 /// points, `w = 1.0` for a place and `w = 0.0` for a direction, which is drawn
@@ -119,7 +119,8 @@ pub(super) struct CompassEdgeInstance {
 /// `pixels_per_point`, and the pull toward the eye a flagged piece is drawn
 /// with is the frame's too ([`BenchTrackUniforms`]). So a producer builds its
 /// instances once from what it draws, and a camera move, a zoom or a resize
-/// writes nothing.
+/// writes nothing. That includes a barb, which the shader turns to face the
+/// eye each frame ([`Self::barb`]).
 ///
 /// Wider than [`CompassEdgeInstance`] because the compass is one object in one
 /// colour, while this pass's pieces each carry their own: the track rays'
@@ -128,23 +129,26 @@ pub(super) struct CompassEdgeInstance {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct OverlayInstance {
-    /// A segment's one end; a ring's or a disc's centre.
+    /// A segment's one end; a barb's tip; a ring's or a disc's centre.
     pub(crate) a: [f32; 4],
-    /// A segment's other end; unused by a ring or a disc.
+    /// A segment's other end; a barb's foot; unused by a ring or a disc.
     pub(crate) b: [f32; 4],
     /// Not premultiplied, in the colour space of the target it is drawn into.
     pub(crate) color: [f32; 4],
     /// Half the stroke's width, in panel points; 0 for a disc.
     pub(crate) half_width: f32,
-    /// A ring's or a disc's radius, in panel points; 0 for a segment.
+    /// A ring's or a disc's radius, in panel points; for a barb, the tangent
+    /// of its angle to the line from its foot to its tip, signed by the side
+    /// it stands on ([`Self::barb`]); 0 for a segment.
     pub(crate) radius: f32,
-    /// [`Self::SEGMENT`], [`Self::RING`] or [`Self::DISC`].
+    /// [`Self::SEGMENT`], [`Self::RING`], [`Self::DISC`] or [`Self::BARB`].
     pub(crate) kind: u32,
     /// How its part behind the scene is drawn, [`Self::HOLD`] or
     /// [`Self::FADE`], with [`Self::PULL_TOWARD_EYE`] or not.
     pub(crate) flags: u32,
     /// How many panel points in from `a` and from `b` a segment starts and
-    /// stops on screen ([`Self::inset`]); `[0, 0]` for a ring or a disc.
+    /// stops on screen ([`Self::inset`]); `[0, 0]` for a barb, a ring or a
+    /// disc.
     pub(crate) inset: [f32; 2],
 }
 
@@ -157,6 +161,10 @@ impl OverlayInstance {
     /// A filled circle facing the eye, `radius` points from its centre to its
     /// edge.
     pub(crate) const DISC: u32 = 2;
+    /// A straight stroke from an arrowhead's tip back to one side of its
+    /// shaft, a ribbon facing the eye, whose side the shader chooses each
+    /// frame ([`Self::barb`]).
+    pub(crate) const BARB: u32 = 3;
 
     /// Behind the scene it is held at `BEHIND_OPACITY`, however far behind,
     /// as a measurement and a track ray are and as a highlighted surfel's
@@ -202,6 +210,39 @@ impl OverlayInstance {
         Self {
             inset: [at_a, at_b],
             ..self
+        }
+    }
+
+    /// A barb of the arrowhead whose tip is `tip`: a stroke from `tip` to the
+    /// point `tan_angle` times the distance from `tip` to `foot` to one side
+    /// of `foot`, `half_width` points to either side.
+    ///
+    /// The side is square to the line from `foot` to `tip` and as square to
+    /// the line of sight as it can be, along `(tip - foot) x (eye - tip)`, so
+    /// the head never goes edge-on. The shader works it out each frame, so the
+    /// instance holds nothing that depends on the camera. A negative
+    /// `tan_angle` stands the barb on the other side, which is how an
+    /// arrowhead's two barbs differ. Where the line points straight at the eye
+    /// that product vanishes, and the shader stands the barb across the
+    /// screen's vertical instead. `tip` and `foot` are places, `w = 1`; a barb
+    /// with a direction for either draws nothing.
+    pub(crate) fn barb(
+        tip: [f32; 4],
+        foot: [f32; 4],
+        tan_angle: f32,
+        color: [f32; 4],
+        half_width: f32,
+        flags: u32,
+    ) -> Self {
+        Self {
+            a: tip,
+            b: foot,
+            color,
+            half_width,
+            radius: tan_angle,
+            kind: Self::BARB,
+            flags,
+            inset: [0.0; 2],
         }
     }
 
