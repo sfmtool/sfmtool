@@ -56,6 +56,7 @@ class _SolveStrips:
         self.recon = recon
         self.workspace = workspace
         self.patch = patch
+        self.extent_factor = extent_factor
         self.names = list(recon.image_names)
         self.positions = np.asarray(recon.positions, np.float64)
         quats = np.asarray(recon.quaternions_wxyz, np.float64)
@@ -167,7 +168,9 @@ class _SolveStrips:
 
         recon = self.recon
         if recon.feature_source == "sift_files":
-            recon = recon.to_embedded_patches()
+            # At the strips' own size, the size their tiles are cut at, not the
+            # embedded-patch default.
+            recon = recon.to_embedded_patches(extent_value=self.extent_factor)
         images = [self.image(i) for i in range(len(self.names))]
         refined, report = refine_normals(
             recon, images, point_indexes=[int(p) for p in point_ids]

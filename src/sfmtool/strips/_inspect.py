@@ -101,7 +101,9 @@ def _prepare_from_sift(
     from .._workspace_image import read_workspace_image
     from ..xform import ToEmbeddedPatchesTransform
 
-    emb = ToEmbeddedPatchesTransform().apply(recon)
+    # At the strips' own size (a full edge of twice the half-extent factor),
+    # not the embedded-patch default, so the tiles are the strips' size.
+    emb = ToEmbeddedPatchesTransform(extent_value=2.0 * _EXTENT_FACTOR).apply(recon)
     images = [read_workspace_image(emb.workspace_dir, name) for name in emb.image_names]
 
     # Points at infinity keep their fixed normal; refine only the listed finite

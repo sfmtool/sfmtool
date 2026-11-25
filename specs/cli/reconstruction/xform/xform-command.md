@@ -838,11 +838,14 @@ reconstruction was created. After this op the reconstruction is
 will fail. The optional value is a comma-separated `key=value` string
 (`normal`, `extent`, `extent_value`, `feature_reduce`, `pixel_reduce`,
 `k_neighbors`); with no value it runs the defaults (`normal=mean_viewing`,
-`extent=feature_size`).
+`extent=feature_size`, `extent_value=15`). `extent_value` is the full patch
+edge, here 15 feature sizes, and is halved to the binding's half-extent; it is
+the size `sfm embed-patches` and the viewer's conversion use, for the reasons in
+[embed-patches-command.md](../embed-patches-command.md#why-the-patch-size-defaults-to-15).
 
 ```bash
 --to-embedded-patches
---to-embedded-patches normal=mean_viewing,extent=feature_size,extent_value=5
+--to-embedded-patches normal=mean_viewing,extent=feature_size,extent_value=11
 --to-embedded-patches extent=fixed,extent_value=1.0
 ```
 

@@ -500,7 +500,8 @@ fixed-height for virtualization.
 - **`Convert to Embedded Patches`** runs the `sift_files` → `embedded_patches`
   conversion as the node's next version, on a worker thread
   ([background-tasks.md](background-tasks.md)): a `(u, v)` frame per point from
-  its mean viewing direction, each observation's `.sift` keypoint carried
+  its mean viewing direction, 15 feature sizes edge to edge as in
+  `sfm xform --to-embedded-patches`, each observation's `.sift` keypoint carried
   inline, each image's identity hash read from the `.sift` metadata, and a
   render-only pass that renders the patch bitmaps from readable photographs, with no photometric
   adaptation

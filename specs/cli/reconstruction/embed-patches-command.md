@@ -66,7 +66,7 @@ as `OUTPUT`.
 | `--search` | float | 6 | The reach of each view's search around its starting keypoint, in **patch-grid** pixels. |
 | `--max-shift-px` | float | 3.0 | Discard an **observation** whose keypoint sits more than this from the point's projection, in **source-image** pixels (an absolute distance, not the move from the seed). |
 | `--min-views` | int | 2 | Drop a point left with fewer surviving observations after discards. |
-| `--patch-size` | float | `11.0` | Surfel size — the full patch edge length (in feature-size multiples) used to render the patch. Halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`), the step that builds the frame. The default sits at SIFT's ~12× descriptor window — the patch carries roughly the texture context the detector itself deems characteristic of the feature. Smaller patches starve the normal/keypoint refiners (weaker normals, more self-similarity culls); larger ones trade observation yield away to the grazing cull for marginal accuracy gains. |
+| `--patch-size` | float | `15.0` | Surfel size — the full patch edge length (in feature-size multiples) used to render the patch. Halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`), the step that builds the frame. The default is the size `sfm xform --to-embedded-patches` and the viewer's conversion use. Smaller patches give the normal and keypoint refiners less texture (weaker normals, more self-similarity culls); larger ones keep fewer observations. See [why the patch size defaults to 15](#why-the-patch-size-defaults-to-15). |
 | `--subpixel` / `--no-subpixel` | flag | on | Run the photometric sub-pixel keypoint refinement (LK / ECC Gauss–Newton against the point's reference render, one pass) once per round. `--no-subpixel` moves no keypoint: the localizer's keypoints are used as they are, and the final round still runs the stage render-only to render each point's stored bitmap and validity at those keypoints. See [`specs/core/patch/keypoint-subpixel-refinement.md`](../../core/patch/keypoint-subpixel-refinement.md). |
 | `--rounds` | int ≥ 1 | `2` | Number of (normal-refinement, keypoint-refinement) rounds, alternating the two. Round 1 fits the grown-plane normal at the SIFT keypoints, then runs the discrete localizer (the seed) and the sub-pixel keypoint refine; each subsequent round fits every normal again at the previous round's keypoints, over the point's current views, then re-refines the keypoints against the new normals — a fixed-point alternation. The default `2` runs one refinement pass on top of the seed round (most of the normal/keypoint convergence gain lands in the first extra round); raise it for the tail. The per-point patch views (membership) are fixed after round 1 (and per-round grazing drops only shrink them). With a `progress` sink (the CLI wires `click.echo`) each round prints its mean normal change (deg) and mean keypoint shift (px). |
 | `--max-obliquity-deg` | float 0–90 | `80` | In every round, after the normal refinement and before the sub-pixel keypoint refinement, drop every observation viewing its surfel more than this many degrees off the refined normal (`\|v̂·n\| < cos θ`), the reference observation included; the sub-pixel pass's reference-view rule then picks a new reference from the views left, and the output records it. A grazing view renders as a **degenerate smear** that erases surface texture, which biases the keypoint fits against it and the next round's normal. Dropping those views keeps the round alternation on the well-observed, near-frontal views. `90` disables the filter. The obliquity is exactly the `inspect --strips` magenta-dot radius (`sin θ`). |
@@ -242,6 +242,46 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   observations; on the 85-image dino_dog_toy solve the observation count grows
   from 72,936 to about 162,000, and one point's input error of 1.51 px is
   10.33 px on its written keypoints.
+
+## Why the patch size defaults to 15
+
+`--patch-size` defaults to 15 feature sizes edge to edge, the same size
+`sfm xform --to-embedded-patches` (`extent_value=15`), the
+`to_embedded_patches` binding (`extent_value=7.5`, a half-extent) and the SfM
+Explorer's `Convert to Embedded Patches` use, so every route from a
+`sift_files` reconstruction gives a patch of one size.
+
+The size comes from a blind review of grown-plane normals. One reviewer judged
+40 points drawn unselected from fresh solves of the four test-data datasets, 10
+from each, with the patches made by `sfm xform --to-embedded-patches` at a full
+edge of 5. Asked what size each patch should be, the reviewer wanted 23 of the
+38 patches that could be judged larger: 12 about twice as large, 5 about three
+times, 6 four times or more. The grown-plane normal fitted at each size was
+accepted on 14 of 40 points at an edge of 5, at least 17 at 10, 23 at 15, 19 at
+20 and 17 at 30. Differences of two or three points are within chance on one
+reviewer and 40 points, and no per-point reading tested chose a size better
+than a constant 15.
+
+An earlier sweep of `--patch-size` on one capture found 11 best, with the
+observation count falling as the patch grows past 7: about 5% fewer observations
+at 15 than at 11, and 11% fewer than at 7, because the grazing cull scales with the patch extent. On the four
+test-data datasets, each solved as its `scripts/init_dataset_*.sh` does, 15
+keeps more observations than 11 rather than fewer:
+
+| Dataset | Points out at 11 / 15 | Observations out at 11 / 15 | Median point error at 11 / 15 |
+|---|---|---|---|
+| seoul_bull (983 points in) | 802 / 830 | 3,903 / 4,086 (+4.7%) | 0.60 / 0.64 px |
+| seattle_backyard (3,258 in) | 3,217 / 3,199 | 31,938 / 31,984 (+0.1%) | 0.50 / 0.52 px |
+| dino_dog_toy (18,386 in) | 17,633 / 17,686 | 292,052 / 310,811 (+6.4%) | 1.43 / 1.48 px |
+| kerry_park (394 in) | 363 / 379 | 3,490 / 3,755 (+7.6%) | 0.73 / 0.77 px |
+
+The larger patch is culled less often as self-similar (6, 1, 64 and 7 points
+at 11; 1, 1, 47 and 3 at 15), and its median point error is 3% to 7% higher.
+The run times were within 2% of each other on seoul_bull and dino_dog_toy, 14 s
+at 11 against 10 s at 15 on kerry_park, and 84 s against 135 s on
+seattle_backyard, all on a machine shared with other work. The trade-off the
+sweep measured, fewer observations for a larger patch, may still hold on other
+captures; the review is the reason for the default.
 
 ## Errors
 

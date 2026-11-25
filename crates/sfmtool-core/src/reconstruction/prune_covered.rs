@@ -36,12 +36,13 @@ pub struct PruneCoveredOptions {
     ///
     /// The projected radius is the patch frame's own extent in that image, and
     /// a patch is embedded several feature sizes across: at the default patch
-    /// size of 11 the frame spans 5.5 of them, so reading containment at the
-    /// whole radius would ask it over a disk five times the feature. The
-    /// half-extent a keypoint's support is stated at is 2.5 feature sizes
-    /// ([`crate::patch::cloud::PatchExtent`]'s default), which on such a file is
-    /// `2.5 / 5.5 = 0.4545` of the projected radius. The default rounds that up
-    /// a little rather than reading the embedding size off the file, because a
+    /// size of 15 the frame's half-extent is 7.5 of them, and at a patch size
+    /// of 11 it is 5.5, so reading containment at the whole radius would ask
+    /// it over a disk several times the feature. The half-extent a keypoint's
+    /// support is stated at is 2.5 feature sizes, which is `2.5 / 7.5 = 0.333`
+    /// of the projected radius on a file embedded at 15 and
+    /// `2.5 / 5.5 = 0.4545` on one embedded at 11. The default of a half is
+    /// the second rounded up a little; it is not read off the file, because a
     /// value carries no trustworthy statement of what it was embedded at and a
     /// guess at one would retire evidence on a number nobody measured.
     pub footprint_fraction: f64,

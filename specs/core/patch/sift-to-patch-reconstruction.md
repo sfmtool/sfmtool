@@ -48,6 +48,14 @@ emits a valid `embedded_patches` reconstruction whose keypoints are exactly the
 original SIFT detections — the whole point set preserved. It runs none of the
 photometric steps of the pipeline below.
 
+Every entry point sizes a patch the same way by default: a full edge of 15
+feature sizes, a half-extent of 7.5 times the median projected keypoint scale
+across the point's views. That is `PatchExtent::default()`, the binding's
+`extent_value=7.5`, `sfm xform --to-embedded-patches`'s `extent_value=15`
+(a full edge, halved before the call), the viewer's conversion, and
+`sfm embed-patches`'s `--patch-size 15`. Why 15 is in
+[embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md#why-the-patch-size-defaults-to-15).
+
 ### What the baseline conversion reports, and how it is stopped
 
 ```rust
@@ -268,7 +276,7 @@ spec).
 | `min_relative_zncc` | `0.7` | view selection **and** keypoint localizer: a view must agree at least this fraction as well as the reference (the track's self-agreement on admission; during alignment, the median ZNCC against the reference render of the views other than the reference) |
 | `min_absolute_zncc` | `0.5` | keypoint localizer: drop a view whose blur-matched score against the reference render is below this (`0` disables) |
 | `max_member_zncc_self_similarity_radius` | `2.5` | keypoint localizer: drop a view whose own tile's ZNCC self-similarity radius is above this, patch-grid px (`0` disables) |
-| `patch_size` | `11.0` | frame init: surfel size — full patch edge length, halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`) |
+| `patch_size` | `15.0` | frame init: surfel size — full patch edge length, halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`) |
 | `max_shift_px` | ~3 | keypoint refiner: drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_views` | 2 | pipeline cull: drop a point left with fewer kept views |
 | `rounds` | `2` | pipeline loop: number of alternating (normal step, keypoint-refine) passes (see [Pipeline](#pipeline)) |

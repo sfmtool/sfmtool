@@ -314,9 +314,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "type": "number",
                             "description":
                                 "What fraction of an observation's projected patch radius its \
-                                 footprint is. Defaults to 0.5. A patch embedded at patch size 11 \
-                                 spans 5.5 feature sizes and a keypoint's support is stated at \
-                                 2.5 of them, so 0.4545 is the faithful value on such a file.",
+                                 footprint is. Defaults to 0.5. A keypoint's support is stated at \
+                                 a half-extent of 2.5 feature sizes, so the faithful value is \
+                                 0.333 on a file embedded at the default patch size of 15 \
+                                 (half-extent 7.5) and 0.4545 on one embedded at 11.",
                         }),
                     ),
                     (
@@ -961,8 +962,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                          keypoint carried inline. Every point keeps its position and track, \
                          and its index unless a point edit is pending, in which case the \
                          deleted slots close up first, as delete_point describes; its (u, v) \
-                         frame uses the mean viewing direction and 2.5x \
-                         the median projected keypoint scale. Each observation's keypoint \
+                         frame uses the mean viewing direction and 7.5x \
+                         the median projected keypoint scale as its half-extent. Each observation's keypoint \
                          and each image's identity hash come from its .sift file. The viewer \
                          then renders persistent reference bitmaps from readable photographs \
                          without photometric adaptation. If no photographs can be read, the \

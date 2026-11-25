@@ -434,7 +434,7 @@ def embed_patches(
     min_relative_zncc: float = 0.7,
     min_absolute_zncc: float = 0.5,
     max_member_zncc_self_similarity_radius: float = 2.5,
-    patch_size: float = 11.0,
+    patch_size: float = 15.0,
     max_shift_px: float = 3.0,
     min_views: int = 2,
     search: float = 6.0,
@@ -513,10 +513,11 @@ def embed_patches(
             pyramids are built once here.
         patch_size: Surfel size — the full patch edge (feature-size multiples),
             halved to the library half-extent and passed to ``to_embedded_patches``.
-            The ``11.0`` default sits at SIFT's ~12x descriptor window; smaller
-            patches starve the refiners of texture (weaker normals, more
-            self-similarity culls), larger ones trade observation yield away to
-            the grazing cull for marginal gains.
+            The ``15.0`` default is the size the other conversions use, and
+            the one a review of grown-plane normals preferred; smaller
+            patches give the refiners less texture (weaker normals, more
+            self-similarity culls), larger ones keep fewer observations
+            (see ``specs/cli/reconstruction/embed-patches-command.md``).
         min_relative_zncc, max_shift_px, min_views, search: The pipeline
             knobs documented in ``specs/cli/reconstruction/embed-patches-command.md``.
         min_absolute_zncc: Localizer gate — drop a view whose ZNCC against the

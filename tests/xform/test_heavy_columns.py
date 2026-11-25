@@ -65,10 +65,15 @@ def embedded_sfmr_once(seoul_bull_workspace_once, tmp_path_factory) -> Path:
     workspace_dir = tmp_path_factory.mktemp("embedded_workspace")
     shutil.copytree(seoul_bull_workspace_once.parent, workspace_dir, dirs_exist_ok=True)
     out = workspace_dir / "embedded.sfmr"
+    # A full patch edge of 5 feature sizes rather than the default 15: at 15,
+    # five of the points have a reference tile that reaches past the edge of
+    # its photograph, which --add-patch-bitmaps renders and the sub-pixel
+    # refiner refuses, so the comparison with the refiner below would not hold.
     _xform(
         workspace_dir / seoul_bull_workspace_once.name,
         out,
         "--to-embedded-patches",
+        "extent_value=5",
         "--add-patch-bitmaps",
         "resolution=16",
     )

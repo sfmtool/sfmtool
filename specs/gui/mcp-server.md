@@ -5056,8 +5056,9 @@ patch frame per point and a keypoint per observation inline. This is the
 same frame and keypoint conversion as `sfm xform --to-embedded-patches`
 with that command's own defaults
 ([sift-to-patch-reconstruction.md](../core/patch/sift-to-patch-reconstruction.md)):
-each point gets a frame from its mean viewing direction sized at `2.5 x` the
-median projected keypoint scale across its views, each observation's keypoint is
+each point gets a frame from its mean viewing direction with a half-extent of
+`7.5 x` the median projected keypoint scale across its views (a full edge of 15
+feature sizes), each observation's keypoint is
 copied verbatim from its `.sift` detection, and each image's identity hash is
 read from the `.sift` metadata. No photometric adaptation runs. The viewer then
 renders each point's stored bitmap at those stored frames and keypoints from

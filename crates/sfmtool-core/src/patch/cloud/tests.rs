@@ -1152,6 +1152,37 @@ fn from_tracks_nan_scale_counts_as_unreadable() {
     assert!((ok.patch(0).half_extent[0] - 5.0 * 3.0 * 3.0 / 500.0).abs() < 1e-9);
 }
 
+/// The default sizing is the embedded-patch size every conversion uses: a
+/// half-extent of 7.5 feature sizes, a full edge of 15.
+#[test]
+fn default_extent_is_a_full_edge_of_fifteen_feature_sizes() {
+    let positions = vec![Point3::new(0.0, 0.0, 3.0)];
+    let quats = vec![UnitQuaternion::identity()];
+    // Camera at origin looking down −Z; the point is a distance 3 away.
+    let trans = vec![Vector3::zeros()];
+    let cams = vec![pinhole(500.0, 320.0, 240.0, 640, 480)];
+    let cloud = PatchCloud::from_tracks(
+        &positions,
+        &[1.0],
+        None,
+        &[0usize, 1],
+        &[0u32],
+        Some(&[3.0]),
+        &quats,
+        &trans,
+        &cams,
+        PatchNormal::MeanViewing,
+        PatchExtent::default(),
+        false,
+        &Progress::none(),
+    )
+    .unwrap();
+    // half = factor * σ * d / f = 7.5 * 3 * 3 / 500.
+    let half = cloud.patch(0).half_extent;
+    assert!((half[0] - 7.5 * 3.0 * 3.0 / 500.0).abs() < 1e-9, "{half:?}");
+    assert!((half[1] - 7.5 * 3.0 * 3.0 / 500.0).abs() < 1e-9, "{half:?}");
+}
+
 #[test]
 fn from_tracks_builds_infinity_tangent_frames() {
     // A finite point and a point at infinity (w = 0). Under

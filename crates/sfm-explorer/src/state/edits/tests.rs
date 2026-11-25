@@ -1923,6 +1923,49 @@ fn converting_pushes_one_embedded_patches_version_over_the_same_rows() {
     assert!(!state.scene[0].has_patch_data());
 }
 
+/// The conversion sizes each patch at the embedded-patch default, a full edge
+/// of 15 feature sizes: its frames are exactly those a direct conversion at a
+/// half-extent of 7.5 times the median keypoint scale gives.
+#[test]
+fn converting_sizes_patches_at_fifteen_feature_sizes() {
+    use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
+    use sfmtool_core::progress::Progress;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = convertible_state(dir.path());
+    let source = Arc::clone(&state.scene[0].edited().base);
+    let direct = |factor: f64| {
+        source
+            .to_embedded_patches(
+                PatchNormal::MeanViewing,
+                PatchExtent::FeatureSize {
+                    factor,
+                    across: ViewReduce::Median,
+                },
+                &Progress::none(),
+            )
+            .expect("the fixture has a .sift file per image")
+    };
+    let expected = direct(7.5);
+
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("the fixture has a .sift file per image");
+    state.finish_background_tasks();
+
+    let converted = state.scene[0].recon();
+    let halves = |recon: &SfmrReconstruction| {
+        (
+            recon.point_set.patch_u_halfvec_xyz.clone().expect("frames"),
+            recon.point_set.patch_v_halfvec_xyz.clone().expect("frames"),
+        )
+    };
+    assert_eq!(halves(converted), halves(&expected));
+    // The fixture's sizes depend on the factor, so a conversion at another
+    // size would not match.
+    assert_ne!(halves(converted), halves(&direct(2.5)));
+}
+
 /// A photograph whose file is removed after the conversion's read phase
 /// decoded it, and whose tiles the cache has evicted since, fails the
 /// conversion with the read's error, naming the file, and pushes no version.
@@ -2249,12 +2292,12 @@ fn assert_converting_and_refining_give_the_xform_steps_values(dir: &std::path::P
         .collect();
 
     // `--to-embedded-patches`: the binding's defaults, a full patch edge of
-    // five features halved to the library's half-extent.
+    // fifteen features halved to the library's half-extent.
     let expected = source
         .to_embedded_patches(
             PatchNormal::MeanViewing,
             PatchExtent::FeatureSize {
-                factor: 2.5,
+                factor: 7.5,
                 across: ViewReduce::Median,
             },
             &Progress::none(),
