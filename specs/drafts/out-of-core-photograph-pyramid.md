@@ -4024,8 +4024,9 @@ in core. Step 17 turns the tier on.
       `get_level` do, rather than `PhotographReadError`, since its
       `Unreadable` merges `GetError::Unreadable` and `GetError::Workspace`,
       which Python raises as `OSError` and `RuntimeError`.
-      `PhotographLayout` also has `tile_size`, the side `read_tile`'s
-      columns and rows count in. No reader moves, so no result changes.
+      The Python `PhotographLayout` also has `tile_size`, the side
+      `read_tile`'s columns and rows count in. No reader moves, so no
+      result changes.
       Tests: in
       [pixels/tests.rs](../../crates/sfmtool-core/src/camera/photograph_cache/pixels/tests.rs),
       the layout `get` answers, a level, tiles and a region equal to a
@@ -4069,8 +4070,9 @@ in core. Step 17 turns the tier on.
       normals* for the same reconstruction.
     - **16d, the strips.** `compare --strips` and `inspect --strips`
       (`src/sfmtool/strips/`), which read `read_workspace_image` arrays,
-      one at a time in `_solve.py`, on `ImagePyramidSet.read` (P3). Tests:
-      the montages unchanged in core.
+      every photograph at once in `_inspect.py` and one at a time in
+      `_solve.py`, on `ImagePyramidSet.read` (P3). Tests: the montages
+      unchanged in core.
     - **16e, `write_web_export(cache=)` and the `scripts/` harnesses.**
       `write_web_export` taking the `cache=` its export reads through, and
       the harnesses that build an `ImagePyramidSet` from `read_image_rgb`
@@ -4078,9 +4080,11 @@ in core. Step 17 turns the tier on.
       `scripts/add_image_to_tracks/harness.py` and `misses.py` (§ "Every
       reader of photograph pixels"), and `scripts/bench_bars/measure.py`
       and `scripts/reference_view/measure.py`, found since, on
-      `ImagePyramidSet.read`. Tests:
-      a cache passed to `write_web_export` and to `ImagePyramidSet.read`
-      makes each mipmap once.
+      `ImagePyramidSet.read`. `bench_bars/measure.py` also builds a set
+      from arrays it has modified, which stays on the constructor, since
+      `read` reads only the files. Tests: a cache passed to
+      `write_web_export` and to `ImagePyramidSet.read` makes each mipmap
+      once.
 17. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
     viewer's one-line notice for a workspace without it, and the workspace
