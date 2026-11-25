@@ -49,8 +49,9 @@ The cache lives in
 beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs),
 exported as `sfmtool_core::camera::PhotographCache` together with
 `PhotographCacheOptions`, `BuildReservation`, `GetError`, `PeekedPhotograph`,
-`GetManyTally`, `MipmapBuildReport` and `PhotographCacheStats`, and the layout and tile requests'
-`PeekedLayout`, `PeekedTile`, `TileError` and `TryDecode`. `default_budget_bytes`,
+`GetManyTally`, `MipmapBuildReport` and `PhotographCacheStats`, the layout and tile requests'
+`PeekedLayout`, `PeekedTile`, `TileError` and `TryDecode`, and `read_layout`'s
+`PhotographLayout`. `default_budget_bytes`,
 `default_build_budget_bytes`, `BUDGET_ENV_VAR`, `BUILD_BUDGET_ENV_VAR` and
 `SLOT_WAIT_POLL` are
 reached through `sfmtool_core::camera::photograph_cache`. It is in `sfmtool-core` rather than
@@ -181,6 +182,20 @@ impl PhotographCache {
     pub fn get_level(&self, path: &Path, level: usize, progress: &Progress<'_>)
         -> Result<Arc<ImageU8>, TileError>;
 
+    /// The blocking reads of § "Layouts and pixels for a script", behind the
+    /// Python `PhotographCache`'s `layout`, `read_level`, `read_tile` and
+    /// `read_region`. `read_layout` reads the header and, out of core, the
+    /// region answer, making no mipmap; the three reads answer the pixels
+    /// every kernel samples, reading the photograph as `get` answers it, so
+    /// making a missing or stale mipmap first.
+    pub fn read_layout(&self, path: &Path) -> Result<PhotographLayout, GetError>;
+    pub fn read_level(&self, path: &Path, level: usize, progress: &Progress<'_>)
+        -> Result<ImageU8, TileError>;
+    pub fn read_tile(&self, path: &Path, key: TileKey, progress: &Progress<'_>)
+        -> Result<ImageU8, TileError>;
+    pub fn read_region(&self, path: &Path, level: usize, rect: LevelRect,
+        progress: &Progress<'_>) -> Result<ImageU8, TileError>;
+
     /// Put pixels that did not come from this cache's decode in as `path`'s,
     /// cut into tiles as a decode cuts them and kept as unused.
     pub fn insert(&self, path: &Path, image: ImageU8);
@@ -236,6 +251,9 @@ pub enum PeekedTile { Ready(Arc<PhotographTile>), Building, Unreadable, NotReady
 pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: GetError },
                      OutOfRange { path: PathBuf, why: String }, Cancelled }
 pub enum TryDecode { Decoded(Vec<Arc<PhotographTile>>), Busy }
+/// `read_layout`'s answer: the layout every read is served under, and `None`
+/// in core or out of core whether level 0 is read from the original.
+pub struct PhotographLayout { pub layout: Arc<PyramidLayout>, pub region_readable: Option<bool> }
 
 pub struct PhotographCacheStats {
     pub tiles: usize, pub files: usize, pub bytes: u64, pub budget_bytes: u64, pub hits: u64,
@@ -699,6 +717,41 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   remembered: the slot is left as it was, the decode's reservation is given
   back, and the next call decodes. A panel's task passes its own `Progress`,
   or `&Progress::none()`.
+
+## Layouts and pixels for a script
+
+A script, or a command that reads one photograph's pixels outside any
+kernel, asks the cache in
+[photograph_cache/pixels.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/pixels.rs),
+through the Python `PhotographCache` ([python-bindings.md](../../python-bindings.md)
+§ `photographs`). Each call blocks, and reads what a kernel reads, so a
+script compares its pixels with what the viewer and the kernels sample.
+
+- **`read_layout`** answers the layout `get` answers the photograph under,
+  and `PhotographLayout::region_readable`: `None` in core, and out of core
+  whether level 0 is read from the original or from its `-mip0`. It reads the
+  header and the workspace's `mipmap_options`, and for an out-of-core
+  photograph checks the coarsest mip level file as `request_layout` does,
+  answering from its record when it is current and otherwise from the region
+  test of the original, read whole as a build reads it, so a build made
+  next records the same answer. It makes no mipmap, decodes no pixel and is
+  kept by no slot: the blocking form of `layout` and `request_layout`. Its
+  errors are the `GetError`s a `get` answers from the header.
+- **`read_level`, `read_tile` and `read_region`** answer level `level`
+  whole, the core of the photograph tile `key` without its border, and the
+  rectangle `rect` of a level, as one `ImageU8`. Each reads the photograph
+  as `get` answers it, so an out-of-core photograph whose mipmap is missing
+  or stale has it made first, in its slot, reported through `progress` as
+  the value `mipmaps_made` (1); then it copies the rectangle from the tiles
+  it covers, reading only those. So the pixels are the ones every kernel
+  samples: in core the exact levels of the decode, out of core level 0 from
+  the original or `-mip0`, levels 1 to `K` from the mip level files, and the
+  levels past `K` box-filtered from level `K`. A level, tile or rectangle the
+  photograph does not have, or an empty rectangle, is `TileError::OutOfRange`
+  naming the photograph; a photograph `get` could not answer is
+  `TileError::Unreadable` with its `GetError`; a file found changed during
+  the read is `TileError::Changed` naming it; and a cancelled `progress` is
+  `TileError::Cancelled`.
 
 ## A changed file and remembered failures
 
@@ -1344,6 +1397,21 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   of 0; in a workspace without `mipmap_options` naming the photograph in
   core and writing no mipmap directory; and a cancelled call answering
   `Cancelled` and making nothing.
+- [photograph_cache/pixels/tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/pixels/tests.rs),
+  on the same synthetic photographs, one in core, one region-readable and
+  one with no restart markers: `read_layout` answering the layout `get`
+  answers and the region answer, before the mipmap is made and after,
+  making none, and a photograph outside every workspace in core; every level
+  read whole, its first and last tiles and a region across four tiles equal
+  to what a kernel samples from the same file through another cache, a
+  `Bilinear` render at level 0 and a `BilinearMip` render pinned to each
+  level by its scale, with a budget and with one of 0, and in core level 0
+  the file's own decode; a read making a missing mipmap and reporting
+  `mipmaps_made` once, a second read of the current files making nothing;
+  and a level, rectangle or tile the photograph does not have and an empty
+  rectangle refused as `OutOfRange` naming it, a missing file as `NotFound`
+  to the reads and to `read_layout`, an invalid `mipmap_options` as
+  `Workspace` to both, and a cancelled read as `Cancelled`.
 - [bench/tests/bulk_budget.rs](../../../crates/sfmtool-core/src/bench/tests/bulk_budget.rs),
   bulk kernels on one thread over six photographs written to a temporary
   directory: *Refit all points* under a budget of one photograph and under
