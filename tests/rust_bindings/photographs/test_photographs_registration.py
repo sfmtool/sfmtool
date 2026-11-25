@@ -7,12 +7,19 @@ import sfmtool._sfmtool.photographs as photographs
 
 _EXPECTED_CLASSES = ("PhotographCache",)
 
+_EXPECTED_FUNCTIONS = ("check_mipmaps", "prune_mipmaps")
+
 _EXPECTED_METHODS = {"PhotographCache": ("build_mipmaps", "stats")}
 
 
 def test_all_photographs_bindings_registered():
-    """Every expected class and method is present on `_sfmtool.photographs`."""
-    missing = [name for name in _EXPECTED_CLASSES if not hasattr(photographs, name)]
+    """Every expected class, method and function is present on
+    `_sfmtool.photographs`."""
+    missing = [
+        name
+        for name in _EXPECTED_CLASSES + _EXPECTED_FUNCTIONS
+        if not hasattr(photographs, name)
+    ]
     assert not missing, f"missing photographs bindings: {missing}"
     for name in _EXPECTED_CLASSES:
         assert isinstance(getattr(photographs, name), type), f"{name} is not a class"
@@ -21,6 +28,8 @@ def test_all_photographs_bindings_registered():
             assert callable(getattr(getattr(photographs, name), method, None)), (
                 f"{name}.{method} is missing"
             )
+    for name in _EXPECTED_FUNCTIONS:
+        assert callable(getattr(photographs, name)), f"{name} is not callable"
 
 
 def test_photographs_submodule_public_name():

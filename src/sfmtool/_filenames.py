@@ -15,7 +15,13 @@ __all__ = [
     "normalize_workspace_path",
     "MIPMAP_DIR_NAME",
     "under_mipmap_directory",
+    "SIFT_IMAGE_EXTENSIONS",
 ]
+
+# The extensions of the files `sfm sift` takes for images when it expands a
+# directory, which `sfm ws mipmaps` takes for photographs in the same way, so
+# the two commands read the same images under the same paths.
+SIFT_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 
 # The directory at a workspace root that holds its mip level files, named as
 # `sfmtool_core::camera::mipmap::MIPMAP_DIR_NAME` names it. Every search for a

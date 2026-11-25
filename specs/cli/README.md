@@ -221,6 +221,7 @@ naming each such image, the `.sift` path tried and the image path tried.
 |---------|------|
 | `sfm ws init` | [ws-init-command.md](workspace/ws-init-command.md) |
 | `sfm ws upgrade` | [ws-upgrade-command.md](workspace/ws-upgrade-command.md) |
+| `sfm ws mipmaps` | [ws-mipmaps-command.md](workspace/ws-mipmaps-command.md) |
 | `sfm camrig` (`create`, `cp`, `spherical-tiles`) | [camrig-command.md](workspace/camrig-command.md) |
 | `sfm pano2rig` | [pano2rig-command.md](workspace/pano2rig-command.md) |
 | `sfm insv2rig` | [insv2rig-command.md](workspace/insv2rig-command.md) |

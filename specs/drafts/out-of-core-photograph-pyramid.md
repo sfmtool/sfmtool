@@ -262,7 +262,9 @@ steps add to them:
   session, the first time it reads a photograph over 4096 px in a workspace
   without the object: *This workspace decodes large photographs whole. Run
   `sfm ws mipmaps --enable` to read them a tile at a time.*
-- **Orphans** (step 15): `sfm ws mipmaps --prune` deletes the mip level files
+- **Orphans** (built, step 15e, as
+  [ws-mipmaps-command.md § Orphans](../cli/workspace/ws-mipmaps-command.md#orphans)
+  says, with the cases step 15e's note adds): `sfm ws mipmaps --prune` deletes the mip level files
   whose record names a photograph that no longer exists or that they are
   stale for, those whose quality in the name differs from the workspace's
   current setting for their level, and temporary files older than an hour;
@@ -799,15 +801,17 @@ the budget, so the panel never asks for more than the cache can keep.
 - **`sfm ws mipmaps PATHS…`** makes them explicitly for the photographs under
   the paths (skipping in-core ones and current mipmaps), with `--prune` to delete
   orphans and `--check` to report stale mipmaps without writing. It is the way to
-  prepare a workspace whose features came from somewhere else.
+  prepare a workspace whose features came from somewhere else. Built in step
+  15e ([ws-mipmaps-command.md](../cli/workspace/ws-mipmaps-command.md)).
 - **Any reader of the cache** makes the mipmaps it needs, in any process, as
   § "Building a mipmap in the slot" says. On the command line and in Python,
   `ImagePyramidSet.read(recon, progress=…)`, `embed-patches`,
   `sfm cluster-patches` and `sfm web-export` read through a cache whose
   `get_many` makes every missing mipmap in its phase, counting mipmaps through the
   caller's `Progress` (a `ProgressCounter` from Python), before the work
-  starts; `sfm ws mipmaps` calls `get_many` over every photograph under its
-  paths in a phase *build mipmaps*.
+  starts; `sfm ws mipmaps` calls `PhotographCache.build_mipmaps`, which
+  calls `get_many`, over every photograph under its paths (built, step
+  15e).
 - **In the viewer**, mipmaps are made by one cancellable quiet task, *Build
   mipmaps* (`Operation::BUILD_MIPMAPS`, a fifth quiet source beside those of
   [background-tasks.md](../gui/background-tasks.md) § "Quiet tasks"), like
@@ -1535,9 +1539,9 @@ class PhotographCache:
   only the tiles it needs. Each is a call to core's `read_region` (a level is
   its whole region; a tile is its key's rectangle) with the GIL released.
 - **`build_mipmaps(paths, progress=None)`** makes the mipmaps of the
-  out-of-core photographs among `paths` (directories expanded as
-  `sfm ws mipmaps` expands them, skipping `.sfm-mipmaps`, from step 15e;
-  15d's takes photographs' paths) through the cache's
+  out-of-core photographs among `paths`, photographs' paths (`sfm ws
+  mipmaps` expands directories itself with `expand_paths`, as `sfm sift`
+  does; step 15e's note says why) through the cache's
   `get_many`, so a mipmap already made in this cache, or by another cache or
   process, is
   read rather than made again, and the build budget and its reservations
@@ -3631,7 +3635,7 @@ in core. Step 17 turns the tier on.
           photographs' state, since its header turns a spinner while the
           track is evaluated and no evaluation ends in those tests, so its
           test bounds the reads and not the repaints.
-15. **Makers**: `sfm sift` and `build_sift_file`, the rest of the viewer's
+15. **Makers.** **Built**, in 15a to 15e below: `sfm sift` and `build_sift_file`, the rest of the viewer's
     *Build mipmaps* quiet task, whose job, shared list, `QuietRank` place
     and giving way 14e builds (the list filled when a reconstruction opens,
     the selected image first, then the Image Browser strip's, then the
@@ -3923,7 +3927,56 @@ in core. Step 17 turns the tier on.
       directory among its paths, in core, by the rule the command sets. Tests: `--prune` deletes an
       orphan and keeps a current mipmap, and deletes every mip level file in
       a workspace without the object; `--check` writes nothing. Visible:
-      the new subcommand's help.
+      the new subcommand's help. **Built.**
+      **As built** ([ws-mipmaps-command.md](../cli/workspace/ws-mipmaps-command.md),
+      [mipmap/check.rs](../../crates/sfmtool-core/src/camera/mipmap/check.rs),
+      [mipmap/prune.rs](../../crates/sfmtool-core/src/camera/mipmap/prune.rs),
+      [photographs.rs](../../crates/sfmtool-py/src/photographs.rs),
+      [_commands/ws.py](../../src/sfmtool/_commands/ws.py)): the core
+      functions are `check_mipmaps(photographs, tile_size, progress)` and
+      `prune_mipmaps(paths, &PruneMipmapsOptions { dry_run, tile_size },
+      progress)`, bound as the free functions `check_mipmaps` and
+      `prune_mipmaps` of `sfmtool.photographs`; § "Python bindings" makes
+      `build_mipmaps` the one way to build from Python, and neither of these
+      builds. The three modes are exclusive: no flag builds, `--check`
+      reports and writes nothing, and `--prune` deletes orphans and makes no
+      mipmap, so freeing the space of deleted photographs does not also wait
+      for every missing build; `--check` lists the files from a dry run of
+      the prune and exits with status 1 when anything is missing, stale or an
+      orphan. Three things differ from the plan. The expansion of
+      directories stays in Python: the command expands its paths with
+      `expand_paths` and `SIFT_IMAGE_EXTENSIONS` (`.png`, `.jpg`, `.jpeg`),
+      the rule and list `sfm sift` already used, now one named constant both
+      read, and passes photographs to `build_mipmaps` and `check_mipmaps`,
+      which keep taking photographs' paths; a rule in core as well would be a
+      second implementation of the one `expand_paths` holds. A prune
+      searches only the part of each workspace's mipmap directory that
+      mirrors its paths, and the whole mipmap directory of each workspace
+      nested below a directory path, rather than the whole directory of each
+      workspace a path is in, as a build and a check reach only the
+      photographs under the paths; a path need not exist, so a deleted
+      photograph's or directory's path finds what it left. And the orphans
+      are judged a file at a time against the plan's list plus the cases it
+      did not name: a photograph now in core or too large, a level past the
+      coarsest the mipmap stores, a `-mip0` beside a region-readable
+      original, and a file in the enclosing workspace's directory for a
+      photograph of a nested workspace; judged a file at a time, a stopped
+      build's current finer files are kept for the next build. What a prune
+      deletes is bounded as the user asked: only regular files inside a
+      mipmap directory, named as a mip level file or a build's temporary
+      file, each checked again just before its delete to be a regular file
+      whose resolved directory is inside the resolved mipmap directory; no
+      link or junction is entered or deleted, no directory is deleted, and a
+      workspace whose `mipmap_options` is invalid is not searched. The
+      mipmaps of photographs in no reconstruction are judged as any other
+      and kept while current. Tests: the core cases in
+      `camera::mipmap::check::tests` and `camera::mipmap::prune::tests`
+      (every kind of orphan beside every kind of kept file, a dry run, a
+      workspace without the object, the mirror of a path, a nested
+      workspace, junctions and links, and the last check before a delete),
+      the bindings in
+      `tests/rust_bindings/photographs/test_mipmap_check_prune_rust_bindings.py`,
+      and the command in `tests/test_ws_mipmaps.py`.
 16. **Python and the readers that must agree with the viewer**: the
     `PhotographCache` class's layout, level, tile and region reads, added to
     the submodule and class step 15d brings with the constructor,
