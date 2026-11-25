@@ -5,11 +5,20 @@
 
 import sfmtool._sfmtool.photographs as photographs
 
-_EXPECTED_CLASSES = ("PhotographCache",)
+_EXPECTED_CLASSES = ("PhotographCache", "PhotographLayout")
 
 _EXPECTED_FUNCTIONS = ("check_mipmaps", "prune_mipmaps")
 
-_EXPECTED_METHODS = {"PhotographCache": ("build_mipmaps", "stats")}
+_EXPECTED_METHODS = {
+    "PhotographCache": (
+        "build_mipmaps",
+        "layout",
+        "read_level",
+        "read_region",
+        "read_tile",
+        "stats",
+    )
+}
 
 
 def test_all_photographs_bindings_registered():

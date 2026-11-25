@@ -3,26 +3,36 @@
 
 //! Bindings for the photograph cache (`sfmtool_core::camera::PhotographCache`):
 //! the `PhotographCache` class, which a script or command holds so that its
-//! calls share one build count, and through which it makes the mipmaps of
-//! out-of-core photographs; and `check_mipmaps` and `prune_mipmaps`, which
-//! check the mipmaps of photographs and delete a mipmap directory's orphan
-//! files, as `sfm ws mipmaps --check` and `--prune` do.
+//! calls share one build count, through which it reads a photograph's layout
+//! (`PhotographLayout`) and the levels, tiles and regions every kernel
+//! samples, and makes the mipmaps of out-of-core photographs; and
+//! `check_mipmaps` and `prune_mipmaps`, which check the mipmaps of
+//! photographs and delete a mipmap directory's orphan files, as
+//! `sfm ws mipmaps --check` and `--prune` do.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use pyo3::exceptions::{PyInterruptedError, PyValueError};
+use numpy::{IntoPyArray, PyArray3};
+use pyo3::exceptions::{
+    PyFileNotFoundError, PyIOError, PyInterruptedError, PyRuntimeError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::mipmap::{
     check_mipmaps, prune_mipmaps, PruneMipmapsOptions, PHOTOGRAPH_TILE_SIZE,
 };
 use sfmtool_core::camera::photograph_cache::{default_budget_bytes, default_build_budget_bytes};
-use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
+use sfmtool_core::camera::sampler::LevelRect;
+use sfmtool_core::camera::{
+    GetError, PhotographCache, PhotographCacheOptions, PhotographLayout, TileError, TileKey,
+};
 use sfmtool_core::progress::{Cancelled, Event, Progress};
 
+use crate::helpers::read_only;
 use crate::signals::SignalWatch;
 use crate::ProgressCounter;
 
@@ -32,6 +42,124 @@ fn budget(name: &str, value: Option<i64>, default: fn() -> u64) -> PyResult<u64>
         None => Ok(default()),
         Some(bytes) => u64::try_from(bytes)
             .map_err(|_| PyValueError::new_err(format!("{name} must be 0 or more, not {bytes}"))),
+    }
+}
+
+/// An index or a coordinate given from Python: refused when negative or past
+/// what any photograph has.
+fn index(name: &str, value: i64) -> PyResult<u32> {
+    u32::try_from(value).map_err(|_| match value {
+        ..0 => PyValueError::new_err(format!("{name} must be 0 or more, not {value}")),
+        _ => PyValueError::new_err(format!("{name} {value} is past every photograph")),
+    })
+}
+
+/// The Python exception for a photograph that could not be read: as
+/// `read_image_rgb` raises them, `FileNotFoundError` for a missing file and
+/// `OSError` for one that cannot be read or is too large, and
+/// `RuntimeError` for an invalid workspace file, as `load_workspace_config`
+/// raises it. Each message names the file.
+fn get_err(e: GetError) -> PyErr {
+    match e {
+        GetError::NotFound(_) => PyFileNotFoundError::new_err(e.to_string()),
+        GetError::Workspace(_) => PyRuntimeError::new_err(e.to_string()),
+        GetError::Unreadable(_) | GetError::TooLarge { .. } => PyIOError::new_err(e.to_string()),
+        GetError::Cancelled => PyInterruptedError::new_err(e.to_string()),
+    }
+}
+
+/// The Python exception for a read that failed: `ValueError` for a level,
+/// tile or rectangle the photograph does not have, `RuntimeError` naming the
+/// file that changed during the read, and [`get_err`]'s for a photograph
+/// that could not be read.
+fn tile_err(e: TileError) -> PyErr {
+    match e {
+        TileError::OutOfRange { .. } => PyValueError::new_err(e.to_string()),
+        TileError::Changed { .. } => PyRuntimeError::new_err(e.to_string()),
+        TileError::Unreadable { why, .. } => get_err(why),
+        TileError::Cancelled => PyInterruptedError::new_err(e.to_string()),
+    }
+}
+
+/// The layout of one photograph, as the cache reads it: its size, its
+/// levels and their sizes, whether it is out of core, how many levels its
+/// mipmap stores, and whether its original is read by region.
+///
+/// Made by :meth:`PhotographCache.layout`.
+#[pyclass(name = "PhotographLayout", module = "sfmtool.photographs", frozen)]
+pub struct PyPhotographLayout {
+    inner: PhotographLayout,
+}
+
+#[pymethods]
+impl PyPhotographLayout {
+    /// Level 0's width in pixels.
+    #[getter]
+    fn width(&self) -> u32 {
+        self.inner.layout.level_size(0).0
+    }
+
+    /// Level 0's height in pixels.
+    #[getter]
+    fn height(&self) -> u32 {
+        self.inner.layout.level_size(0).1
+    }
+
+    /// Whether the photograph is read from its mipmap: its workspace has
+    /// ``mipmap_options``, a side is over their ``out_of_core_long_side``,
+    /// and it is large enough to store a reduced level.
+    #[getter]
+    fn out_of_core(&self) -> bool {
+        self.inner.layout.is_out_of_core()
+    }
+
+    /// The number of levels, down to one or two pixels on the short side.
+    #[getter]
+    fn levels(&self) -> usize {
+        self.inner.layout.levels()
+    }
+
+    /// Each level's ``(width, height)``, level 0 first.
+    #[getter]
+    fn level_sizes(&self) -> Vec<(u32, u32)> {
+        let layout = &self.inner.layout;
+        (0..layout.levels()).map(|l| layout.level_size(l)).collect()
+    }
+
+    /// ``K``, the coarsest level the mipmap stores; 0 in core.
+    #[getter]
+    fn stored_levels(&self) -> usize {
+        self.inner.layout.stored_levels()
+    }
+
+    /// ``None`` in core; out of core, whether level 0 is read from the
+    /// original by region (``True``) or from its full-resolution mip level
+    /// file (``False``).
+    #[getter]
+    fn region_readable(&self) -> Option<bool> {
+        self.inner.region_readable
+    }
+
+    /// The side of the photograph tiles :meth:`PhotographCache.read_tile`
+    /// reads, in level pixels.
+    #[getter]
+    fn tile_size(&self) -> u32 {
+        self.inner.layout.tile_size()
+    }
+
+    fn __repr__(&self) -> String {
+        let (width, height) = self.inner.layout.level_size(0);
+        format!(
+            "PhotographLayout(width={width}, height={height}, levels={}, stored_levels={}, \
+             region_readable={})",
+            self.inner.layout.levels(),
+            self.inner.layout.stored_levels(),
+            match self.inner.region_readable {
+                None => "None",
+                Some(true) => "True",
+                Some(false) => "False",
+            }
+        )
     }
 }
 
@@ -80,6 +208,166 @@ impl PyPhotographCache {
         })
     }
 
+    /// The layout of the photograph at `path`, the one every read of it is
+    /// served under.
+    ///
+    /// Reads the header, the workspace's ``mipmap_options`` and, out of
+    /// core, whether the original is read by region, from a current mip
+    /// level file's record or by testing the original. Makes no mipmap and
+    /// decodes no pixel. The GIL is released while it runs.
+    ///
+    /// Args:
+    ///     path: The photograph's path.
+    ///
+    /// Returns:
+    ///     A :class:`PhotographLayout`.
+    ///
+    /// Raises:
+    ///     FileNotFoundError: when the file does not exist.
+    ///     OSError: when it cannot be read, or has a side of 65536 px or more.
+    ///     RuntimeError: when its workspace file holds an invalid
+    ///         ``mipmap_options``, naming the key.
+    fn layout(&self, py: Python<'_>, path: PathBuf) -> PyResult<PyPhotographLayout> {
+        let inner = py
+            .detach(|| self.inner.read_layout(&path))
+            .map_err(get_err)?;
+        Ok(PyPhotographLayout { inner })
+    }
+
+    /// Level `level` of the photograph at `path`, whole.
+    ///
+    /// The pixels every kernel samples for the photograph, as
+    /// :meth:`read_region` reads them.
+    ///
+    /// Args:
+    ///     path: The photograph's path.
+    ///     level: The level, 0 at full resolution.
+    ///     progress: A ``ProgressCounter``, set to 1 when the read made the
+    ///         photograph's mipmap.
+    ///
+    /// Returns:
+    ///     An ``(H, W, 3)`` read-only ``uint8`` array.
+    ///
+    /// Raises:
+    ///     As :meth:`read_region`.
+    #[pyo3(signature = (path, level, *, progress=None))]
+    fn read_level<'py>(
+        &self,
+        py: Python<'py>,
+        path: PathBuf,
+        level: i64,
+        progress: Option<ProgressCounter>,
+    ) -> PyResult<Bound<'py, PyArray3<u8>>> {
+        let level = index("level", level)? as usize;
+        let cache = &self.inner;
+        self.read(py, progress, |progress| {
+            cache.read_level(&path, level, progress)
+        })
+    }
+
+    /// The photograph tile at column `col` and row `row` of level `level`,
+    /// without its border: the rectangle of the level from
+    /// ``(col * tile_size, row * tile_size)``, ``tile_size`` pixels a side
+    /// and clipped to the level, as :meth:`read_region` reads it.
+    /// :attr:`PhotographLayout.tile_size` is the side.
+    ///
+    /// Args:
+    ///     path: The photograph's path.
+    ///     level: The level, 0 at full resolution.
+    ///     col: The tile's column.
+    ///     row: The tile's row.
+    ///     progress: A ``ProgressCounter``, set to 1 when the read made the
+    ///         photograph's mipmap.
+    ///
+    /// Returns:
+    ///     An ``(H, W, 3)`` read-only ``uint8`` array.
+    ///
+    /// Raises:
+    ///     As :meth:`read_region`.
+    #[pyo3(signature = (path, level, col, row, *, progress=None))]
+    fn read_tile<'py>(
+        &self,
+        py: Python<'py>,
+        path: PathBuf,
+        level: i64,
+        col: i64,
+        row: i64,
+        progress: Option<ProgressCounter>,
+    ) -> PyResult<Bound<'py, PyArray3<u8>>> {
+        let level = index("level", level)?;
+        let key = TileKey {
+            level: u8::try_from(level).map_err(|_| {
+                PyValueError::new_err(format!("level {level} is past every photograph"))
+            })?,
+            col: index("col", col)?,
+            row: index("row", row)?,
+        };
+        let cache = &self.inner;
+        self.read(py, progress, |progress| {
+            cache.read_tile(&path, key, progress)
+        })
+    }
+
+    /// The pixels ``x0..x1`` by ``y0..y1`` of level `level` of the
+    /// photograph at `path`.
+    ///
+    /// The pixels every kernel samples for the photograph: in core the exact
+    /// levels of its decode; out of core level 0 from the original, or from
+    /// its full-resolution mip level file when the original cannot be read
+    /// by region, the stored levels from its mip level files, and the levels
+    /// past them reduced from the coarsest. An out-of-core photograph whose
+    /// mipmap is missing or stale has it made first, and a read of a current
+    /// mipmap decodes only the tiles the rectangle covers. The GIL is
+    /// released while it runs.
+    ///
+    /// Args:
+    ///     path: The photograph's path.
+    ///     level: The level, 0 at full resolution.
+    ///     x0, y0, x1, y1: The rectangle, in the level's pixels, ``x1`` and
+    ///         ``y1`` past its last column and row.
+    ///     progress: A ``ProgressCounter``, set to 1 when the read made the
+    ///         photograph's mipmap.
+    ///
+    /// Returns:
+    ///     An ``(y1 - y0, x1 - x0, 3)`` read-only ``uint8`` array in the
+    ///     layout of ``read_image_rgb``.
+    ///
+    /// Raises:
+    ///     ValueError: for a level, tile or rectangle the photograph does not
+    ///         have, an empty rectangle, or a negative index.
+    ///     FileNotFoundError: when the file does not exist.
+    ///     OSError: when it cannot be read, or has a side of 65536 px or more.
+    ///     RuntimeError: when its workspace file holds an invalid
+    ///         ``mipmap_options``, naming the key, or when a file changed
+    ///         during the read, naming it.
+    ///     KeyboardInterrupt: for Ctrl+C, which stops the read within one
+    ///         stage.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, level, x0, y0, x1, y1, *, progress=None))]
+    fn read_region<'py>(
+        &self,
+        py: Python<'py>,
+        path: PathBuf,
+        level: i64,
+        x0: i64,
+        y0: i64,
+        x1: i64,
+        y1: i64,
+        progress: Option<ProgressCounter>,
+    ) -> PyResult<Bound<'py, PyArray3<u8>>> {
+        let level = index("level", level)? as usize;
+        let rect = LevelRect {
+            x0: index("x0", x0)?,
+            y0: index("y0", y0)?,
+            x1: index("x1", x1)?,
+            y1: index("y1", y1)?,
+        };
+        let cache = &self.inner;
+        self.read(py, progress, |progress| {
+            cache.read_region(&path, level, rect, progress)
+        })
+    }
+
     /// Make the mipmaps of the out-of-core photographs among `paths` whose
     /// mip level files are missing or stale.
     ///
@@ -113,19 +401,7 @@ impl PyPhotographCache {
         paths: Vec<PathBuf>,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Py<PyAny>> {
-        let counter = progress.as_ref().map(ProgressCounter::handle);
-        let sink = |event: Event<'_>| {
-            if let (
-                Event::Value {
-                    name: "mipmaps_made",
-                    value,
-                },
-                Some(counter),
-            ) = (event, &counter)
-            {
-                counter.fetch_max(value as usize, Ordering::Relaxed);
-            }
-        };
+        let sink = mipmaps_into(progress.as_ref());
         let cache = &self.inner;
         let report = run_watched(py, &sink, |progress| {
             let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
@@ -173,6 +449,33 @@ impl PyPhotographCache {
     }
 }
 
+impl PyPhotographCache {
+    /// Run the read `read` as [`run_watched`] runs it, counting the mipmaps
+    /// it made into `progress`, and hand its pixels to Python as a read-only
+    /// `(H, W, 3)` array.
+    fn read<'py>(
+        &self,
+        py: Python<'py>,
+        progress: Option<ProgressCounter>,
+        read: impl FnOnce(&Progress<'_>) -> Result<ImageU8, TileError> + Send,
+    ) -> PyResult<Bound<'py, PyArray3<u8>>> {
+        let sink = mipmaps_into(progress.as_ref());
+        let read = run_watched(py, &sink, |progress| match read(progress) {
+            Err(TileError::Cancelled) => Err(Cancelled),
+            read => Ok(read),
+        })?;
+        let image = read.map_err(tile_err)?;
+        let shape = (
+            image.height() as usize,
+            image.width() as usize,
+            image.channels() as usize,
+        );
+        let array = ndarray::Array3::from_shape_vec(shape, image.into_data())
+            .expect("an ImageU8 holds height * width * channels bytes");
+        Ok(read_only(array.into_pyarray(py)))
+    }
+}
+
 /// Run `run` with the GIL released on a thread of its own, its `Progress`
 /// reporting to `sink` and cancelled when one of Python's signal handlers
 /// raises, while the calling thread waits for it and runs the handlers every
@@ -214,6 +517,23 @@ fn run_watched<T: Send>(
     watch
         .finish(result)?
         .map_err(|e| PyInterruptedError::new_err(e.to_string()))
+}
+
+/// A `sink` that sets `counter` to the mipmaps the run reports it has made.
+fn mipmaps_into(counter: Option<&ProgressCounter>) -> impl Fn(Event<'_>) + Sync {
+    let counter = counter.map(ProgressCounter::handle);
+    move |event: Event<'_>| {
+        if let (
+            Event::Value {
+                name: "mipmaps_made",
+                value,
+            },
+            Some(counter),
+        ) = (event, &counter)
+        {
+            counter.fetch_max(value as usize, Ordering::Relaxed);
+        }
+    }
 }
 
 /// A `sink` that sets `counter` to the count the run reports.
@@ -351,6 +671,7 @@ fn prune_mipmaps_py(
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPhotographCache>()?;
+    m.add_class::<PyPhotographLayout>()?;
     m.add_function(wrap_pyfunction!(check_mipmaps_py, m)?)?;
     m.add_function(wrap_pyfunction!(prune_mipmaps_py, m)?)?;
     Ok(())

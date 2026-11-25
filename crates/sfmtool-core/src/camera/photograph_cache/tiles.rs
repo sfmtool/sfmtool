@@ -245,7 +245,11 @@ fn read_failed(path: &Path, e: PhotographReadError) -> TileError {
 }
 
 /// Refuse a key whose level, column or row `layout` does not have.
-fn check_keys(path: &Path, layout: &PyramidLayout, keys: &[TileKey]) -> Result<(), TileError> {
+pub(super) fn check_keys(
+    path: &Path,
+    layout: &PyramidLayout,
+    keys: &[TileKey],
+) -> Result<(), TileError> {
     for &key in keys {
         if !has_key(layout, key) {
             return Err(TileError::OutOfRange {

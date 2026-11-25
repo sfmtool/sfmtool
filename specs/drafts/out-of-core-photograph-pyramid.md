@@ -1579,9 +1579,14 @@ class PhotographCache:
   does. Each message names the path.
 
 **An optional `cache=` argument on every binding that reads a
-reconstruction's photographs by path**: `ImagePyramidSet.read(views_or_recon,
+reconstruction's photographs by path**: `ImagePyramidSet.read(recon_or_paths,
 workspace_dir=None, cache=None, progress=None)` and
-`sfmtool.fileio.write_web_export(…, cache=None)`. The kernels take arrays or
+`sfmtool.fileio.write_web_export(…, cache=None)`. `read`'s first argument is
+an `SfmrReconstruction`, whose `image_names` it reads under `workspace_dir`
+(the reconstruction's own workspace when omitted), or a list of photograph
+paths, read in that order with no check of their sizes at the read (a kernel
+checks the set against its scene); a `CameraViews` is refused, since it names
+no photographs (open question 20). The kernels take arrays or
 an `ImagePyramidSet`, not paths. The other bindings that read photographs by
 path decode each whole and keep no pyramid, so they take no cache:
 `read_image_rgb`, `read_image_rgba` and `image_has_alpha` (row P1), and the
@@ -3999,6 +4004,95 @@ in core. Step 17 turns the tier on.
     index and a negative budget raise `ValueError`, a missing file
     `FileNotFoundError`, and an invalid `mipmap_options` `RuntimeError`; the
     class's new methods pass the registration test.
+
+    Step 16 is five pull requests. Each moves a reader only once the
+    binding it reads through is built, and a reader that has not moved
+    keeps reading `read_image_rgb` or `read_workspace_image` arrays, whose
+    pixels are the in-core ones, so no part leaves a reader without pixels.
+    `sfm cluster-patches` moves in the second, since it is the reader whose
+    memory the user reported (36 photographs of 200 MP, every one decoded
+    whole at once).
+
+    - **16a, the class's reads.** **Built.** Core's `read_layout`, with
+      `PhotographLayout`, and `read_level`, `read_tile` and `read_region`
+      in [photograph_cache/pixels.rs](../../crates/sfmtool-core/src/camera/photograph_cache/pixels.rs),
+      each read the photograph `get` answers and copied from the tiles the
+      rectangle covers, so it makes a missing mipmap first and reports
+      `mipmaps_made`; and the Python `PhotographLayout` and
+      `PhotographCache.layout`, `read_level`, `read_tile` and
+      `read_region`. Two choices made in building it, against the
+      interface above: core has a read for each of the three Python
+      methods, rather than `read_region` alone, since `read_tile` and
+      `read_level` need the layout `get` answers to know their rectangle
+      and a binding that read the layout first would read the header
+      twice; and the three answer `TileError`, as `get_tile` and
+      `get_level` do, rather than `PhotographReadError`, since its
+      `Unreadable` merges `GetError::Unreadable` and `GetError::Workspace`,
+      which Python raises as `OSError` and `RuntimeError`.
+      The Python `PhotographLayout` also has `tile_size`, the side
+      `read_tile`'s columns and rows count in. No reader moves, so no
+      result changes.
+      Tests: in
+      [pixels/tests.rs](../../crates/sfmtool-core/src/camera/photograph_cache/pixels/tests.rs),
+      the layout `get` answers, a level, tiles and a region equal to a
+      `Bilinear` render at level 0 and a `BilinearMip` render pinned to
+      each level through another cache, the mipmap made once, and the
+      errors; in
+      [test_photograph_cache_rust_bindings.py](../../tests/rust_bindings/photographs/test_photograph_cache_rust_bindings.py),
+      the layout's fields, read-only arrays equal to `read_image_rgb` in
+      core and to the level's slice, the counter, and the Python
+      exceptions; and the registration test's new names. Specified in
+      [photograph-cache.md § "Layouts and pixels for a script"](../core/camera/photograph-cache.md#layouts-and-pixels-for-a-script)
+      and [python-bindings.md](../python-bindings.md).
+    - **16b, `ImagePyramidSet.read` and `sfm cluster-patches`.**
+      `ImagePyramidSet.read`, reading its photographs with `get_many`
+      through the `cache=` it is given or a cache of its own, counting
+      mipmaps made into `progress=`; the cluster refinement's binding
+      (`sfmtool._sfmtool.matching.refine_cluster_patches`) taking an
+      `ImagePyramidSet` in place of its `images` list, as the
+      `PatchCloud` kernels do; and `sfm cluster-patches` reading through it
+      instead of decoding every photograph whole with `read_image_rgb` in a
+      thread pool (P4). For a `.matches` file, which names its
+      photographs and workspace but has no reconstruction, the command
+      passes `read` the list of paths
+      `[workspace_dir / name for name in image_names]`, as open question
+      20 decides. Tests: a list of paths read in order and a
+      `CameraViews` refused with `TypeError`; a cache passed
+      to two `read` calls makes and decodes once, its `stats` showing the
+      second call's reads as hits, and two calls without `cache=` share
+      nothing; a set whose photograph changes after the read raising
+      `RuntimeError` naming it from a kernel; `sfm cluster-patches` on the
+      `seoul_bull_workspace` fixture writing the same file as before,
+      byte for byte; and with the small threshold the CLI and the viewer's
+      cluster-patches build (row 19) refining the same members to the same
+      values. Peak memory measured before and after on a synthetic
+      workspace.
+    - **16c, `embed-patches` and the `xform` steps.** `sfm embed-patches`
+      and the photometric `xform` steps (`--refine-normals`,
+      `--refine-keypoints`, `--localize-keypoints` and the heavy columns),
+      which read `load_workspace_images` or `read_workspace_image`
+      arrays, on `ImagePyramidSet.read(recon)` (P3), one cache per command
+      run. Tests: in-core results unchanged byte for byte on the
+      `seoul_bull_workspace` fixture, and with the small threshold equal
+      to the viewer's conversion to embedded patches and *Refine all
+      normals* for the same reconstruction.
+    - **16d, the strips.** `compare --strips` and `inspect --strips`
+      (`src/sfmtool/strips/`), which read `read_workspace_image` arrays,
+      every photograph at once in `_inspect.py` and one at a time in
+      `_solve.py`, on `ImagePyramidSet.read` (P3). Tests: the montages
+      unchanged in core.
+    - **16e, `write_web_export(cache=)` and the `scripts/` harnesses.**
+      `write_web_export` taking the `cache=` its export reads through, and
+      the harnesses that build an `ImagePyramidSet` from `read_image_rgb`
+      arrays, `scripts/track_at_pixel/context.py`,
+      `scripts/add_image_to_tracks/harness.py` and `misses.py` (§ "Every
+      reader of photograph pixels"), and `scripts/bench_bars/measure.py`
+      and `scripts/reference_view/measure.py`, found since, on
+      `ImagePyramidSet.read`. `bench_bars/measure.py` also builds a set
+      from arrays it has modified, which stays on the constructor, since
+      `read` reads only the files. Tests: a cache passed to
+      `write_web_export` and to `ImagePyramidSet.read` makes each mipmap
+      once.
 17. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
     viewer's one-line notice for a workspace without it, and the workspace
@@ -4242,3 +4336,34 @@ decisions.
     (`AppState::forget_closed_mipmaps`). A chunk a run has already taken
     is left to finish, but a cancelled run does not put a closed node's
     photographs back unless an open or a panel queued them again first.
+20. **What `ImagePyramidSet.read` takes for `sfm cluster-patches`.** Found
+    while splitting step 16. § "Python bindings" gave
+    `ImagePyramidSet.read(views_or_recon, workspace_dir=None, cache=None,
+    progress=None)`, and step 16 moves `sfm cluster-patches` onto it. But
+    that command reads a `.matches` file, which names its photographs
+    (`image_names`, under its workspace) and their sizes (`image_dims`) and
+    has no reconstruction and no cameras; and a `CameraViews` names no
+    photographs, so `read` has no path to read for one either. The
+    options:
+    - (a) `read`'s first argument is an `SfmrReconstruction`, whose
+      `image_names` are read under `workspace_dir` (its own workspace when
+      omitted), or a list of photograph paths, read in that order with no
+      check of their sizes at the read (a kernel checks the set against its
+      scene, as it does today); a `CameraViews` is refused, since it names
+      no photographs. `sfm cluster-patches` passes
+      `[workspace_dir / name for name in image_names]`.
+    - (b) `read` keeps a scene as its first argument, for the size check,
+      and takes the paths as a second, `paths=None`, required with a
+      `CameraViews`; `sfm cluster-patches` builds a `CameraViews` from the
+      file's `image_dims`, with poses it does not use.
+    - (c) no `ImagePyramidSet` for it: the cluster refinement's binding
+      takes `image_paths=` and `cache=` and reads through `get_many`
+      itself, as `write_web_export` does, against § "Python bindings"'
+      rule that the kernels take arrays or a set, not paths.
+
+    *Decided by the user:* (a). It reads the same photographs the
+    viewer's cluster-patches build reads (row 19, `get_many` over the
+    paths), and it invents no scene for a command that has none. The
+    signature is `ImagePyramidSet.read(recon_or_paths, workspace_dir=None,
+    cache=None, progress=None)`, as § "Python bindings" gives it, and step
+    16b builds it.

@@ -27,8 +27,11 @@
 //! ([`PhotographCache::reserve_builds`]), so the decodes in progress on one
 //! cache stay within its build budget. A panel asks for a photograph's layout
 //! and tiles with [`PhotographCache::layout`], [`PhotographCache::peek_tile`]
-//! and [`PhotographCache::try_decode_tiles`], which never waits. The design is
-//! in the spec `specs/core/camera/photograph-cache.md`.
+//! and [`PhotographCache::try_decode_tiles`], which never waits. A script
+//! reads a photograph's layout and pixels, blocking, with
+//! [`PhotographCache::read_layout`] and [`PhotographCache::read_region`] and
+//! its two siblings. The design is in the spec
+//! `specs/core/camera/photograph-cache.md`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,10 +53,12 @@ use crate::workspace::{
 
 mod build;
 mod files;
+mod pixels;
 mod tiles;
 
 use build::Make;
 use files::{Failure, FileEntry, LevelSource, Tier, Unmapped};
+pub use pixels::PhotographLayout;
 pub use tiles::{
     CoarsestLevel, PeekedLayout, PeekedTile, TileError, TryDecode, COARSEST_PUBLISHED,
 };
