@@ -298,3 +298,36 @@ fn a_click_asks_for_what_the_target_stands_for() {
     );
     assert_eq!(click_gesture(&Target::Indicator, false), None);
 }
+
+/// Where one headless frame painted `text` as a measurement's hover text with
+/// the pointer at `pointer` in `bounds`.
+fn hover_text_rect(pointer: Pos2, bounds: Rect) -> Rect {
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+        ..Default::default()
+    };
+    let painted = crate::test_support::painted_text_rects(&ctx, input, |ui| {
+        draw_hover_text(ui.painter(), pointer, "distance #1  1.2300 m", bounds);
+    });
+    assert_eq!(painted.len(), 1, "{painted:?}");
+    painted[0].rect
+}
+
+#[test]
+fn the_hover_text_sits_right_of_the_pointer_and_moves_left_at_the_right_edge() {
+    let bounds = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(600.0, 400.0));
+
+    // In the open, the text starts 14 points right of and below the pointer.
+    let pointer = Pos2::new(200.0, 150.0);
+    let text = hover_text_rect(pointer, bounds);
+    assert_eq!(text.min, pointer + Vec2::new(14.0, 14.0));
+
+    // At the right edge it is left of the pointer, at the same height, and
+    // its ground is the same 10 points away.
+    let pointer = Pos2::new(595.0, 150.0);
+    let text = hover_text_rect(pointer, bounds);
+    assert_eq!(text.right() + 4.0, pointer.x - 10.0, "{text:?}");
+    assert_eq!(text.top(), pointer.y + 14.0, "{text:?}");
+    assert!(bounds.contains_rect(text.expand(4.0)), "{text:?}");
+}

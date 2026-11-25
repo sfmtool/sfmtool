@@ -1070,8 +1070,8 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | 22 | Image readings at save (`reconstruction/image_readings.rs` `gather_image_readings`) | whole decode of every photograph with no `.sift` row, with the number decoded at once bounded by memory as SIFT's is (built in step 4) | unchanged | no |
 | P1 | `sfmtool.fileio.read_image_rgb` / `read_image_rgba` (`sfmtool-py/src/fileio/image.rs`) | whole decode | unchanged: they read files, not pyramids | no |
 | P2 | `ImagePyramidSet(recon, images)` and the kernels' `images` lists (`sfmtool-py/src/patches/views.rs`) | exact pyramids of the arrays passed | tiled photographs cut from the arrays (`TiledPhotograph::from_image`), the same pixels; a new `ImagePyramidSet.read(recon)` reads by path through the core cache | no for arrays; through `read`, as rows 11–18 |
-| P3 | `embed-patches`, the strip montages, the `xform` steps that read photographs (`src/sfmtool/_embed_patches.py`, `src/sfmtool/strips/`, `src/sfmtool/xform/_images.py`) | `read_workspace_image` arrays into the kernels | `ImagePyramidSet.read(recon)` | the stored levels, so they match the viewer |
-| P4 | `sfm cluster-patches` (`src/sfmtool/_cluster_patches.py`) | `read_image_rgb` arrays, full depth | through the same reader as #19 | the stored levels |
+| P3 | `embed-patches`, the strip montages, the `xform` steps that read photographs (`src/sfmtool/_commands/embed_patches.py`, `src/sfmtool/strips/`, `src/sfmtool/xform/_apply.py`) | `embed-patches` and the `xform` steps: `ImagePyramidSet.read(recon)` through one cache per run (built, 16c); the strip montages: `read_workspace_image` arrays into the kernels | `ImagePyramidSet.read(recon)` | the stored levels, so they match the viewer |
+| P4 | `sfm cluster-patches` (`src/sfmtool/_cluster_patches.py`) | `ImagePyramidSet.read` over the paths the file names, `get_many` through a cache of its own, as #19 reads them (built, 16b); before 16b, `read_image_rgb` arrays, full depth, every photograph held at once | through the same reader as #19 | the stored levels |
 | P5 | The view-tile binding (`sfmtool-py/src/patches/view_tile.rs`) | an exact pyramid of the array passed | a tiled photograph cut from the array | no |
 | P6 | Optical flow's pyramids (`sfmtool-py/src/flow/warp.rs`) | a grey pyramid of its own from an array | unchanged; flow reads level 0 from its array | no |
 | P7 | Spherical tile source stacks (`sfmtool-py/src/spherical/tile_source_stack.rs` → `spherical/per_tile_source_stack.rs`) | `remap_bilinear` of the arrays passed | unchanged: they read arrays, not pyramids | no |
@@ -4045,6 +4045,45 @@ in core. Step 17 turns the tier on.
       [photograph-cache.md § "Layouts and pixels for a script"](../core/camera/photograph-cache.md#layouts-and-pixels-for-a-script)
       and [python-bindings.md](../python-bindings.md).
     - **16b, `ImagePyramidSet.read` and `sfm cluster-patches`.**
+      **Built.** `ImagePyramidSet.read` in
+      [views.rs](../../crates/sfmtool-py/src/patches/views.rs), over
+      `get_photographs` in
+      [photographs.rs](../../crates/sfmtool-py/src/photographs.rs); the
+      cluster binding taking a set in
+      [cluster.rs](../../crates/sfmtool-py/src/matching/cluster.rs), beside
+      the list of arrays it still takes, as the `PatchCloud` kernels do; and
+      `sfm cluster-patches` reading through it, with a cache it makes, and
+      printing the cache's whole decodes, mipmaps made and budget. Choices
+      made in building it: `TiledPhotograph` is `Clone`, a clone copying no
+      pixel, so the set keeps the photographs `get_many` answers as the
+      `Vec<TiledPhotograph>` every kernel binding already reads rather than
+      a set of `Arc`s that would change them all; `read` checks a
+      reconstruction's photographs against its cameras, as the constructor
+      does, and refuses `workspace_dir` with a list of paths
+      (`ValueError`); and a cache `read` makes for itself lives as long as
+      the set, since the set's photographs read through it. In core the
+      command writes the same file as before, byte for byte. The measured
+      cost, and the decision on it, are open question 21.
+      Tests: in
+      [test_image_pyramid_set_read_rust_bindings.py](../../tests/rust_bindings/patches/test_image_pyramid_set_read_rust_bindings.py),
+      a list of paths read in order and refined as the arrays of
+      `read_image_rgb` are, a `CameraViews`, a string, `workspace_dir` with
+      paths and a missing file refused, a reconstruction read under its
+      workspace and checked against its cameras, a cache passed to two reads
+      decoding and making each photograph once, and a photograph changed
+      after the read failing the refinement with `RuntimeError` naming it;
+      in [test_cluster_patches.py](../../tests/patch/test_cluster_patches.py),
+      the command on the `seoul_bull_workspace` fixture writing the file the
+      `read_image_rgb` arrays write, byte for byte, and with `mipmap_options`
+      making and reading every photograph's mipmap; and in the viewer's
+      [cluster_patches/tests.rs](../../crates/sfm-explorer/src/cluster_patches/tests.rs),
+      its build equal to the command's steps re-derived, now reading the
+      photographs through a cache of their own, in core and with a threshold
+      of 64 px, over photographs whose patches pin a position so the members
+      are measured. Two parts of the plan were not built: "two calls
+      without `cache=` share nothing" has nothing a test can observe, and the
+      peak memory measured below is in the open question rather than a test.
+      The plan as written:
       `ImagePyramidSet.read`, reading its photographs with `get_many`
       through the `cache=` it is given or a cache of its own, counting
       mipmaps made into `progress=`; the cluster refinement's binding
@@ -4067,7 +4106,47 @@ in core. Step 17 turns the tier on.
       cluster-patches build (row 19) refining the same members to the same
       values. Peak memory measured before and after on a synthetic
       workspace.
-    - **16c, `embed-patches` and the `xform` steps.** `sfm embed-patches`
+    - **16c, `embed-patches` and the `xform` steps.** **Built.**
+      `sfm embed-patches` reads its photographs with
+      `ImagePyramidSet.read(recon, cache=cache)` through a cache it makes, in
+      [_commands/embed_patches.py](../../src/sfmtool/_commands/embed_patches.py),
+      and hands the set to `embed_patches`, which takes a set or a list of
+      arrays and cuts a list into a set once; and `apply_transforms`
+      ([_apply.py](../../src/sfmtool/xform/_apply.py)) makes one cache for
+      the run, when its first step that reads photographs runs, and passes
+      it to each such step, which reads its photographs with
+      `ImagePyramidSet.read(recon, cache=cache)`. `load_workspace_images`
+      is deleted. Choices made in building it: a step that reads photographs
+      says so with `reads_photographs = True` and takes
+      `apply(recon, cache=None)`, as a step that needs an embedded value says
+      so with `required_feature_source`, so the `Transform` protocol's
+      `apply(recon)` is unchanged for every other step and a step applied on
+      its own reads through a cache of its own; and both commands print the
+      `Photographs:` line and the recommendation of open question 21 that
+      `sfm cluster-patches` prints, from one function,
+      `photograph_cache_lines` in
+      [_photograph_cache_report.py](../../src/sfmtool/_photograph_cache_report.py),
+      since a run of either reads every photograph in each kernel call or
+      step and decodes them again as `sfm cluster-patches` does once their
+      tiles are more than the budget. In core both write the same file as
+      before, byte for byte; the measured cost is in open question 21.
+      Tests: in
+      [test_embed_patches_command.py](../../tests/patch/test_embed_patches_command.py),
+      the command on every eighth point of the `seoul_bull_workspace`
+      fixture writing the file the `read_image_rgb` arrays write, byte for
+      byte but the write record, with each photograph decoded once, and with
+      `mipmap_options` making each mipmap once; in
+      [test_photograph_cache.py](../../tests/xform/test_photograph_cache.py),
+      the same for `sfm xform --to-embedded-patches --add-patch-bitmaps
+      --refine-normals --localize-keypoints --refine-keypoints`, its four
+      steps that read photographs sharing the one cache; and in the viewer's
+      [state/edits/tests.rs](../../crates/sfm-explorer/src/state/edits/tests.rs),
+      *Convert to Embedded Patches* and *Refine All Normals* giving the
+      values the core calls behind `--to-embedded-patches
+      --add-patch-bitmaps --refine-normals` give over photographs read
+      through a cache of their own, in core and with a threshold of 64 px.
+      The plan as written:
+      `sfm embed-patches`
       and the photometric `xform` steps (`--refine-normals`,
       `--refine-keypoints`, `--localize-keypoints` and the heavy columns),
       which read `load_workspace_images` or `read_workspace_image`
@@ -4095,7 +4174,10 @@ in core. Step 17 turns the tier on.
       once.
 17. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
-    viewer's one-line notice for a workspace without it, and the workspace
+    viewer's one-line notice for a workspace without it, the line
+    recommending the object (open question 21) that `sfm cluster-patches`,
+    `sfm embed-patches` and `sfm xform` print naming `sfm ws mipmaps
+    --enable` in place of the object to add by hand, and the workspace
     spec gains the object. Tests: a new workspace has the object with 4096,
     95 and 95; `--enable` writes the object and refuses a file that has one;
     a workspace without the object writes nothing (the checked-in `test-data`
@@ -4367,3 +4449,101 @@ decisions.
     signature is `ImagePyramidSet.read(recon_or_paths, workspace_dir=None,
     cache=None, progress=None)`, as § "Python bindings" gives it, and step
     16b builds it.
+21. **`sfm cluster-patches` with in-core photographs past the cache's
+    budget.** Found while building 16b. Until step 17
+    turns the tier on, a workspace has no `mipmap_options` and every
+    photograph is in core, so the cache keeps whole decodes' tiles, and a
+    tile it has evicted is read by decoding the whole photograph again. The
+    refinement takes its clusters in the file's order, in parallel, and each
+    reads several photographs, so once the photographs' tiles are more than
+    the budget, they are decoded again many times. Measured on the first 8
+    of the user's 36 photographs (16320 x 12240), copied to a scratch
+    workspace, with the 24,805 clusters (63,492 members) of the user's
+    clusters file that lie among them; each figure is one run, wall clock,
+    with the process's peak working set:
+
+    | Run | Cache budget | Whole decodes | Time | Peak working set |
+    |-----|--------------|---------------|------|------------------|
+    | before 16b: `read_image_rgb` arrays | none | 8 | 6.4 s | 14.4 GB |
+    | 16b, in core | 15.9 GiB (default) | 8 | 5.3 s | 8.8 GB |
+    | 16b, in core | 3.3 GiB | 65 | 36 s (61 s in a second run) | 8.9 GB |
+    | 16b, in core | 0.9 GiB | 408 (446) | 188 s (279 s) | 8.9 GB |
+    | 16b, `mipmap_options` (4096, 95, 95), making the mipmaps | 15.9 GiB | 0, 8 mipmaps made | 7.0 s | 7.6 GB |
+    | 16b, `mipmap_options`, mipmaps current | 15.9 GiB | 0 | 4.4 s | 2.3 GB |
+    | 16b, `mipmap_options`, mipmaps current | 0.9 GiB | 0 | 7.0 s | 1.4 GB |
+
+    In core every 16b run wrote the file of the run before 16b, byte for
+    byte (with the timestamp fixed); with the tier the runs agree with each
+    other, and 882 of the 63,492 members take another status than in core,
+    since they read the stored levels.
+
+    The tiles of one photograph are about 0.85 GB, so the user's 36 are
+    about 30 GB against the default budget of 16 GiB on the 64 GB machine,
+    about the 3.3 GiB row's ratio. Before 16b the command held all 36 as
+    arrays and tiles at once, about 1.8 GB each, 65 GB in all. The peak
+    working set does not fall below about 9 GB however small the budget,
+    because the decodes in progress are bounded by the build budget (16 GiB
+    on that machine), not by the cache's budget. The options:
+    - (a) take the clusters in an order that reads each photograph's tiles
+      together: the kernel, or the command, groups the clusters by a
+      member image and refines a group at a time. Grouping by the lowest
+      member image and refining each group in its own kernel call, tried in
+      a scratch script, decoded about as often (62 against 67 at 3.3 GiB,
+      421 against 446 at 0.9 GiB) and was no faster, since a group's
+      clusters still reach most photographs and rayon runs a group's
+      clusters across every thread; an order that helps would have to
+      bound the photographs a stretch of clusters reads;
+    - (b) a budget for the command that holds every photograph when memory
+      allows, such as the photographs' tile bytes up to half of physical
+      memory, which keeps the time and holds about 0.85 GB per 200 MP
+      photograph, still half of what the arrays held, but needs about 30 GB
+      for the user's 36;
+    - (c) leave it, and recommend the tier for photographs of this size
+      (`mipmap_options` in the workspace file now; step 17 makes `sfm ws
+      init` write it): with it the same run reads tiles of the mip level
+      files and decodes no photograph whole, at any budget.
+
+    *Decided by the user:* (c). 16b ships as built, relying on the tier.
+    When the command's cache decodes photographs whole more times than the
+    in-core photographs it read, the command prints a line after its
+    `Photographs:` line recommending a `mipmap_options` object in the
+    workspace's `.sfm-workspace.json`, naming the file and giving the object
+    to add by hand; step 17 changes it to name `sfm ws mipmaps --enable`.
+    Step 16c moves `sfm embed-patches` and the `xform` steps onto the same
+    reads, and they print the same lines (§ "Implementation steps", 16c).
+    Measured as above on the same 8 photographs with the copied solve cut
+    to them (4,755 points, 9,411 observations): `sfm xform --refine-normals
+    --localize-keypoints --refine-keypoints`, and `embed_patches` with its
+    defaults, given the set `sfm embed-patches` reads (the command takes a
+    `sift_files` reconstruction, which the copied solve is not):
+
+    | Run | Cache budget | Whole decodes | Time | Peak working set |
+    |-----|--------------|---------------|------|------------------|
+    | before 16c: `read_image_rgb` arrays, each step decoding every photograph | none | 24 | 51.5 s (178 s in a second run) | 14.6 GB (14.4 GB) |
+    | 16c, in core | 15.9 GiB (default) | 8 | 19.2 s (62 s) | 8.4 GB (8.0 GB) |
+    | 16c, in core | 3.2 GiB | 133 | 94 s | 11.3 GB |
+    | 16c, in core | 0.8 GiB | not finished; stopped after about 45 min | | |
+    | 16c, `mipmap_options` (4096, 95, 95), mipmaps current | 15.9 GiB | 0 | 81 s | 3.2 GB |
+    | 16c, `mipmap_options`, mipmaps current | 0.8 GiB | 0 | 150 s | 3.4 GB |
+
+    | Run | Cache budget | Whole decodes | Time | Peak working set |
+    |-----|--------------|---------------|------|------------------|
+    | before 16c: `read_image_rgb` arrays, decoded in a thread pool | none | 8 | 61 s | 14.4 GB |
+    | 16c, in core | 15.9 GiB (default) | 8 | 54 s | 7.9 GB |
+    | 16c, in core | 3.2 GiB | 184 | 354 s | 11.6 GB |
+    | 16c, `mipmap_options` (4096, 95, 95), mipmaps current | 15.9 GiB | 0 | 169 s | 3.9 GB |
+    | 16c, `mipmap_options`, mipmaps current | 0.8 GiB | 0 | 437 s | 2.2 GB |
+
+    In core every 16c run wrote the file of the run before 16c, byte for
+    byte but the write record. Before 16c each `xform` step decoded every
+    photograph again, one after another, so the three steps decoded them
+    three times; with one cache for the run they are decoded once at the
+    default budget. The machine was shared with other work while these
+    ran, and the same run took up to three times as long from one run to
+    the next, so the times compare only roughly. Unlike `sfm cluster-patches` in 16b, both
+    commands took longer reading their photographs out of core, from
+    current mipmaps, than in core at the default budget (81 s against 19 s
+    for the `xform` steps, 169 s against 54 s for `embed_patches`), while
+    holding less than half the memory; what in their reads costs the time
+    is not measured yet, and is to be found before step 17 turns the tier
+    on.

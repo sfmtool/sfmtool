@@ -16,7 +16,6 @@ import math
 from .._progress import _poll_progress
 from .._sfmtool.bench import REFINE_NORMALS_METHODS
 from .._sfmtool.reconstruction import SfmrReconstruction
-from ._images import load_workspace_images
 
 
 class RefineNormalsTransform:
@@ -33,6 +32,8 @@ class RefineNormalsTransform:
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
     required_feature_source = "embedded_patches"
+    # `apply_transforms` passes these steps the run's photograph cache.
+    reads_photographs = True
 
     def __init__(self, method: str = "grown_plane"):
         if method not in REFINE_NORMALS_METHODS:
@@ -41,8 +42,9 @@ class RefineNormalsTransform:
             )
         self.method = method
 
-    def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+    def apply(self, recon: SfmrReconstruction, cache=None) -> SfmrReconstruction:
         from .._sfmtool.bench import refine_normals
+        from ..patches import ImagePyramidSet
 
         # Refuse a value with no patch frames before the photographs are
         # decoded, naming the step that builds them.
@@ -51,7 +53,7 @@ class RefineNormalsTransform:
                 "reconstruction has no patch frames to refine; expected "
                 "embedded_patches (run `sfm xform --to-embedded-patches` first)"
             )
-        images = load_workspace_images(recon)
+        images = ImagePyramidSet.read(recon, cache=cache)
         print(
             f"  Refining the normals of {recon.point_count} points "
             f"across {recon.image_count} images..."

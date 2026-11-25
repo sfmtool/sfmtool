@@ -2169,6 +2169,211 @@ fn a_missing_sift_file_fails_the_operation() {
     assert_eq!(state.scene[0].history.versions().len(), 1);
 }
 
+// ── The same values as the command line ─────────────────────────────────
+
+/// Convert to Embedded Patches and Refine All Normals give the values
+/// `sfm xform --to-embedded-patches --add-patch-bitmaps --refine-normals`
+/// writes, with the photographs in core.
+#[test]
+fn converting_and_refining_give_the_xform_steps_values() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_converting_and_refining_give_the_xform_steps_values(dir.path());
+}
+
+/// The same, with every photograph out of core: the viewer and the steps read
+/// the same stored levels.
+#[test]
+fn converting_and_refining_give_the_xform_steps_values_out_of_core() {
+    let dir = tempfile::tempdir().unwrap();
+    // A side over 64 px puts a photograph out of core.
+    std::fs::write(
+        dir.path()
+            .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
+        r#"{"version": 2, "mipmap_options": {"out_of_core_long_side": 64,
+        "jpeg_quality": 95, "full_resolution_jpeg_quality": 95}}"#,
+    )
+    .unwrap();
+    assert_converting_and_refining_give_the_xform_steps_values(dir.path());
+    let mipmaps = dir
+        .path()
+        .join(sfmtool_core::camera::mipmap::MIPMAP_DIR_NAME);
+    assert!(
+        std::fs::read_dir(&mipmaps).is_ok_and(|mut files| files.next().is_some()),
+        "the photographs were read out of core, from their mipmaps"
+    );
+}
+
+/// Convert [`convertible_state`]'s node to embedded patches and refine all its
+/// normals in the viewer, and compare each value with what the `sfm xform`
+/// steps make of the same input.
+///
+/// The expectation is derived the way the steps derive it, not by calling the
+/// viewer's own functions: the bindings' core calls with the steps' default
+/// settings, over every photograph read through a photograph cache of its own,
+/// as `ImagePyramidSet.read(recon, cache=…)` reads them for the run.
+fn assert_converting_and_refining_give_the_xform_steps_values(dir: &std::path::Path) {
+    use sfmtool_core::bench::{refine_normals, RefineNormalsOptions};
+    use sfmtool_core::camera::sampler::RegionPool;
+    use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions, TiledPhotograph};
+    use sfmtool_core::geometry::RigidTransform;
+    use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
+    use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
+    use sfmtool_core::patch::normal_refine::ProjectedImage;
+    use sfmtool_core::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
+    use sfmtool_core::patch::PatchCloud;
+    use sfmtool_core::progress::Progress;
+
+    let (mut state, id) = convertible_state(dir);
+    let source = Arc::clone(&state.scene[0].edited().base);
+    // A pattern of a few pixels' period that differs between the axes and
+    // between the images, so every render reads pixels that tell the levels
+    // apart.
+    let camera = &source.image_set.cameras[0];
+    let (width, height) = (camera.width, camera.height);
+    for (index, image) in source.image_set.images.iter().enumerate() {
+        let picture = image::RgbImage::from_fn(width, height, |x, y| {
+            let v = ((x + 3 * index as u32) % 9 * 14 + y % 7 * 18) as u8;
+            image::Rgb([v, v / 2 + 64, 255 - v])
+        });
+        picture.save(dir.join(&image.name)).unwrap();
+    }
+
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("the fixture has a .sift file per image");
+    state.finish_background_tasks();
+    let converted = Arc::clone(&state.scene[0].edited().base);
+    assert_eq!(converted.point_set.observations.name(), "embedded_patches");
+    state
+        .start_refine_all_normals(id, crate::state::edits::RefineAllNormalsStep::GrownPlane)
+        .expect("the converted node carries keypoints, frames and poses");
+    state.finish_background_tasks();
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    let refined = Arc::clone(&state.scene[0].edited().base);
+
+    // The photographs, read through a cache of the steps' own.
+    let paths: Vec<std::path::PathBuf> = source
+        .image_set
+        .images
+        .iter()
+        .map(|image| dir.join(&image.name))
+        .collect();
+    let paths: Vec<&std::path::Path> = paths.iter().map(|path| path.as_path()).collect();
+    let (found, _) = PhotographCache::new(PhotographCacheOptions::default())
+        .get_many(&paths, &Progress::none())
+        .unwrap();
+    let photographs: Vec<TiledPhotograph> = found
+        .into_iter()
+        .map(|photograph| Arc::unwrap_or_clone(photograph.expect("readable")))
+        .collect();
+    let cameras: Vec<_> = (0..source.image_count())
+        .map(|i| source.image_intrinsics(i).into_owned())
+        .collect();
+    let poses: Vec<RigidTransform> = source
+        .image_set
+        .images
+        .iter()
+        .map(|im| {
+            let q = im.quaternion_wxyz;
+            let t = im.translation_xyz;
+            RigidTransform::from_wxyz_translation([q.w, q.i, q.j, q.k], [t.x, t.y, t.z])
+        })
+        .collect();
+    let views: Vec<ProjectedImage<'_>> = cameras
+        .iter()
+        .zip(&poses)
+        .zip(&photographs)
+        .map(|((camera, cam_from_world), source)| ProjectedImage {
+            camera,
+            cam_from_world,
+            source,
+        })
+        .collect();
+
+    // `--to-embedded-patches`: the binding's defaults, a full patch edge of
+    // fifteen features halved to the library's half-extent.
+    let expected = source
+        .to_embedded_patches(
+            PatchNormal::MeanViewing,
+            PatchExtent::FeatureSize {
+                factor: 7.5,
+                across: ViewReduce::Median,
+            },
+            &Progress::none(),
+        )
+        .unwrap();
+    assert_eq!(
+        converted.point_set.patch_u_halfvec_xyz,
+        expected.point_set.patch_u_halfvec_xyz
+    );
+    assert_eq!(
+        converted.point_set.patch_v_halfvec_xyz,
+        expected.point_set.patch_v_halfvec_xyz
+    );
+    assert_eq!(converted.keypoints_xy(), expected.keypoints_xy());
+
+    // `--add-patch-bitmaps`: `PatchCloud.render_bitmaps` at its defaults over
+    // the stored frames, every view read.
+    let cloud = PatchCloud::from_stored_patch_frames(&expected)
+        .unwrap()
+        .expect("patch frames");
+    let some_views: Vec<Option<ProjectedImage<'_>>> = views.iter().cloned().map(Some).collect();
+    let column = render_patch_cloud_bitmaps(
+        &cloud,
+        &expected,
+        &some_views,
+        &RegionPool::for_kernel_call(),
+        &KeypointSubpixelParams::default(),
+        UnreferencedPoints::Pick,
+        None,
+        &Progress::none(),
+    )
+    .unwrap();
+    let bitmaps = converted
+        .point_set
+        .patch_bitmaps_y_x_rgba
+        .as_ref()
+        .expect("the conversion rendered bitmaps");
+    // The renders read pixels: some row is not zero.
+    assert!(bitmaps.iter().any(|&channel| channel != 0));
+    assert_eq!(bitmaps.as_ref(), &column.bitmaps);
+    assert_eq!(
+        converted.point_set.reference_observations.as_ref(),
+        Some(&column.reference_observations)
+    );
+
+    // `--refine-normals`: `sfmtool.bench.refine_normals` at its defaults over
+    // the value the two steps above wrote.
+    let (expected, report) = refine_normals(
+        &converted,
+        &views,
+        &RegionPool::for_kernel_call(),
+        &RefineNormalsOptions::default(),
+        &Progress::none(),
+    )
+    .unwrap();
+    assert!(
+        report.points.iter().any(|point| matches!(
+            point.outcome,
+            sfmtool_core::bench::RefineNormalsOutcome::Turned { .. }
+        )),
+        "the refinement turned a normal"
+    );
+    assert_eq!(
+        refined.point_set.patch_u_halfvec_xyz,
+        expected.point_set.patch_u_halfvec_xyz
+    );
+    assert_eq!(
+        refined.point_set.patch_v_halfvec_xyz,
+        expected.point_set.patch_v_halfvec_xyz
+    );
+    assert_eq!(
+        refined.point_set.patch_bitmaps_y_x_rgba,
+        expected.point_set.patch_bitmaps_y_x_rgba
+    );
+}
+
 // ── Retriangulate: the point edit and its whole-value sibling ───────────
 
 /// The resectable node with one point pushed off the place its own keypoints

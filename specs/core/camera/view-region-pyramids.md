@@ -81,7 +81,11 @@ impl ImageU8Pyramid {
 }
 
 /// What a kernel reads a photograph through: its layout and channels with no
-/// pixel read, and its pixels a photograph tile or a rectangle at a time.
+/// pixel read, and its pixels a photograph tile or a rectangle at a time. A
+/// clone copies no pixel: it shares the tiles held, or reads through the
+/// same cache, so a binding keeps the photographs `get_many` answers in a set
+/// of its own (`ImagePyramidSet.read`) without holding their tiles.
+#[derive(Clone)]
 pub struct TiledPhotograph { /* … */ }
 impl TiledPhotograph {
     pub fn from_image(image: ImageU8) -> Self;              // every tile of its full-depth pyramid

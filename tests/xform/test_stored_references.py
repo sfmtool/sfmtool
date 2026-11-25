@@ -28,7 +28,7 @@ from sfmtool.xform import (
     RefineKeypointsTransform,
     RefineNormalsTransform,
 )
-from sfmtool.xform._images import load_workspace_images
+from sfmtool.patches import ImagePyramidSet
 
 from ..conftest import SEOUL_BULL_GROUND_TRUTH, SEOUL_BULL_POINT_STEP, every_nth_point
 
@@ -85,7 +85,7 @@ def _leaves_the_photograph(recon: SfmrReconstruction, stored: np.ndarray) -> np.
     picked = recon.clone_with_changes(reference_observations=stored)
     bitmaps, _ = picked.patches.render_bitmaps(
         picked,
-        load_workspace_images(picked),
+        ImagePyramidSet.read(picked),
         resolution=RESOLUTION,
         referenced_only=True,
     )
@@ -259,7 +259,7 @@ def test_embed_patches_on_an_embedded_input_keeps_stored_references(
     stored = _other_references(embedded_subset)
     recon = embedded_subset.clone_with_changes(reference_observations=stored)
     out = embed_patches(
-        recon, load_workspace_images(recon), resolution=RESOLUTION, rounds=rounds
+        recon, ImagePyramidSet.read(recon), resolution=RESOLUTION, rounds=rounds
     )
     unusable = _leaves_the_photograph(recon, stored)
     assert unusable.sum() < (stored >= 0).sum() * 0.1
@@ -333,7 +333,7 @@ def test_embed_patches_records_the_reference_the_views_were_aligned_to(
     recon = embedded_subset.clone_with_changes(reference_observations=stored)
     reported = _spy_final_references(monkeypatch, forget_every=3)
     out = embed_patches(
-        recon, load_workspace_images(recon), resolution=RESOLUTION, rounds=1
+        recon, ImagePyramidSet.read(recon), resolution=RESOLUTION, rounds=1
     )
     _assert_output_records_the_reported_references(out, reported)
     # Some of those points record another image than the stored one.
@@ -363,7 +363,7 @@ def test_embed_patches_records_a_new_reference_where_the_obliquity_cut_drops_it(
     reported = _spy_final_references(monkeypatch)
     out = embed_patches(
         embedded_subset,
-        load_workspace_images(embedded_subset),
+        ImagePyramidSet.read(embedded_subset),
         resolution=RESOLUTION,
         rounds=rounds,
         max_obliquity_deg=30.0,
@@ -415,7 +415,7 @@ def test_embed_patches_rounds_keep_the_references_without_bitmaps(
     monkeypatch.setattr(ep, "compact_to_embedded_patches", spy)
     embed_patches(
         embedded_subset,
-        load_workspace_images(embedded_subset),
+        ImagePyramidSet.read(embedded_subset),
         resolution=RESOLUTION,
         rounds=2,
         max_zncc_self_similarity_radius=0,
@@ -458,7 +458,7 @@ def test_bundle_adjust_keeps_stored_references(embedded):
 def test_render_bitmaps_referenced_only_skips_points_at_minus_one(embedded):
     stored = _other_references(embedded)
     recon = embedded.clone_with_changes(reference_observations=stored)
-    images = load_workspace_images(recon)
+    images = ImagePyramidSet.read(recon)
     bitmaps, refs = recon.patches.render_bitmaps(
         recon, images, resolution=RESOLUTION, referenced_only=True
     )

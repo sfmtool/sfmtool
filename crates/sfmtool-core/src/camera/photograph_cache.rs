@@ -614,6 +614,19 @@ pub(crate) struct CachedTiles {
     layout: Arc<PyramidLayout>,
 }
 
+/// Another handle on the same cache, path, slot and layout, as a clone of
+/// the photograph that holds it needs.
+impl Clone for CachedTiles {
+    fn clone(&self) -> Self {
+        Self {
+            cache: self.cache.handle(),
+            path: self.path.clone(),
+            slot: Arc::clone(&self.slot),
+            layout: Arc::clone(&self.layout),
+        }
+    }
+}
+
 impl CachedTiles {
     /// The tiles `keys`, in order, each a tile of the layout: from the slot
     /// when it keeps every one of them, marking them used, and otherwise

@@ -46,9 +46,11 @@ and refines each point's full track (the binding's `patch_views=None` /
 observation as `reference_images`; the stored per-point patch frame
 (`recon.patches`) supplies the patch geometry and is never rebuilt.
 
-Because the refinement is photometric it reads the workspace source images
-(`workspace_dir / image_name`), exactly like `--refine-normals`; a missing
-image (or unresolvable workspace) is a hard error (`FileNotFoundError`).
+Because the refinement is photometric it reads the workspace's photographs
+(`workspace_dir / image_name`) through the run's photograph cache, exactly like
+`--refine-normals` ([xform-command.md § "Photographs"](xform-command.md#photographs));
+a missing image (or unresolvable workspace) is a hard error
+(`FileNotFoundError`).
 
 ## Command syntax
 

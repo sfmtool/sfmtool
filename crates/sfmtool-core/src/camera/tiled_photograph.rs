@@ -197,6 +197,12 @@ impl From<GetError> for PhotographReadError {
 /// for a tile it has evicted. Such a read can fail as a read of the file can
 /// ([`PhotographReadError::NotFound`], [`PhotographReadError::Changed`] and
 /// the rest), and polls the reader's `Progress` while it decodes.
+///
+/// A clone copies no pixel: it shares the tiles the photograph holds, and
+/// one the cache answered reads through the same cache, so a binding that
+/// keeps a set of the photographs `get_many` answers holds them without
+/// holding their tiles.
+#[derive(Clone)]
 pub struct TiledPhotograph {
     /// The photograph tiles held, by key.
     held: HashMap<TileKey, Arc<PhotographTile>>,

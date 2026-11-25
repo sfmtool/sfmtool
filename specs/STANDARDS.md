@@ -451,7 +451,8 @@ Look for:
   also moves a view, raises a panel or pushes a version (G1); what a
   double-click does for what the target denotes (G2); what a right-click
   selects and how its menu opens (G3); how a view moves onto a point or a
-  pixel (G4, G5); which hover a panel sets and clears (G6).
+  pixel (G4, G5); which hover a panel sets and clears, and where a label it
+  paints beside the pointer goes (G6).
 - A gesture whose code differs between two panels for the same kind of
   target, such as a menu built twice or a move onto a point written twice
   (G8), and a raise that does not go through `AppState::show_panel_beside`

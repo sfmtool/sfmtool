@@ -712,6 +712,22 @@ is frozen once built, and `len(views)` is the view count `N`.
 A `CameraViews` is accepted anywhere the patch kernel methods take `recon`:
 
 - `ImagePyramidSet(views, images)` — the same per-image camera-dimension check.
+  `ImagePyramidSet.read(recon_or_paths, workspace_dir=None, cache=None,
+  progress=None)`, which reads the photographs from their files through a
+  photograph cache rather than taking arrays, refuses a `CameraViews` with a
+  `TypeError`, since it names no photographs; it takes a reconstruction, whose
+  image names it reads under `workspace_dir` (the reconstruction's own
+  workspace when omitted) with the same check, or a list of photograph paths,
+  read in that order with no check (a kernel checks the set against its
+  scene). Its set holds no pixel: each photograph reads its tiles through the
+  cache, which keeps them under its budget and decodes an in-core photograph
+  again for a tile it has evicted, and makes an out-of-core photograph's
+  missing or stale mipmap first, so its levels are the stored ones
+  ([python-bindings.md](../../python-bindings.md), and the photograph cache's
+  [§ "Reads through the cache"](../camera/photograph-cache.md#reads-through-the-cache)).
+  `cache=None` makes a cache of the default budgets that lives as long as the
+  set. `sfmtool.matching.refine_cluster_patches` takes a set in place of its
+  `images` list too.
 - `PatchCloud.localize_keypoints(views, images, patch_views=..., ...)` and
   `refine_keypoints`, `refine_normals`, `select_views` likewise.
 

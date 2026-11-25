@@ -27,14 +27,16 @@ def _run_cluster_patches(
     rotation_starts: int | None = None,
 ):
     import os
-    from concurrent.futures import ThreadPoolExecutor
     from datetime import datetime
 
     import numpy as np
 
+    from ._photograph_cache_report import photograph_cache_lines
     from ._progress import _poll_progress
-    from ._sfmtool.fileio import read_image_rgb, read_matches, write_matches
+    from ._sfmtool.fileio import read_matches, write_matches
     from ._sfmtool.matching import refine_cluster_patches as _refine
+    from .patches import ImagePyramidSet
+    from .photographs import PhotographCache
 
     data = read_matches(in_path)
     if not data["has_clusters"]:
@@ -85,23 +87,14 @@ def _run_cluster_patches(
     detected_shapes = np.asarray(data["member_affine_shapes"], dtype=np.float32)
 
     click.echo("Reading images...")
-    # Decode in a thread pool (the decoder releases the GIL), collecting results in
-    # submission order so the list stays parallel to `image_names` (the
-    # embed-patches pattern). The kernel takes the RGB the reader returns.
-    with ThreadPoolExecutor() as pool:
-        futures = [
-            pool.submit(read_image_rgb, workspace_dir / name) for name in image_names
-        ]
-        images = []
-        try:
-            for future in futures:
-                images.append(future.result())
-        except BaseException:
-            # Fail fast: without this, the pool's __exit__ would finish
-            # decoding every queued image before the error surfaces.
-            for f in futures:
-                f.cancel()
-            raise
+    # Through a photograph cache, as the viewer's cluster-patches build reads
+    # them: the set holds no pixel, and the cache keeps the photographs' tiles
+    # under its budget, decoding one again for a tile it has evicted. The
+    # file names its photographs but has no reconstruction, so the set is read
+    # from their paths, parallel to `image_names`.
+    cache = PhotographCache()
+    photograph_paths = [workspace_dir / name for name in image_names]
+    images = ImagePyramidSet.read(photograph_paths, cache=cache)
 
     # The kernel takes per-image feature arrays and reads only the rows its
     # members name, so scattering the file's member geometry back to those
@@ -228,6 +221,8 @@ def _run_cluster_patches(
     ):
         if result[key] is not None:
             out_data[key] = result[key]
+    for line in photograph_cache_lines(cache, photograph_paths, workspace_dir):
+        click.echo(line)
     click.echo(f"Writing {out}...")
     write_matches(out, out_data)
     consistency = result["member_consistency_residual"]

@@ -32,6 +32,44 @@ sfm xform in.sfmr out.sfmr --rotate 0,1,0,+25deg --translate 3,5,-2
 sfm xform in.sfmr out.sfmr --translate 3,5,-2 --rotate 0,1,0,+25deg
 ```
 
+### Photographs
+
+The steps that read photographs through pyramids (`--refine-normals`,
+`--refine-keypoints`, `--localize-keypoints` and `--add-patch-bitmaps`) read
+them with
+`ImagePyramidSet.read(recon, cache=…)`
+([patch-cloud.md](../../../core/patch/patch-cloud.md#cameraviews)), the
+photographs `workspace_dir / image_name` of the reconstruction as it stands at
+that step, through one `PhotographCache` that `apply_transforms`
+([_apply.py](../../../../src/sfmtool/xform/_apply.py)) makes with the default
+budgets for the run and passes to each such step (a step marks itself with
+`reads_photographs` and takes `apply(recon, cache=None)`). They read the
+photographs as the viewer reads them: the set holds no pixel, and the cache
+keeps the photographs' tiles under its budget, so a photograph one step read
+is there for the next while the budget holds it, and an in-core photograph
+whose tiles were evicted is decoded again. A photograph out of core, in a
+workspace whose `.sfm-workspace.json` has `mipmap_options`, is read from its
+mipmap, made once, by the first step that reads it, when it is missing or
+stale ([mipmaps.md](../../../core/camera/mipmaps.md)). In core the pixels are
+those of `sfmtool.fileio.read_image_rgb`, so the steps write the file they
+wrote when they read whole arrays, byte for byte. A missing photograph is a
+`FileNotFoundError`, and a photograph not its camera's size a `ValueError`.
+`--add-thumbnails`, which reads a photograph only for an image with no
+verified `.sift` thumbnail, decodes it whole with `read_image_rgb` outside the
+cache, since a thumbnail written to a file comes from the full-resolution
+photograph however the workspace stores its mipmaps.
+
+After the steps, a run that read photographs prints the cache's whole decodes,
+mipmaps made and budget, and, when it decoded the in-core photographs more
+times than there are of them, the line recommending `mipmap_options`, both as
+[`sfm cluster-patches`](../../image-feature/cluster-patches-command.md#process)
+prints them:
+
+```
+Transformation complete!
+  Photographs: 17 whole decodes, 0 mipmaps made, cache budget 15.9 GiB
+```
+
 ### Option Values
 
 An option that takes a value accepts it either as the next argument or joined
@@ -683,8 +721,9 @@ Grown Plane* does, leaving the point count, positions, keypoints, poses and came
 unchanged. `method=pairwise_flow` turns it to its pairwise-flow normal instead,
 fitted to the optical flow between pairs of the point's views, as *Refine All
 Normals ▸ Pairwise Flow* does; it costs seconds of one thread per point against
-tens of milliseconds for the grown plane. It reads the workspace source images,
-so those must still be present where the reconstruction was created. A turned point gets a new normal,
+tens of milliseconds for the grown plane. It reads the workspace's photographs
+(§ "Photographs"), so those must still be present where the reconstruction was
+created. A turned point gets a new normal,
 patch frame, colour and observation readings, and a new bitmap where the
 reconstruction stores bitmaps; it adds no bitmap column. Every other point
 keeps every column it had. The option's one key is `method`, and any other key
@@ -755,8 +794,8 @@ reference its views were aligned to, or `-1` where they were aligned to
 nothing) —
 run `--add-patch-bitmaps`, or `--refine-keypoints` (which renders bitmaps by
 default), to regenerate them; there is no `bitmaps` key on this op. Because it is
-photometric it reads the workspace source images, so those must still be
-present where the reconstruction was created. The optional value is a
+photometric it reads the workspace's photographs (§ "Photographs"), so those
+must still be present where the reconstruction was created. The optional value is a
 comma-separated `key=value` string; with no value it runs the binding defaults
 plus `min_views=2`.
 
@@ -906,7 +945,7 @@ own decode for the photograph
 Renders an RGBA bitmap for every point that has a patch frame, **at the patch's
 stored frame and each observation's stored keypoint, moving nothing**:
 positions, normals, frames, keypoints and tracks come out exactly as they went
-in. It reads the source photographs, and requires an `embedded_patches`
+in. It reads the photographs (§ "Photographs"), and requires an `embedded_patches`
 reconstruction with patch frames, like the other patch steps. A point with
 fewer than two observations that render in frame gets a zero row, as
 `--refine-keypoints` gives it.
