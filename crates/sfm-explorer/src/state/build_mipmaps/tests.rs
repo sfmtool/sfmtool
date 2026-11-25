@@ -721,7 +721,8 @@ fn an_opens_photographs_wait_behind_the_panels_and_ahead_of_an_earlier_opens() {
 #[test]
 fn a_photograph_queued_again_while_its_chunk_runs_is_on_the_list_once() {
     let x = || PathBuf::from("x");
-    let requeues: [(&str, fn(&mut super::MipmapList)); 2] = [
+    type Requeue = fn(&mut super::MipmapList);
+    let requeues: [(&str, Requeue); 2] = [
         ("open", |list| list.queue_opened(vec![PathBuf::from("x")])),
         ("panel", |list| list.queue(Path::new("x"))),
     ];
