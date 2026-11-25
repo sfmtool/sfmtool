@@ -1579,9 +1579,14 @@ class PhotographCache:
   does. Each message names the path.
 
 **An optional `cache=` argument on every binding that reads a
-reconstruction's photographs by path**: `ImagePyramidSet.read(views_or_recon,
+reconstruction's photographs by path**: `ImagePyramidSet.read(recon_or_paths,
 workspace_dir=None, cache=None, progress=None)` and
-`sfmtool.fileio.write_web_export(…, cache=None)`. The kernels take arrays or
+`sfmtool.fileio.write_web_export(…, cache=None)`. `read`'s first argument is
+an `SfmrReconstruction`, whose `image_names` it reads under `workspace_dir`
+(the reconstruction's own workspace when omitted), or a list of photograph
+paths, read in that order with no check of their sizes at the read (a kernel
+checks the set against its scene); a `CameraViews` is refused, since it names
+no photographs (open question 20). The kernels take arrays or
 an `ImagePyramidSet`, not paths. The other bindings that read photographs by
 path decode each whole and keep no pyramid, so they take no cache:
 `read_image_rgb`, `read_image_rgba` and `image_has_alpha` (row P1), and the
@@ -4047,9 +4052,12 @@ in core. Step 17 turns the tier on.
       `ImagePyramidSet` in place of its `images` list, as the
       `PatchCloud` kernels do; and `sfm cluster-patches` reading through it
       instead of decoding every photograph whole with `read_image_rgb` in a
-      thread pool (P4). Which form `read` takes for a `.matches` file,
-      which names its photographs and workspace but has no reconstruction,
-      waits on open question 20. Tests: a cache passed
+      thread pool (P4). For a `.matches` file, which names its
+      photographs and workspace but has no reconstruction, the command
+      passes `read` the list of paths
+      `[workspace_dir / name for name in image_names]`, as open question
+      20 decides. Tests: a list of paths read in order and a
+      `CameraViews` refused with `TypeError`; a cache passed
       to two `read` calls makes and decodes once, its `stats` showing the
       second call's reads as hits, and two calls without `cache=` share
       nothing; a set whose photograph changes after the read raising
@@ -4118,8 +4126,8 @@ or `read_rgb` pixel by pixel.
 
 ## Open questions
 
-The user has decided every question below but question 20, which waits
-on the user; the section records the decisions.
+The user has decided every question below; the section records the
+decisions.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
@@ -4329,7 +4337,7 @@ on the user; the section records the decisions.
     is left to finish, but a cancelled run does not put a closed node's
     photographs back unless an open or a panel queued them again first.
 20. **What `ImagePyramidSet.read` takes for `sfm cluster-patches`.** Found
-    while splitting step 16. § "Python bindings" gives
+    while splitting step 16. § "Python bindings" gave
     `ImagePyramidSet.read(views_or_recon, workspace_dir=None, cache=None,
     progress=None)`, and step 16 moves `sfm cluster-patches` onto it. But
     that command reads a `.matches` file, which names its photographs
@@ -4353,8 +4361,9 @@ on the user; the section records the decisions.
       itself, as `write_web_export` does, against § "Python bindings"'
       rule that the kernels take arrays or a set, not paths.
 
-    *Recommended:* (a). It reads the same photographs the viewer's build
-    reads (row 19, `get_many` over the paths), keeps the rule that kernels
-    take arrays or a set, and adds no scene a command must make up. The
-    signature becomes `ImagePyramidSet.read(recon_or_paths,
-    workspace_dir=None, cache=None, progress=None)`.
+    *Decided by the user:* (a). It reads the same photographs the
+    viewer's cluster-patches build reads (row 19, `get_many` over the
+    paths), and it invents no scene for a command that has none. The
+    signature is `ImagePyramidSet.read(recon_or_paths, workspace_dir=None,
+    cache=None, progress=None)`, as § "Python bindings" gives it, and step
+    16b builds it.
