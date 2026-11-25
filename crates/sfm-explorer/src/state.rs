@@ -39,6 +39,7 @@ pub(crate) mod build_mipmaps;
 mod ops;
 mod photograph_requests;
 mod save;
+pub(crate) mod thumbnail_fills;
 
 /// The window title with no file loaded, and the start of every other title.
 pub(crate) const WINDOW_TITLE_BASE: &str = "SfM Explorer";
@@ -990,6 +991,11 @@ pub(crate) struct AppState {
     /// queued last, if any. See [`build_mipmaps`].
     pub(crate) build_mipmaps: build_mipmaps::BuildMipmaps,
 
+    /// The display thumbnail rows being filled in on the rayon pool for the
+    /// photographs *Build mipmaps* has answered, and the rows landed. See
+    /// [`thumbnail_fills`].
+    pub(crate) thumbnail_fills: thumbnail_fills::ThumbnailFills,
+
     /// The Track Table panel's reference picks: the references picked for
     /// visible points that store none, for the version at their node's
     /// cursor, and the quiet task picking them. Session state, not part of
@@ -1152,6 +1158,7 @@ impl AppState {
             track_tables: Default::default(),
             track_table_jobs: Default::default(),
             build_mipmaps: Default::default(),
+            thumbnail_fills: Default::default(),
             reference_picks: Default::default(),
             filter_3d: None,
             track_table_query: Default::default(),

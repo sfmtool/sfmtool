@@ -165,6 +165,7 @@ fn a_row_comes_from_the_sift_first_the_photograph_second_and_the_grey_last() {
         BuiltFrom {
             sift: 3,
             photographs: n - 4,
+            awaiting: 0,
             placeholders: 1,
         }
     );
@@ -252,8 +253,8 @@ fn an_image_the_column_was_not_built_for_falls_back_to_the_values_column() {
 /// In a workspace whose `mipmap_options` put its 300 x 200 photographs out of
 /// core: the row of one whose mipmap is current is made from its coarsest
 /// mip level file, level 1, read through the viewer's cache; the row of one
-/// whose mipmap is not is made from a whole decode, and the open makes no
-/// mipmap.
+/// whose mipmap is not is the grey placeholder, awaiting that photograph's
+/// mipmap, and the open neither decodes it whole nor makes its mipmap.
 #[test]
 fn an_out_of_core_photograph_is_read_from_its_coarsest_mip_level_file_when_it_is_current() {
     use crate::state::build_mipmaps::tests::{mipmap_options, out_of_core_photographs_of};
@@ -285,7 +286,7 @@ fn an_out_of_core_photograph_is_read_from_its_coarsest_mip_level_file_when_it_is
     let cache = PhotographCache::new(Default::default());
     let (display, from) = DisplayThumbnails::build(&recon, &cache, &Progress::none()).unwrap();
     let display = display.expect("two photographs");
-    assert_eq!(from.photographs, 2);
+    assert_eq!((from.photographs, from.awaiting), (1, 1));
     let row = |i: usize| -> Vec<u8> {
         let row = display.row(&recon.image_set.images[i].name).unwrap();
         row.iter().copied().collect()
@@ -296,9 +297,95 @@ fn an_out_of_core_photograph_is_read_from_its_coarsest_mip_level_file_when_it_is
         row(0) != whole_0,
         "the coarsest level's row is not level 0's"
     );
-    assert!(row(1) == thumbnail(&ImageU8::read_rgb(&paths[1]).unwrap()));
+    assert!(is_flat(
+        display.row(&recon.image_set.images[1].name).unwrap(),
+        [PLACEHOLDER_GREY; 3]
+    ));
+    let awaiting: Vec<&Path> = display.awaiting().collect();
+    assert_eq!(
+        awaiting,
+        [recon.workspace_dir.join(&recon.image_set.images[1].name)]
+    );
     let level_1 = mipmap_location(&paths[1]).unwrap().level_path(1, 95);
     assert!(!level_1.exists(), "the open made a mipmap");
     let stats = cache.stats();
     assert_eq!((stats.decodes, stats.mipmaps_made), (0, 0));
+}
+
+/// A display column over `recon`'s images, each row flat [`colour_of`] its
+/// image, but the rows of `awaiting`, which are grey and await their
+/// photographs (`workspace_dir` joined with the image name), as an open
+/// leaves the rows of out-of-core photographs whose mipmaps are not current.
+pub(crate) fn column_awaiting(
+    recon: &SfmrReconstruction,
+    awaiting: &[usize],
+) -> Arc<DisplayThumbnails> {
+    let images = &recon.image_set.images;
+    let column = Array4::from_shape_fn(
+        (images.len(), THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+        |(i, _, _, c)| {
+            if awaiting.contains(&i) {
+                PLACEHOLDER_GREY
+            } else {
+                colour_of(i)[c]
+            }
+        },
+    );
+    Arc::new(DisplayThumbnails {
+        rows_by_name: super::names_to_rows(recon),
+        column: Arc::new(column),
+        awaiting: awaiting
+            .iter()
+            .map(|&i| (recon.workspace_dir.join(&images[i].name), i))
+            .collect(),
+        filled: Default::default(),
+        fills: 0,
+    })
+}
+
+/// A flat `rgb` row, as a fill brings back.
+pub(crate) fn flat_row(rgb: [u8; 3]) -> Arc<Array3<u8>> {
+    Arc::new(Array3::from_shape_fn(
+        (THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+        |(_, _, c)| rgb[c],
+    ))
+}
+
+/// Filling rows in gives a new column in which only the rows that awaited
+/// the photographs filled changed, each marked with the fill that changed
+/// it, every other row shared with the column before; a fill of photographs
+/// no row awaits gives nothing.
+#[test]
+fn filling_rows_in_replaces_only_the_rows_that_await_them() {
+    let mut recon = SfmrReconstruction::demo(16);
+    recon.workspace_dir = std::path::PathBuf::from("ws");
+    let name = |i: usize| recon.image_set.images[i].name.clone();
+    let path = |i: usize| recon.workspace_dir.join(name(i));
+    let built = column_awaiting(&recon, &[2, 5]);
+
+    assert!(built.with_rows(&[(path(3), flat_row([1, 2, 3]))]).is_none());
+    let once = built
+        .with_rows(&[
+            (path(2), flat_row([1, 2, 3])),
+            (path(3), flat_row([9, 9, 9])),
+        ])
+        .expect("row 2 awaited");
+    assert!(is_flat(once.row(&name(2)).unwrap(), [1, 2, 3]));
+    assert!(is_flat(once.row(&name(3)).unwrap(), colour_of(3)));
+    assert!(is_flat(once.row(&name(5)).unwrap(), [PLACEHOLDER_GREY; 3]));
+    assert_eq!(once.awaiting().collect::<Vec<_>>(), [path(5).as_path()]);
+    assert_eq!(once.fills(), 1);
+    assert!(once.same_build(&built));
+    assert_eq!(
+        once.row(&name(3)).unwrap().as_ptr(),
+        built.row(&name(3)).unwrap().as_ptr()
+    );
+    assert!(once.filled_after(0, &name(2)));
+    assert!(!once.filled_after(0, &name(5)));
+
+    let twice = once.with_rows(&[(path(5), flat_row([4, 5, 6]))]).unwrap();
+    assert!(is_flat(twice.row(&name(5)).unwrap(), [4, 5, 6]));
+    assert!(twice.filled_after(1, &name(5)));
+    assert!(!twice.filled_after(1, &name(2)), "filled by the first fill");
+    assert_eq!(twice.awaiting().count(), 0);
 }

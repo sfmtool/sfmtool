@@ -247,3 +247,99 @@ fn the_upcoming_image_is_the_one_animation_shows_next() {
     browser.animation.direction = super::PlayDirection::Forward;
     assert_eq!(browser.upcoming_image(Some(16), 17), None, "the end");
 }
+
+/// Rows of the node's display column filled in after the open, once their
+/// photographs' mipmaps are made: the strip loads their textures again from
+/// the filled rows, and the barcode after them, and keeps every other
+/// texture.
+#[test]
+fn rows_filled_in_after_the_open_are_loaded_again() {
+    use crate::display_thumbnails::tests::{column_awaiting, flat_row};
+    use crate::display_thumbnails::DisplayThumbnails;
+
+    let mut recon = SfmrReconstruction::demo(16);
+    recon.workspace_dir = std::path::PathBuf::from("ws");
+    let built = column_awaiting(&recon, &[2]);
+    let mut browser = ImageBrowser::new();
+    let ctx = egui::Context::default();
+    let id = ReconId::next();
+    let run = |browser: &mut ImageBrowser, display: &DisplayThumbnails| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(2400.0, 200.0),
+            )),
+            ..Default::default()
+        };
+        let scroll = crate::platform::ScrollInput::default();
+        let mut log = ActionLog::default();
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                browser.show(
+                    ui,
+                    &recon,
+                    id,
+                    Some(display),
+                    None,
+                    &[],
+                    &[],
+                    &[],
+                    None,
+                    None,
+                    &[],
+                    &scroll,
+                    None,
+                    &mut log,
+                );
+            });
+        });
+        // The textures the frame set, taken so the delta is not dropped unapplied.
+        let set = std::mem::take(&mut output.textures_delta.set);
+        output.textures_delta.clear();
+        set
+    };
+    let ids = |browser: &ImageBrowser| -> Vec<Option<egui::TextureId>> {
+        (0..recon.image_set.images.len())
+            .map(|i| browser.thumbnail_cache.get(&i).map(egui::TextureHandle::id))
+            .collect()
+    };
+    run(&mut browser, &built);
+    run(&mut browser, &built);
+    let before = ids(&browser);
+    assert!(before.iter().all(Option::is_some), "every row is loaded");
+    let barcode = browser
+        .minibar
+        .color_barcode
+        .as_ref()
+        .map(egui::TextureHandle::id);
+    assert!(barcode.is_some());
+
+    let path = recon.workspace_dir.join(&recon.image_set.images[2].name);
+    let filled = built.with_rows(&[(path, flat_row([1, 2, 3]))]).unwrap();
+    let output = run(&mut browser, &filled);
+    let after = ids(&browser);
+    for (i, (a, b)) in before.iter().zip(&after).enumerate() {
+        assert_eq!(a == b, i != 2, "image {i}");
+    }
+    let new = after[2].unwrap();
+    let delta = output
+        .iter()
+        .find(|entry| *entry.0 == new)
+        .and_then(|entry| entry.1.first())
+        .expect("the filled row's texture is uploaded");
+    let egui::ImageData::Color(image) = &delta.image;
+    assert_eq!(image.pixels[0].to_array(), [1, 2, 3, 255]);
+    let rebuilt = browser
+        .minibar
+        .color_barcode
+        .as_ref()
+        .map(egui::TextureHandle::id);
+    assert!(
+        rebuilt.is_some() && rebuilt != barcode,
+        "the barcode is built again"
+    );
+
+    let output = run(&mut browser, &filled);
+    assert_eq!(ids(&browser), after);
+    assert!(output.is_empty(), "nothing loads again");
+}

@@ -662,7 +662,7 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
 - **`coarsest_level`**, crate-private, is what a display thumbnail of an
   out-of-core photograph is made from
   ([thumbnail.rs](../../../crates/sfmtool-core/src/reconstruction/thumbnail.rs)
-  `display_thumbnail_row`): level `K` whole, read from the coarsest mip
+  `photograph_thumbnail_row`): level `K` whole, read from the coarsest mip
   level file as `get_level` reads a level, decoding nothing else. It
   answers `None`, reading no more than the workspace file and the header,
   for a photograph its caller decodes itself: one in a workspace without

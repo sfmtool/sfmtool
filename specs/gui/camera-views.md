@@ -561,13 +561,24 @@ On reconstruction load, `upload_thumbnails()` synchronously:
    feels as it grows.
 3. Creates the image quad bind group (uniforms + texture array view + sampler)
 
-Every row is final when the node appears, so the atlas is written once. A cell
-for an image with no picture in either column holds a flat mid-grey
+A cell for an image with no picture in either column holds a flat mid-grey
 placeholder. The atlas is kept, not rebuilt, while the display column, the value's own column and the image list
 are the ones it was built from (`UploadedThumbnails` in
 [upload/thumbnails.rs](../../crates/sfm-explorer/src/scene_renderer/upload/thumbnails.rs)
 holds all three: the display column and the value's column by pointer, and the
 image names), which is every edit that leaves the image list alone.
+
+Every row is built when the node appears, and only a row awaiting its
+photograph's mipmap changes afterwards, when the viewer fills it in and gives
+the node a new display column ([multi-panel-image-browser.md](multi-panel-image-browser.md)
+§ "Thumbnail loading"). Each frame, a node whose base did not change is asked
+`thumbnails_changed`, a pointer comparison of its display column with the
+atlas's; when it changed, `upload_thumbnails` keeps the texture and writes
+again only the cells of the rows filled since the atlas was written
+(`DisplayThumbnails::filled_after` against the old column's count of fills),
+one `write_texture` a cell, when the new column is the old one with rows filled
+in and the image list and the value's column are the same. Any other change
+builds the atlas whole.
 
 The shader receives `images_per_page` as a uniform so it can compute the
 texture array layer and within-page UV from the flat `frustum_index`.

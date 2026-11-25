@@ -543,6 +543,12 @@ impl PhotographRequests {
         }
     }
 
+    /// Start `task` where these requests start theirs: on the rayon pool, or
+    /// in the tests on the queue [`Self::queued`] holds back.
+    pub(super) fn spawn(&self, task: impl FnOnce() + Send + 'static) {
+        (self.spawn)(Box::new(task));
+    }
+
     /// Tell the test's hook the chunk a run of *Build mipmaps* has taken.
     #[cfg(test)]
     pub(super) fn chunk_started(&self, chunk: &[PathBuf]) {

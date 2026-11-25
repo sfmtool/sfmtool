@@ -194,6 +194,10 @@ pub(crate) struct ImageBrowser {
     cached_recon: Option<ReconId>,
     /// Number of images when the cache was last built (for invalidation).
     cached_image_count: usize,
+    /// How many times the node's display column had had rows filled in when
+    /// the cache last caught up with it ([`DisplayThumbnails::fills`]): a
+    /// column with more has rows whose textures are stale.
+    cached_fills: u64,
     /// How many leading characters of every image name the labels leave out
     /// ([`label::shared_prefix_chars`]). Dropped with the thumbnail cache, by a
     /// change of node or image count and by [`ImageBrowser::forget_recon`],
@@ -227,6 +231,7 @@ impl ImageBrowser {
             thumbnail_cache: HashMap::new(),
             cached_recon: None,
             cached_image_count: 0,
+            cached_fills: 0,
             label_prefix: None,
             prev_selected: None,
             next_lazy_load: 0,
@@ -333,6 +338,25 @@ impl ImageBrowser {
             self.minibar.invalidate();
             self.animation.reset();
             self.menu_image = None;
+            self.cached_fills = display.map_or(0, DisplayThumbnails::fills);
+        }
+        // Rows filled in since the textures were loaded, once their
+        // photograph's mipmap was made: their textures and the barcode go,
+        // and load again from the filled rows.
+        let fills = display.map_or(0, DisplayThumbnails::fills);
+        if fills != self.cached_fills {
+            if let Some(display) = display {
+                let since = self.cached_fills;
+                let images = &recon.image_set.images;
+                self.thumbnail_cache.retain(|&idx, _| {
+                    images
+                        .get(idx)
+                        .is_none_or(|image| !display.filled_after(since, &image.name))
+                });
+            }
+            self.cached_fills = fills;
+            self.next_lazy_load = 0;
+            self.minibar.invalidate();
         }
         let label_prefix = *self.label_prefix.get_or_insert_with(|| {
             let names: Vec<&str> = recon

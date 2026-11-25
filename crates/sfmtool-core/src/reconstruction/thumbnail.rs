@@ -287,10 +287,15 @@ pub enum ThumbnailSource {
     Photograph,
     /// Neither could supply one; the row is flat [`PLACEHOLDER_GREY`].
     Placeholder,
+    /// The photograph is out of core and its mipmap is missing or stale, and
+    /// [`NotCurrentMipmap::Placeholder`] asked for neither a build nor a
+    /// whole decode: the row is flat [`PLACEHOLDER_GREY`] until the caller
+    /// makes it again once the mipmap is made.
+    AwaitingMipmap,
 }
 
-/// What [`display_thumbnail_row`] does for an out-of-core photograph whose
-/// mipmap is missing or stale.
+/// What [`photograph_thumbnail_row`] does for an out-of-core photograph
+/// whose mipmap is missing or stale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotCurrentMipmap {
     /// Make the mipmap through the photograph cache, then read the row from
@@ -298,28 +303,25 @@ pub enum NotCurrentMipmap {
     /// thumbnails once.
     Make,
     /// Decode the original whole, as an in-core photograph is: SfM
-    /// Explorer's open, which makes no mipmap.
+    /// Explorer's fill of a row its open left awaiting the mipmap, once
+    /// *Build mipmaps* has answered the photograph, for a photograph whose
+    /// mipmap is still not current then (its build failed, or its levels
+    /// were held only in memory and let go).
     DecodeOriginal,
+    /// Answer the grey placeholder as [`ThumbnailSource::AwaitingMipmap`],
+    /// making nothing and decoding nothing: SfM Explorer's open, which fills
+    /// the row in once *Build mipmaps* has made the mipmap.
+    Placeholder,
 }
 
 /// Image `index`'s display thumbnail row for a reconstruction that carries no
 /// thumbnail column: `THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3` RGB bytes, row major.
 ///
 /// The image's `.sift` thumbnail when a `.sift` verifiably belongs to it;
-/// otherwise its photograph (`workspace_dir` joined with the image name)
-/// resized by [`thumbnail_from_rgb`]; otherwise flat [`PLACEHOLDER_GREY`].
-/// An in-core photograph is decoded whole, outside `photographs`, so its row
-/// is the one a `.sift` extractor makes from it. An out-of-core photograph
-/// (one its workspace's `mipmap_options` put out of core) is resized from
-/// level `K`, read from its coarsest mip level file through `photographs`,
-/// which turns a decode of the whole photograph into one of a file at most a
-/// photograph tile on a side; its row differs slightly from one made from
-/// level 0, and is for display only. When its mipmap is missing or stale,
-/// `not_current` says whether to make it first or to decode the original
-/// whole. One whose mipmap cannot be made or read, or whose workspace file
-/// cannot be read, is decoded whole too. SfM Explorer's open and `sfm web-export` both fill a missing
-/// column with this, so the two show the same picture of a photograph whose
-/// mipmap is current.
+/// otherwise its photograph (`workspace_dir` joined with the image name) as
+/// [`photograph_thumbnail_row`] makes it. SfM Explorer's open and `sfm
+/// web-export` both fill a missing column with this, so the two show the same
+/// picture of a photograph whose mipmap is current.
 ///
 /// # Errors
 ///
@@ -344,9 +346,62 @@ pub fn display_thumbnail_row(
     let path = recon
         .workspace_dir
         .join(&recon.image_set.images[index].name);
+    photograph_thumbnail_row(&path, photographs, not_current, progress)
+}
+
+/// The display thumbnail row of the photograph at `path`:
+/// `THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3` RGB bytes, row major, and where it
+/// came from.
+///
+/// An in-core photograph is decoded whole, outside `photographs`, and resized
+/// by [`thumbnail_from_rgb`], so its row is the one a `.sift` extractor makes
+/// from it. An out-of-core photograph (one its workspace's `mipmap_options`
+/// put out of core) is resized from level `K`, read from its coarsest mip
+/// level file through `photographs`, which turns a decode of the whole
+/// photograph into one of a file at most a photograph tile on a side; its row
+/// differs slightly from one made from level 0, and is for display only. When
+/// its mipmap is missing or stale, `not_current` says whether to make it
+/// first, to decode the original whole, or to answer the placeholder as
+/// [`ThumbnailSource::AwaitingMipmap`]. One whose mipmap cannot be made or
+/// read, or whose workspace file cannot be read, is decoded whole. A
+/// photograph that is missing or cannot be decoded is flat
+/// [`PLACEHOLDER_GREY`], as [`ThumbnailSource::Placeholder`].
+///
+/// # Errors
+///
+/// [`Cancelled`] when `progress` was cancelled while a mipmap was made or
+/// read, as for [`display_thumbnail_row`].
+///
+/// # Example
+///
+/// ```no_run
+/// use sfmtool_core::camera::PhotographCache;
+/// use sfmtool_core::progress::Progress;
+/// use sfmtool_core::reconstruction::thumbnail::{
+///     photograph_thumbnail_row, NotCurrentMipmap, ThumbnailSource,
+/// };
+/// # fn run() -> Result<(), sfmtool_core::progress::Cancelled> {
+/// let cache = PhotographCache::new(Default::default());
+/// let path = std::path::Path::new("images/IMG_0001.JPG");
+/// let (row, source) =
+///     photograph_thumbnail_row(path, &cache, NotCurrentMipmap::Placeholder, &Progress::none())?;
+/// if source == ThumbnailSource::AwaitingMipmap {
+///     println!("{} waits for its mipmap", path.display());
+/// }
+/// assert_eq!(row.len(), 128 * 128 * 3);
+/// # Ok(())
+/// # }
+/// ```
+pub fn photograph_thumbnail_row(
+    path: &std::path::Path,
+    photographs: &PhotographCache,
+    not_current: NotCurrentMipmap,
+    progress: &Progress<'_>,
+) -> Result<(Vec<u8>, ThumbnailSource), Cancelled> {
+    let grey = || vec![PLACEHOLDER_GREY; THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3];
     if path.is_file() {
         let make = not_current == NotCurrentMipmap::Make;
-        match photographs.coarsest_level(&path, make, progress) {
+        match photographs.coarsest_level(path, make, progress) {
             Ok(Some(level)) => {
                 let (width, height) = (level.width() as usize, level.height() as usize);
                 return Ok((
@@ -355,11 +410,16 @@ pub fn display_thumbnail_row(
                 ));
             }
             Err(TileError::Cancelled) => return Err(Cancelled),
+            // Out of core, and its mipmap missing or stale: the caller
+            // makes the row again once the mipmap is made.
+            Err(TileError::Changed { .. }) if not_current == NotCurrentMipmap::Placeholder => {
+                return Ok((grey(), ThumbnailSource::AwaitingMipmap));
+            }
             // In core, or its mipmap could not be read or made: the
             // original, decoded whole.
             Ok(None) | Err(_) => {}
         }
-        if let Ok(image) = crate::camera::image::ImageU8::read_rgb(&path) {
+        if let Ok(image) = crate::camera::image::ImageU8::read_rgb(path) {
             let (width, height) = (image.width() as usize, image.height() as usize);
             if width > 0 && height > 0 {
                 return Ok((
@@ -369,10 +429,7 @@ pub fn display_thumbnail_row(
             }
         }
     }
-    Ok((
-        vec![PLACEHOLDER_GREY; THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3],
-        ThumbnailSource::Placeholder,
-    ))
+    Ok((grey(), ThumbnailSource::Placeholder))
 }
 
 #[cfg(test)]
@@ -642,15 +699,29 @@ mod tests {
 
         // Read from the coarsest file, whatever `not_current` says, and not
         // the row of a whole decode.
-        for not_current in [NotCurrentMipmap::DecodeOriginal, NotCurrentMipmap::Make] {
+        for not_current in [
+            NotCurrentMipmap::Placeholder,
+            NotCurrentMipmap::DecodeOriginal,
+            NotCurrentMipmap::Make,
+        ] {
             let (pixels, source) = row(0, not_current);
             assert_eq!(source, ThumbnailSource::Photograph);
             assert!(pixels == coarsest_file_row(&paths[0]), "{not_current:?}");
         }
         assert!(coarsest_file_row(&paths[0]) != whole_decode_row(&paths[0]));
 
-        // Without a current mipmap the viewer's open decodes the original
-        // whole and makes nothing.
+        // Without a current mipmap the viewer's open answers the grey
+        // placeholder awaiting the mipmap, and decodes and makes nothing.
+        let (pixels, source) = row(1, NotCurrentMipmap::Placeholder);
+        assert_eq!(source, ThumbnailSource::AwaitingMipmap);
+        assert!(pixels.iter().all(|&v| v == PLACEHOLDER_GREY));
+        assert!(!level_1_of(&paths[1]).exists());
+        let stats = cache.stats();
+        assert_eq!((stats.decodes, stats.mipmaps_made), (0, 0));
+
+        // The viewer's fill of such a row once the mipmap is answered, when
+        // the mipmap is still not current, decodes the original whole and
+        // makes nothing.
         let (pixels, source) = row(1, NotCurrentMipmap::DecodeOriginal);
         assert_eq!(source, ThumbnailSource::Photograph);
         assert!(pixels == whole_decode_row(&paths[1]));

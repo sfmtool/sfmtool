@@ -12,7 +12,10 @@
 //!   `keypoints` stages nest under the file's `open` phase;
 //! - **`thumbnails`**, for a file that carries none: every row built at once
 //!   ([`DisplayThumbnails::build`]), from the image's verified `.sift` first
-//!   and its photograph second, held by the node and never by the value;
+//!   and its photograph second, held by the node and never by the value; the
+//!   row of an out-of-core photograph whose mipmap is not current is the grey
+//!   placeholder, awaiting its mipmap, and one whose mipmap the patch bitmaps
+//!   below made is filled in after the `mipmaps` stage;
 //! - **`patch bitmaps`**, for a file with patch frames and inline keypoints but
 //!   no bitmaps: every photograph read through the viewer's photograph cache
 //!   ([`AppState::photographs`], so the panels and later operations find them
@@ -38,9 +41,11 @@
 //! ([`AppState::append_opened`]), and puts each node's photographs that need
 //! mipmaps on *Build mipmaps*' list ([`AppState::queue_opened_mipmaps`]).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use rayon::prelude::*;
 use sfmtool_core::camera::sampler::RegionPool;
 use sfmtool_core::camera::{PhotographCache, PhotographReadError};
 use sfmtool_core::patch::display_bitmaps::render_patch_bitmap_column;
@@ -51,7 +56,7 @@ use sfmtool_core::SfmrReconstruction;
 
 use crate::action_log::{Actor, Kind};
 use crate::background::{Finished, Job, Operation};
-use crate::display_thumbnails::DisplayThumbnails;
+use crate::display_thumbnails::{filled_row, DisplayThumbnails};
 use crate::scene::{ReconId, SceneNode};
 
 use super::build_mipmaps::{in_mipmap_workspaces, not_current};
@@ -295,9 +300,14 @@ pub(crate) fn load_for_display(
     if wants_thumbnails {
         let mut phase = thumbnails.phase("thumbnails");
         let (display, from) = DisplayThumbnails::build(&recon, photographs, &phase)?;
+        let awaiting = if from.awaiting > 0 {
+            format!(", {} awaiting their mipmaps", from.awaiting)
+        } else {
+            String::new()
+        };
         progress_note!(
             phase,
-            "{} from .sift files, {} from photographs, {} placeholders",
+            "{} from .sift files, {} from photographs, {} placeholders{awaiting}",
             from.sift,
             from.photographs,
             from.placeholders
@@ -343,6 +353,28 @@ pub(crate) fn load_for_display(
             mipmaps.len(),
             mipmap_candidates.len()
         );
+    }
+    // A row the thumbnails left awaiting a mipmap that is current now (the
+    // patch bitmaps' reads, or another task's, made it) is not on the list
+    // *Build mipmaps* answers from, so it is filled in here.
+    let filled = display_thumbnails.as_ref().and_then(|display| {
+        let waiting: HashSet<&Path> = mipmaps.iter().map(PathBuf::as_path).collect();
+        let made: Vec<PathBuf> = display
+            .awaiting()
+            .filter(|path| !waiting.contains(path))
+            .map(Path::to_path_buf)
+            .collect();
+        let rows: Vec<_> = made
+            .into_par_iter()
+            .map(|path| {
+                let row = filled_row(&path, photographs);
+                (path, row)
+            })
+            .collect();
+        display.with_rows(&rows)
+    });
+    if let Some(filled) = filled {
+        display_thumbnails = Some(Arc::new(filled));
     }
     progress.set_fraction(1.0);
     Ok(Loaded {

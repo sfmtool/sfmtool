@@ -3630,8 +3630,8 @@ fn a_built_column_fills_the_atlas_and_keeps_it() {
     let (device, queue) = device();
     let mut r = SceneRenderer::new();
 
-    // Every row is final when the node arrives, so the first upload writes
-    // every cell and there is nothing to come back for.
+    // Every row is built when the node arrives, so the first upload writes
+    // every cell.
     assert_eq!(
         r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&display), &SILENT),
         Uploaded::Built(DEMO_IMAGES as usize)
@@ -3641,6 +3641,58 @@ fn a_built_column_fills_the_atlas_and_keeps_it() {
         r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&display), &SILENT),
         Uploaded::Reused
     );
+}
+
+/// Rows filled in after the open, once their photographs' mipmaps are made:
+/// the atlas keeps its texture and writes only the cells of the rows filled
+/// since it was last written, and says the node's column changed only until
+/// then. A column of another build is written whole into a new texture.
+#[test]
+fn rows_filled_in_after_the_open_write_only_their_cells() {
+    use crate::display_thumbnails::tests::{column_awaiting, flat_row};
+
+    let mut recon = SfmrReconstruction::demo(16);
+    recon.workspace_dir = std::path::PathBuf::from("ws");
+    let path = |i: usize| recon.workspace_dir.join(&recon.image_set.images[i].name);
+    let built = column_awaiting(&recon, &[1, 4, 6]);
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    assert!(r.thumbnails_changed(RECON, Some(&built)));
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&built), &SILENT),
+        Uploaded::Built(DEMO_IMAGES as usize)
+    );
+    let texture = bundle(&r).thumbnail_texture.clone().expect("an atlas");
+    assert!(!r.thumbnails_changed(RECON, Some(&built)));
+
+    let once = Arc::new(built.with_rows(&[(path(4), flat_row([1, 2, 3]))]).unwrap());
+    assert!(r.thumbnails_changed(RECON, Some(&once)));
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&once), &SILENT),
+        Uploaded::Built(1)
+    );
+    assert!(bundle(&r).thumbnail_texture.as_ref() == Some(&texture));
+    assert!(!r.thumbnails_changed(RECON, Some(&once)));
+
+    let twice = Arc::new(
+        once.with_rows(&[
+            (path(1), flat_row([4, 5, 6])),
+            (path(6), flat_row([7, 8, 9])),
+        ])
+        .unwrap(),
+    );
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&twice), &SILENT),
+        Uploaded::Built(2)
+    );
+    assert!(bundle(&r).thumbnail_texture.as_ref() == Some(&texture));
+
+    let other = column_awaiting(&recon, &[]);
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon, Some(&other), &SILENT),
+        Uploaded::Built(DEMO_IMAGES as usize)
+    );
+    assert!(bundle(&r).thumbnail_texture.as_ref() != Some(&texture));
 }
 
 // ── The camera model proposal's preview ─────────────────────────────────
