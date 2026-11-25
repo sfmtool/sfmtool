@@ -468,10 +468,11 @@ grey placeholder until that task answers the photograph. Each frame,
 ([thumbnail_fills.rs](../../crates/sfm-explorer/src/state/thumbnail_fills.rs)) takes
 the photographs the task has answered, made or not, starts one read on the rayon pool
 for each whose row a node awaits, and gives each such node a new display column with
-the landed rows filled in (`DisplayThumbnails::with_rows`), sharing every other row. The new column copies nothing: its rows,
-names, awaiting rows and filled rows are shared with the old one behind an `Arc`, each
-filled row is written once into the shared store, and each value sees only the fills up
-to its own count, so the old value still draws what it drew.
+the landed rows filled in (`DisplayThumbnails::with_rows`), sharing every other row.
+The new column copies nothing: its rows, names, awaiting rows and filled rows are shared
+with the old one behind an `Arc`, each filled row is written once into the shared store,
+and each value sees only the fills up to its own count, so the old value still draws
+what it drew.
 The read is `photograph_thumbnail_row` with `NotCurrentMipmap::DecodeOriginal`: from the
 coarsest mip level file when the mipmap is current, and from a whole decode of the
 original when it is still not (its build failed, or its levels could not be written and,
