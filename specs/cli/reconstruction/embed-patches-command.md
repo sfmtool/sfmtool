@@ -245,8 +245,8 @@ reviewer and 40 points, and no per-point reading tested chose a size better
 than a constant 15.
 
 An earlier sweep of `--patch-size` on one capture found 11 best, with the
-observation count falling as the patch grows: about 9% fewer observations at 15
-than at 7, because the grazing cull scales with the patch extent. On the four
+observation count falling as the patch grows past 7: about 5% fewer observations
+at 15 than at 11, and 11% fewer than at 7, because the grazing cull scales with the patch extent. On the four
 test-data datasets, each solved as its `scripts/init_dataset_*.sh` does, 15
 keeps more observations than 11 rather than fewer:
 
@@ -259,11 +259,11 @@ keeps more observations than 11 rather than fewer:
 
 The larger patch is culled less often as self-similar (6, 1, 64 and 7 points
 at 11; 1, 1, 47 and 3 at 15), and its median point error is 3% to 7% higher.
-The run times were within 2% of each other on seoul_bull and
-dino_dog_toy, 14 s at 11 against 10 s at 15 on kerry_park, and 84 s against
-135 s on seattle_backyard, all on a machine shared with other work. The trade-off the sweep measured, fewer observations for a
-larger patch, may still hold on other captures; the review is the reason for
-the default.
+The run times were within 2% of each other on seoul_bull and dino_dog_toy, 14 s
+at 11 against 10 s at 15 on kerry_park, and 84 s against 135 s on
+seattle_backyard, all on a machine shared with other work. The trade-off the
+sweep measured, fewer observations for a larger patch, may still hold on other
+captures; the review is the reason for the default.
 
 ## Errors
 
