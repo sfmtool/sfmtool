@@ -74,8 +74,16 @@ pub(crate) struct MipmapList {
     /// The waiting paths an open queued that no panel has queued since.
     opened: HashSet<PathBuf>,
     /// Every path queued and not yet answered: waiting, or in the chunk a
-    /// run has taken. A panel queues a path once while it is here.
+    /// run has taken. A panel queues a path once while it is here, so no
+    /// path is in `waiting` twice.
     queued: HashSet<PathBuf>,
+    /// The paths of `queued` in the chunk a run has taken, until the run
+    /// answers them or puts them back.
+    taken: HashSet<PathBuf>,
+    /// The paths of `taken` that [`Self::keep_only`] refused and nothing has
+    /// queued since: the run is left to finish them, but they are not put
+    /// back or counted.
+    dropped: HashSet<PathBuf>,
     /// The paths answered since the list was last empty, what the quiet line
     /// counts as done.
     done: usize,
@@ -88,6 +96,8 @@ impl MipmapList {
         if self.queued.insert(path.to_path_buf()) {
             self.waiting.push_front(path.to_path_buf());
             self.asked += 1;
+        } else if self.dropped.remove(path) {
+            // Taken by a running chunk, which makes it: asked for again.
         } else if self.opened.remove(path) {
             if let Some(at) = self.waiting.iter().position(|p| p == path) {
                 self.waiting.remove(at);
@@ -107,6 +117,8 @@ impl MipmapList {
             if self.queued.insert(path.clone()) {
                 self.opened.insert(path.clone());
                 self.waiting.push_back(path);
+            } else {
+                self.dropped.remove(&path);
             }
         }
         self.waiting.extend(earlier);
@@ -114,6 +126,8 @@ impl MipmapList {
 
     /// Forget every path, waiting or taken, that `keep` refuses: no run
     /// takes it, and a cancelled run that had taken it does not put it back.
+    /// A taken one stays queued, marked dropped, until its run ends, so
+    /// queueing it again meanwhile only clears the mark and adds no copy.
     pub(crate) fn keep_only(&mut self, keep: impl Fn(&Path) -> bool) {
         let mut asked = 0;
         let mut waiting = VecDeque::with_capacity(self.waiting.len());
@@ -128,8 +142,15 @@ impl MipmapList {
         self.waiting = waiting;
         self.asked = asked;
         self.opened.retain(|path| keep(path));
-        self.queued.retain(|path| keep(path));
-        if self.queued.is_empty() {
+        for path in &self.taken {
+            if !keep(path) {
+                self.dropped.insert(path.clone());
+            }
+        }
+        let taken = &self.taken;
+        self.queued
+            .retain(|path| keep(path) || taken.contains(path));
+        if self.queued.len() == self.dropped.len() {
             self.done = 0;
         }
     }
@@ -152,35 +173,46 @@ impl MipmapList {
         let taken: Vec<PathBuf> = self.waiting.drain(..n).collect();
         for path in &taken {
             self.opened.remove(path);
+            self.taken.insert(path.clone());
         }
         taken
     }
 
-    /// `path` was answered: it leaves the list's memory.
+    /// `path` was answered: it leaves the list's memory, counted as done
+    /// unless it was dropped.
     fn answered(&mut self, path: &Path) {
-        if self.queued.remove(path) {
+        self.taken.remove(path);
+        let dropped = self.dropped.remove(path);
+        if self.queued.remove(path) && !dropped {
             self.done += 1;
         }
-        if self.queued.is_empty() {
+        if self.queued.len() == self.dropped.len() {
             self.done = 0;
         }
     }
 
     /// Put `paths`, taken by a run that stopped before answering them, back
-    /// at the front, in their order.
+    /// at the front, in their order, but for those dropped since, which
+    /// leave the list.
     fn put_back(&mut self, paths: Vec<PathBuf>) {
         for path in paths.into_iter().rev() {
-            if self.queued.contains(&path) {
+            self.taken.remove(&path);
+            if self.dropped.remove(&path) {
+                self.queued.remove(&path);
+            } else if self.queued.contains(&path) {
                 self.waiting.push_front(path);
                 self.asked += 1;
             }
+        }
+        if self.queued.len() == self.dropped.len() {
+            self.done = 0;
         }
     }
 
     /// The task's label, which its quiet line shows: how many photographs
     /// are answered of how many queued since the list was last empty.
     fn progress_label(&self) -> String {
-        let total = self.done + self.queued.len();
+        let total = self.done + self.queued.len() - self.dropped.len();
         format!("Building mipmaps: {} of {total}", self.done)
     }
 }

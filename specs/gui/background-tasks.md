@@ -384,8 +384,10 @@ once while it is there, and draws its waiting state; the code is in
   that no node left in the scene has off the list
   (`AppState::forget_closed_mipmaps`): no later run takes one that waits,
   and a run that has taken one in its chunk goes on to make it but does
-  not put it back if it is cancelled. The same photographs opened in two
-  nodes stay until both are closed.
+  not put it back if it is cancelled, unless an open or a panel queues it
+  again before the run ends, which adds no second copy. The list never
+  holds a photograph twice. The same photographs opened in two nodes stay
+  until both are closed.
 
 - **One chunk a run.** Each run takes one chunk from the front of the list,
   as many photographs as the cache's build budget lets it make at once

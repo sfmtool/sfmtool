@@ -713,3 +713,46 @@ fn an_opens_photographs_wait_behind_the_panels_and_ahead_of_an_earlier_opens() {
     list.queue_opened(vec![p("e")]);
     assert_eq!(list.waiting(), [p("a"), p("d"), p("e"), p("b"), p("c")]);
 }
+
+/// A photograph a running chunk took, dropped from the list by a close and
+/// queued again before the run ends, by an open or by a panel, is never on
+/// the list twice: a run that makes it leaves no copy waiting, and one that
+/// is cancelled puts it back once. One no one queues again is not put back.
+#[test]
+fn a_photograph_queued_again_while_its_chunk_runs_is_on_the_list_once() {
+    let x = || PathBuf::from("x");
+    let requeues: [(&str, fn(&mut super::MipmapList)); 2] = [
+        ("open", |list| list.queue_opened(vec![PathBuf::from("x")])),
+        ("panel", |list| list.queue(Path::new("x"))),
+    ];
+    for (by, requeue) in requeues {
+        let mut list = super::MipmapList::default();
+        list.queue_opened(vec![x()]);
+        list.take(1);
+        list.keep_only(|_| false);
+        requeue(&mut list);
+        list.answered(&x());
+        assert!(list.waiting().is_empty(), "made, queued again by {by}");
+        list.queue(&x());
+        assert_eq!(list.waiting(), [x()], "made, then a panel, {by}");
+
+        let mut list = super::MipmapList::default();
+        list.queue_opened(vec![x()]);
+        let taken = list.take(1);
+        list.keep_only(|_| false);
+        requeue(&mut list);
+        list.put_back(taken);
+        assert_eq!(list.waiting(), [x()], "put back, queued again by {by}");
+        list.queue(&x());
+        assert_eq!(list.waiting(), [x()], "put back, then a panel, {by}");
+    }
+
+    let mut list = super::MipmapList::default();
+    list.queue_opened(vec![x()]);
+    let taken = list.take(1);
+    list.keep_only(|_| false);
+    list.put_back(taken);
+    assert!(list.waiting().is_empty(), "dropped and not queued again");
+    list.queue(&x());
+    assert_eq!(list.waiting(), [x()], "a panel queues it afresh");
+}
