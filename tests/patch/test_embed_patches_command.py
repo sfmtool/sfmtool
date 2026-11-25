@@ -473,17 +473,17 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
 
     Repaint the workspace images red-dominant on disk (blue heavily suppressed;
     red + green carry the grayscale texture), then drive the pipeline through
-    ``read_workspace_image`` — the exact load boundary the bug lived in. Every
+    ``ImagePyramidSet.read``, the read ``sfm embed-patches`` makes. Every
     rendered stored bitmap must then carry a much larger red channel (0) than
-    blue channel (2). Under the old BGR behaviour ``read_workspace_image`` handed
-    the renderer blue in channel 0, so the stored channel 0 held the (suppressed)
-    blue and channel 2 held the red — inverting this ratio and FAILING the test.
+    blue channel (2). Under the old BGR behaviour the load handed the renderer
+    blue in channel 0, so the stored channel 0 held the (suppressed) blue and
+    channel 2 held the red — inverting this ratio and FAILING the test.
     """
     import cv2
 
     from sfmtool._embed_patches import embed_patches
-    from sfmtool._workspace_image import read_workspace_image
     from sfmtool.flow import matcher_image_to_gray
+    from sfmtool.patches import ImagePyramidSet
     from sfmtool.sift import gray_from_rgb
 
     recon = every_nth_point(
@@ -508,7 +508,7 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
         repainted[..., 2] = gray  # red (BGR channel 2)
         assert cv2.imwrite(path, repainted)
 
-    images = [read_workspace_image(ws, name) for name in recon.image_names]
+    images = ImagePyramidSet.read(recon)
     out = embed_patches(recon, images, resolution=12, patch_size=10.0)
 
     bitmaps = np.asarray(out.patch_bitmaps)

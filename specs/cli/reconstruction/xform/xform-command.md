@@ -34,8 +34,9 @@ sfm xform in.sfmr out.sfmr --translate 3,5,-2 --rotate 0,1,0,+25deg
 
 ### Photographs
 
-The steps that read photographs (`--refine-normals`, `--refine-keypoints`,
-`--localize-keypoints` and `--add-patch-bitmaps`) read them with
+The steps that read photographs through pyramids (`--refine-normals`,
+`--refine-keypoints`, `--localize-keypoints` and `--add-patch-bitmaps`) read
+them with
 `ImagePyramidSet.read(recon, cache=…)`
 ([patch-cloud.md](../../../core/patch/patch-cloud.md#cameraviews)), the
 photographs `workspace_dir / image_name` of the reconstruction as it stands at
@@ -53,6 +54,10 @@ stale ([mipmaps.md](../../../core/camera/mipmaps.md)). In core the pixels are
 those of `sfmtool.fileio.read_image_rgb`, so the steps write the file they
 wrote when they read whole arrays, byte for byte. A missing photograph is a
 `FileNotFoundError`, and a photograph not its camera's size a `ValueError`.
+`--add-thumbnails`, which reads a photograph only for an image with no
+verified `.sift` thumbnail, decodes it whole with `read_image_rgb` outside the
+cache, since a thumbnail written to a file comes from the full-resolution
+photograph however the workspace stores its mipmaps.
 
 After the steps, a run that read photographs prints the cache's whole decodes,
 mipmaps made and budget, and, when it decoded the in-core photographs more

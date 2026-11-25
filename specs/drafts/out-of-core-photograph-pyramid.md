@@ -4538,11 +4538,12 @@ decisions.
     byte but the write record. Before 16c each `xform` step decoded every
     photograph again, one after another, so the three steps decoded them
     three times; with one cache for the run they are decoded once at the
-    default budget. The machine was shared with other work while these ran, and the same
-    run took up to three times as long from one run to the next, so the
-    times compare only roughly. Unlike `sfm cluster-patches` in 16b, both
+    default budget. The machine was shared with other work while these
+    ran, and the same run took up to three times as long from one run to
+    the next, so the times compare only roughly. Unlike `sfm cluster-patches` in 16b, both
     commands took longer reading their photographs out of core, from
     current mipmaps, than in core at the default budget (81 s against 19 s
     for the `xform` steps, 169 s against 54 s for `embed_patches`), while
     holding less than half the memory; what in their reads costs the time
-    is not measured yet.
+    is not measured yet, and is to be found before step 17 turns the tier
+    on.
