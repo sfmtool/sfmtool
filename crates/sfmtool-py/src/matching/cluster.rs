@@ -6,6 +6,7 @@
 //! `specs/core/patch/cluster-patch-refinement.md`).
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use ndarray::{ArrayView2, ArrayView3};
 use numpy::{
@@ -16,7 +17,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::camera::sampler::RegionPool;
-use sfmtool_core::camera::TiledPhotograph;
 use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Clusters};
 use sfmtool_core::patch::cluster_refine::{
     member_cell_data, refine_cluster_patches as core_refine_cluster_patches,
@@ -26,7 +26,7 @@ use sfmtool_core::patch::cluster_refine::{
 use sfmtool_core::progress::Progress;
 
 use crate::patches::args::parse_patch_window;
-use crate::patches::views::build_photographs_from_image_list;
+use crate::patches::views::{build_photographs_from_image_list, PyImagePyramidSet, PyramidSet};
 use crate::py_progress::ProgressCounter;
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
 
@@ -377,8 +377,11 @@ pub fn clusters_to_pair_matches(
 ///
 /// Args:
 ///     images: One HxW / HxWxC uint8 numpy array per image, in the
-///         images-section order the cluster arrays index. Colour images are
-///         RGB, as ``sfmtool.fileio.read_image_rgb`` returns them.
+///         images-section order the cluster arrays index, or an
+///         ``ImagePyramidSet`` of them, such as ``ImagePyramidSet.read``
+///         reads from the photographs' paths through a photograph cache.
+///         Colour images are RGB, as ``sfmtool.fileio.read_image_rgb``
+///         returns them.
 ///     positions: Per image, the (N, 2) float32 SIFT keypoint positions
 ///         (COLMAP pixel convention), parallel to ``images``.
 ///     affine_shapes: Per image, the (N, 2, 2) float32 SIFT affine shapes,
@@ -539,7 +542,7 @@ pub fn clusters_to_pair_matches(
 #[allow(clippy::too_many_arguments)]
 pub fn refine_cluster_patches<'py>(
     py: Python<'py>,
-    images: Vec<Bound<'py, PyAny>>,
+    images: &Bound<'py, PyAny>,
     positions: Vec<PyReadonlyArray2<'py, f32>>,
     affine_shapes: Vec<PyReadonlyArray3<'py, f32>>,
     cluster_starts: &Bound<'py, PyAny>,
@@ -565,7 +568,18 @@ pub fn refine_cluster_patches<'py>(
     max_iterations: Option<u8>,
     progress: Option<ProgressCounter>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let n_images = images.len();
+    // A set is used as it is; a list of arrays is cut into tiled photographs
+    // below, once the cheaper checks have passed.
+    let (set, arrays) = if let Ok(set) = images.cast::<PyImagePyramidSet>() {
+        (Some(Arc::clone(&set.get().pyramids)), Vec::new())
+    } else if let Ok(list) = images.extract::<Vec<Bound<'py, PyAny>>>() {
+        (None, list)
+    } else {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "images must be a list of HxW[xC] uint8 numpy arrays or an ImagePyramidSet",
+        ));
+    };
+    let n_images = set.as_ref().map_or(arrays.len(), |set| set.len());
     if positions.len() != n_images || affine_shapes.len() != n_images {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "images ({n_images}), positions ({}), and affine_shapes ({}) must be parallel",
@@ -650,11 +664,14 @@ pub fn refine_cluster_patches<'py>(
         ..ClusterRefineParams::default()
     };
 
-    // Decode the images and make their tiled photographs (rayon, GIL-free);
-    // the cluster path has no reconstruction, so there is no camera-dimension
-    // check.
-    let sources: Vec<TiledPhotograph> =
-        build_photographs_from_image_list(py, &images, |_, _| Ok(()))?;
+    // Make the arrays' tiled photographs (rayon, GIL-free); the cluster path
+    // has no reconstruction, so there is no camera-dimension check.
+    let sources = match set {
+        Some(set) => PyramidSet::Shared(set),
+        None => PyramidSet::Owned(build_photographs_from_image_list(py, &arrays, |_, _| {
+            Ok(())
+        })?),
+    };
 
     let progress_handle = progress.as_ref().map(|p| p.handle());
     let (result, consistency) = py.detach(|| -> PyResult<_> {
@@ -669,7 +686,7 @@ pub fn refine_cluster_patches<'py>(
             })
             .collect();
         let result = core_refine_cluster_patches(
-            &sources,
+            sources.as_slice(),
             &RegionPool::for_kernel_call(),
             &features,
             &starts,

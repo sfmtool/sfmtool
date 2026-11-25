@@ -457,3 +457,86 @@ def test_cluster_patches_rejects_pairwise_input(tmp_path: Path):
     result = CliRunner().invoke(main, ["cluster-patches", "-i", str(path)])
     assert result.exit_code != 0
     assert "match --cluster" in result.output
+
+
+def _clusters_of(workspace_sfmr: Path) -> Path:
+    """The clusters file `sfm match --cluster` wrote in the workspace of the
+    ``seoul_bull_workspace`` fixture."""
+    return workspace_sfmr.parent / "matches" / "recon-clusters.matches"
+
+
+def test_cluster_patches_through_the_photograph_cache_writes_the_file_the_arrays_gave(
+    seoul_bull_workspace: Path, monkeypatch, tmp_path: Path
+):
+    """In core, reading the photographs through `ImagePyramidSet.read` writes
+    the same file, byte for byte, as the `read_image_rgb` arrays the command
+    read before."""
+    import datetime
+
+    import sfmtool._sfmtool.patches as patches_module
+    from sfmtool.fileio import read_image_rgb
+
+    clusters = _clusters_of(seoul_bull_workspace)
+
+    class _Fixed(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+    monkeypatch.setattr(datetime, "datetime", _Fixed)
+    runner = CliRunner()
+    # --resolution 16 keeps the refinement cheap; the comparison is exact at
+    # any grid.
+    args = ["cluster-patches", "-i", str(clusters), "--resolution", "16", "-o"]
+    through_cache = runner.invoke(main, [*args, str(tmp_path / "cache.matches")])
+    assert through_cache.exit_code == 0, through_cache.output
+    assert "Photographs: 17 whole decodes, 0 mipmaps made" in through_cache.output
+
+    class _Arrays:
+        """The photographs as the command read them before: whole arrays."""
+
+        @staticmethod
+        def read(paths, cache=None, progress=None):
+            return [read_image_rgb(path) for path in paths]
+
+    monkeypatch.setattr(patches_module, "ImagePyramidSet", _Arrays)
+    from_arrays = runner.invoke(main, [*args, str(tmp_path / "arrays.matches")])
+    assert from_arrays.exit_code == 0, from_arrays.output
+
+    assert (tmp_path / "cache.matches").read_bytes() == (
+        tmp_path / "arrays.matches"
+    ).read_bytes()
+
+
+def test_cluster_patches_reads_out_of_core_photographs_from_their_mipmaps(
+    seoul_bull_workspace: Path,
+):
+    """With `mipmap_options` in the workspace, the command makes each
+    photograph's mipmap and reads it, as the viewer's cluster-patches build
+    does."""
+    import json
+
+    from sfmtool.fileio import read_matches
+
+    workspace_dir = seoul_bull_workspace.parent
+    marker = workspace_dir / ".sfm-workspace.json"
+    config = json.loads(marker.read_text())
+    # Every 270 x 480 photograph has a side over 64 px.
+    config["mipmap_options"] = {
+        "out_of_core_long_side": 64,
+        "jpeg_quality": 95,
+        "full_resolution_jpeg_quality": 95,
+    }
+    marker.write_text(json.dumps(config))
+    clusters = _clusters_of(seoul_bull_workspace)
+    out = workspace_dir / "out-of-core.matches"
+
+    result = CliRunner().invoke(
+        main,
+        ["cluster-patches", "-i", str(clusters), "--resolution", "16", "-o", str(out)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Photographs: 0 whole decodes, 17 mipmaps made" in result.output
+    data = read_matches(out)
+    assert (data["member_status"] == STATUS_KEPT).any()

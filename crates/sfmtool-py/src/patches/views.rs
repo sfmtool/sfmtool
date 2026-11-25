@@ -4,6 +4,7 @@
 //! Scene/pyramid plumbing shared by every patch kernel: `CameraViews`,
 //! `ImagePyramidSet`, and the reconstruction-or-views resolution helpers.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
@@ -14,13 +15,14 @@ use pyo3::types::PyList;
 use rayon::prelude::*;
 
 use sfmtool_core::camera::image::ImageU8;
-use sfmtool_core::camera::TiledPhotograph;
+use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions, TiledPhotograph};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::PatchCloud;
 use sfmtool_core::CameraIntrinsics;
 
 use crate::flow::warp::extract_image_u8;
-use crate::PySfmrReconstruction;
+use crate::photographs::{get_photographs, PyPhotographCache};
+use crate::{ProgressCounter, PySfmrReconstruction};
 
 /// Validate that image `i` (dimensions `w × h`) matches its camera's resolution.
 pub(super) fn check_image_matches_camera(
@@ -427,12 +429,18 @@ impl PyCameraViews {
 ///
 /// Every :class:`PatchCloud` kernel method
 /// (:meth:`PatchCloud.select_views`, :meth:`PatchCloud.localize_keypoints`,
-/// :meth:`PatchCloud.refine_keypoints`) accepts one of these anywhere it accepts
-/// the list of numpy images: rather than rebuilding a full image pyramid per
-/// image on **every** call (the per-call ``images`` list path, kept for
-/// back-compat), build the set once and pass it to each call. The pyramids are
-/// identical to the per-call build (same levels, same box-filter downsample), so
-/// results are unchanged; the build itself is rayon-parallel.
+/// :meth:`PatchCloud.refine_keypoints`), and
+/// ``sfmtool.matching.refine_cluster_patches``, accepts one of these anywhere
+/// it accepts the list of numpy images: rather than rebuilding a full image
+/// pyramid per image on **every** call (the per-call ``images`` list path,
+/// kept for back-compat), build the set once and pass it to each call. The
+/// pyramids are identical to the per-call build (same levels, same box-filter
+/// downsample), so results are unchanged; the build itself is rayon-parallel.
+///
+/// The constructor holds every tile of each image's pyramid. :meth:`read`
+/// instead reads the photographs from their files through a
+/// ``PhotographCache`` and holds none of their pixels: the cache holds the
+/// tiles under its budget, as it does for the viewer.
 ///
 /// Args:
 ///     views_or_recon: The scene the images belong to — an
@@ -459,6 +467,110 @@ impl PyImagePyramidSet {
     ) -> PyResult<Self> {
         let (posed, _recon) = resolve_scene(views_or_recon)?;
         let pyramids = build_photographs_from_cameras(py, &posed.cameras, &images)?;
+        Ok(Self {
+            pyramids: Arc::new(pyramids),
+        })
+    }
+
+    /// Read a set of photographs from their files through a photograph
+    /// cache, as the viewer reads them.
+    ///
+    /// The set holds no pixel: each photograph reads its tiles through the
+    /// cache, which keeps them under its budget and decodes an in-core
+    /// photograph again for a tile it has evicted. An out-of-core photograph
+    /// (its workspace has ``mipmap_options`` and a side over their
+    /// threshold) whose mipmap is missing or stale has it made first, in its
+    /// workspace's mipmap directory; its levels are then the stored ones,
+    /// which the constructor's exact levels are not. The GIL is released
+    /// while it reads.
+    ///
+    /// Args:
+    ///     recon_or_paths: An :class:`SfmrReconstruction`, whose
+    ///         ``image_names`` are read under ``workspace_dir``, each checked
+    ///         against its camera's size; or a list of photograph paths, read
+    ///         in that order with no check of their sizes (a kernel checks
+    ///         the set against its scene). A :class:`CameraViews` names no
+    ///         photograph and is refused.
+    ///     workspace_dir: For a reconstruction, the directory its image names
+    ///         are under; ``None`` is the reconstruction's own workspace.
+    ///         Refused with a list of paths.
+    ///     cache: The ``sfmtool.photographs.PhotographCache`` to read through,
+    ///         so that a caller holding one shares its tiles, mipmaps and
+    ///         build budget across calls. ``None`` makes a cache of the
+    ///         default budgets for this set alone, which lives as long as the
+    ///         set.
+    ///     progress: A ``ProgressCounter``, set to the number of mipmaps made.
+    ///
+    /// Returns:
+    ///     An :class:`ImagePyramidSet`, one photograph per path, in order.
+    ///
+    /// Raises:
+    ///     TypeError: for a :class:`CameraViews`, or anything else that is
+    ///         neither a reconstruction nor a list of paths.
+    ///     ValueError: for ``workspace_dir`` with a list of paths, or a
+    ///         reconstruction's photograph that is not its camera's size.
+    ///     FileNotFoundError: when a photograph does not exist.
+    ///     OSError: when one cannot be read, or has a side of 65536 px or more.
+    ///     RuntimeError: when a workspace file holds an invalid
+    ///         ``mipmap_options``, naming the key.
+    ///     KeyboardInterrupt: for Ctrl+C, which stops the read within one
+    ///         stage.
+    ///
+    /// A kernel that reads a tile the cache has evicted, of a photograph
+    /// whose file changed since this read, raises ``RuntimeError`` naming
+    /// the file.
+    #[staticmethod]
+    #[pyo3(signature = (recon_or_paths, workspace_dir=None, cache=None, progress=None))]
+    fn read(
+        py: Python<'_>,
+        recon_or_paths: &Bound<'_, PyAny>,
+        workspace_dir: Option<PathBuf>,
+        cache: Option<PyRef<'_, PyPhotographCache>>,
+        progress: Option<ProgressCounter>,
+    ) -> PyResult<Self> {
+        let (paths, cameras) = if recon_or_paths.cast::<PyCameraViews>().is_ok() {
+            return Err(PyTypeError::new_err(
+                "ImagePyramidSet.read needs an SfmrReconstruction or a list of photograph \
+                 paths; a CameraViews names no photographs",
+            ));
+        } else if let Ok(recon) = recon_or_paths.extract::<PyRef<'_, PySfmrReconstruction>>() {
+            let recon = recon.inner();
+            let dir = workspace_dir.unwrap_or_else(|| recon.workspace_dir.clone());
+            let paths: Vec<PathBuf> = recon
+                .image_set
+                .images
+                .iter()
+                .map(|image| dir.join(&image.name))
+                .collect();
+            (paths, Some(PosedViews::from_reconstruction(recon).cameras))
+        } else if let Ok(paths) = recon_or_paths.extract::<Vec<PathBuf>>() {
+            if workspace_dir.is_some() {
+                return Err(PyValueError::new_err(
+                    "workspace_dir is for a reconstruction's image names; \
+                     pass a list of whole photograph paths without it",
+                ));
+            }
+            (paths, None)
+        } else {
+            return Err(PyTypeError::new_err(
+                "ImagePyramidSet.read needs an SfmrReconstruction or a list of photograph paths",
+            ));
+        };
+        let own;
+        let cache = match &cache {
+            Some(cache) => &cache.inner,
+            None => {
+                own = PhotographCache::new(PhotographCacheOptions::default());
+                &own
+            }
+        };
+        let pyramids = get_photographs(py, cache, &paths, progress.as_ref())?;
+        if let Some(cameras) = cameras {
+            for (i, photograph) in pyramids.iter().enumerate() {
+                let (width, height) = photograph.layout().level_size(0);
+                check_image_matches_camera(&cameras[i], i, width, height)?;
+            }
+        }
         Ok(Self {
             pyramids: Arc::new(pyramids),
         })

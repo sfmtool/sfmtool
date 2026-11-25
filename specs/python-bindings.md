@@ -360,7 +360,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [patches/oriented_patch.rs](../crates/sfmtool-py/src/patches/oriented_patch.rs), [cloud.rs](../crates/sfmtool-py/src/patches/cloud.rs), [views.rs](../crates/sfmtool-py/src/patches/views.rs), [render_bitmaps.rs](../crates/sfmtool-py/src/patches/render_bitmaps.rs) | `OrientedPatch`, `PatchCloud`, `CameraViews`, `ImagePyramidSet`, `PatchCloud.render_bitmaps` | [patch-cloud.md](core/patch/patch-cloud.md) |
+| [patches/oriented_patch.rs](../crates/sfmtool-py/src/patches/oriented_patch.rs), [cloud.rs](../crates/sfmtool-py/src/patches/cloud.rs), [views.rs](../crates/sfmtool-py/src/patches/views.rs), [render_bitmaps.rs](../crates/sfmtool-py/src/patches/render_bitmaps.rs) | `OrientedPatch`, `PatchCloud`, `CameraViews`, `ImagePyramidSet` and `ImagePyramidSet.read(recon_or_paths, workspace_dir=None, cache=None, progress=None)`, which reads a reconstruction's photographs or a list of paths through a `PhotographCache` (`get_photographs` in [photographs.rs](../crates/sfmtool-py/src/photographs.rs), over `PhotographCache::get_many`), holding no pixel, a `CameraViews` raising `TypeError`, `PatchCloud.render_bitmaps` | [patch-cloud.md](core/patch/patch-cloud.md) |
 | [patches/view_tile.rs](../crates/sfmtool-py/src/patches/view_tile.rs) | `OrientedPatch.render_view_tile`: one view's `R×R` tile with its coverage, clipped share, viewing angle and tilt direction | [reference-view.md](core/patch/reference-view.md) |
 | [patches/select_views.rs](../crates/sfmtool-py/src/patches/select_views.rs) | `PatchCloud.select_views` | [patch-view-selection.md](core/patch/patch-view-selection.md) |
 | [patches/localize_keypoints.rs](../crates/sfmtool-py/src/patches/localize_keypoints.rs) | `PatchCloud.localize_keypoints` | [patch-keypoint-localization.md](core/patch/patch-keypoint-localization.md) |
@@ -395,7 +395,7 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [matching/descriptor.rs](../crates/sfmtool-py/src/matching/descriptor.rs), [image.rs](../crates/sfmtool-py/src/matching/image.rs), [sweep.rs](../crates/sfmtool-py/src/matching/sweep.rs) | `descriptor_distance`, `find_best_descriptor_match`, `match_candidates_by_descriptor`, `match_image_pair`, `match_image_pairs_batch`, the `*_sweep*` and `polar_mutual_best_match*` functions | [descriptor-matching.md](core/features/descriptor-matching.md) |
-| [matching/cluster.rs](../crates/sfmtool-py/src/matching/cluster.rs) | `background_floor_clusters`, `background_floor_clusters_kdf`, `clusters_to_pair_matches`, `refine_cluster_patches` | [track-cluster-matching.md](core/features/track-cluster-matching.md), [cluster-patch-refinement.md](core/patch/cluster-patch-refinement.md) |
+| [matching/cluster.rs](../crates/sfmtool-py/src/matching/cluster.rs) | `background_floor_clusters`, `background_floor_clusters_kdf`, `clusters_to_pair_matches`, `refine_cluster_patches`, whose `images` is a list of arrays or an `ImagePyramidSet` | [track-cluster-matching.md](core/features/track-cluster-matching.md), [cluster-patch-refinement.md](core/patch/cluster-patch-refinement.md) |
 | [matching/covisibility.rs](../crates/sfmtool-py/src/matching/covisibility.rs) | `ClusterCovisibility`, `SeedImageGroup`, `ClusterCovisibilitySeedImageGroups` | [cluster-covisibility.md](core/features/cluster-covisibility.md), [covisibility-selection.md](core/features/covisibility-selection.md) |
 
 ### `analysis`

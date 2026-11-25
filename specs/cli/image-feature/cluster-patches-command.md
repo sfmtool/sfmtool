@@ -110,11 +110,22 @@ consumer reads the cells.
    arrays and reads only the rows its members name, so the member values are
    scattered back to those rows, sized by `feature_counts[i]` — which presents
    them exactly as a `.sift` read would.
-3. **Refine.** Load the images with `sfmtool.fileio.read_image_rgb`
-   ([reading-and-writing-images.md](../../core/camera/reading-and-writing-images.md)),
-   decoded through a thread pool (the decoder releases the GIL; the
-   embed-patches pattern), with results collected in submission order. The
-   arrays are RGB, as the kernel takes them; the viewer hands it the same.
+3. **Refine.** Read the photographs the file names,
+   `[workspace_dir / name for name in image_names]`, with
+   `ImagePyramidSet.read` through a `PhotographCache` the command makes with
+   the default budgets
+   ([patch-cloud.md](../../core/patch/patch-cloud.md#cameraviews)), the way
+   the viewer's cluster-patches build reads them
+   ([index-files.md](../../gui/index-files.md)): the set holds no pixel, and
+   the cache keeps the photographs' tiles under its budget, decoding an
+   in-core photograph again for a tile it has evicted. A photograph out of
+   core, in a workspace whose `.sfm-workspace.json` has `mipmap_options`, is
+   read from its mipmap, which is made first when it is missing or stale
+   ([mipmaps.md](../../core/camera/mipmaps.md)). In core the pixels are
+   those of `sfmtool.fileio.read_image_rgb`, RGB, as the kernel takes them.
+   After the refinement the command prints the cache's count of whole decodes
+   and of mipmaps made, and its budget, which
+   `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` sets.
    Present the seed geometry from step 2 in images-section order, and call
    `sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member self-similarity gate,

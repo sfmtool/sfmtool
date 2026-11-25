@@ -1071,7 +1071,7 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | P1 | `sfmtool.fileio.read_image_rgb` / `read_image_rgba` (`sfmtool-py/src/fileio/image.rs`) | whole decode | unchanged: they read files, not pyramids | no |
 | P2 | `ImagePyramidSet(recon, images)` and the kernels' `images` lists (`sfmtool-py/src/patches/views.rs`) | exact pyramids of the arrays passed | tiled photographs cut from the arrays (`TiledPhotograph::from_image`), the same pixels; a new `ImagePyramidSet.read(recon)` reads by path through the core cache | no for arrays; through `read`, as rows 11–18 |
 | P3 | `embed-patches`, the strip montages, the `xform` steps that read photographs (`src/sfmtool/_embed_patches.py`, `src/sfmtool/strips/`, `src/sfmtool/xform/_images.py`) | `read_workspace_image` arrays into the kernels | `ImagePyramidSet.read(recon)` | the stored levels, so they match the viewer |
-| P4 | `sfm cluster-patches` (`src/sfmtool/_cluster_patches.py`) | `read_image_rgb` arrays, full depth | through the same reader as #19 | the stored levels |
+| P4 | `sfm cluster-patches` (`src/sfmtool/_cluster_patches.py`) | `ImagePyramidSet.read` over the paths the file names, `get_many` through a cache of its own, as #19 reads them (built, 16b); before 16b, `read_image_rgb` arrays, full depth, every photograph held at once | through the same reader as #19 | the stored levels |
 | P5 | The view-tile binding (`sfmtool-py/src/patches/view_tile.rs`) | an exact pyramid of the array passed | a tiled photograph cut from the array | no |
 | P6 | Optical flow's pyramids (`sfmtool-py/src/flow/warp.rs`) | a grey pyramid of its own from an array | unchanged; flow reads level 0 from its array | no |
 | P7 | Spherical tile source stacks (`sfmtool-py/src/spherical/tile_source_stack.rs` → `spherical/per_tile_source_stack.rs`) | `remap_bilinear` of the arrays passed | unchanged: they read arrays, not pyramids | no |
@@ -4045,6 +4045,44 @@ in core. Step 17 turns the tier on.
       [photograph-cache.md § "Layouts and pixels for a script"](../core/camera/photograph-cache.md#layouts-and-pixels-for-a-script)
       and [python-bindings.md](../python-bindings.md).
     - **16b, `ImagePyramidSet.read` and `sfm cluster-patches`.**
+      **Built.** `ImagePyramidSet.read` in
+      [views.rs](../../crates/sfmtool-py/src/patches/views.rs), over
+      `get_photographs` in
+      [photographs.rs](../../crates/sfmtool-py/src/photographs.rs); the
+      cluster binding taking a set in
+      [cluster.rs](../../crates/sfmtool-py/src/matching/cluster.rs); and
+      `sfm cluster-patches` reading through it, with a cache it makes, and
+      printing the cache's whole decodes, mipmaps made and budget. Choices
+      made in building it: `TiledPhotograph` is `Clone`, a clone copying no
+      pixel, so the set keeps the photographs `get_many` answers as the
+      `Vec<TiledPhotograph>` every kernel binding already reads rather than
+      a set of `Arc`s that would change them all; `read` checks a
+      reconstruction's photographs against its cameras, as the constructor
+      does, and refuses `workspace_dir` with a list of paths
+      (`ValueError`); and a cache `read` makes for itself lives as long as
+      the set, since the set's photographs read through it. In core the
+      command writes the same file as before, byte for byte. The measured
+      cost, and the decision it needs, are open question 21.
+      Tests: in
+      [test_image_pyramid_set_read_rust_bindings.py](../../tests/rust_bindings/patches/test_image_pyramid_set_read_rust_bindings.py),
+      a list of paths read in order and refined as the arrays of
+      `read_image_rgb` are, a `CameraViews`, a string, `workspace_dir` with
+      paths and a missing file refused, a reconstruction read under its
+      workspace and checked against its cameras, a cache passed to two reads
+      decoding and making each photograph once, and a photograph changed
+      after the read failing the refinement with `RuntimeError` naming it;
+      in [test_cluster_patches.py](../../tests/patch/test_cluster_patches.py),
+      the command on the `seoul_bull_workspace` fixture writing the file the
+      `read_image_rgb` arrays write, byte for byte, and with `mipmap_options`
+      making and reading every photograph's mipmap; and in the viewer's
+      [cluster_patches/tests.rs](../../crates/sfm-explorer/src/cluster_patches/tests.rs),
+      its build equal to the command's steps re-derived, now reading the
+      photographs through a cache of their own, in core and with a threshold
+      of 64 px, over photographs whose patches pin a position so the members
+      are measured. Two parts of the plan were not built: "two calls
+      without `cache=` share nothing" has nothing a test can observe, and the
+      peak memory measured below is in the open question rather than a test.
+      The plan as written:
       `ImagePyramidSet.read`, reading its photographs with `get_many`
       through the `cache=` it is given or a cache of its own, counting
       mipmaps made into `progress=`; the cluster refinement's binding
@@ -4126,8 +4164,8 @@ or `read_rgb` pixel by pixel.
 
 ## Open questions
 
-The user has decided every question below; the section records the
-decisions.
+The user has decided every question below but 21, which needs a decision;
+the section records the decisions.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
@@ -4367,3 +4405,56 @@ decisions.
     signature is `ImagePyramidSet.read(recon_or_paths, workspace_dir=None,
     cache=None, progress=None)`, as § "Python bindings" gives it, and step
     16b builds it.
+21. **`sfm cluster-patches` with in-core photographs past the cache's
+    budget.** *Needs a decision.* Found while building 16b. Until step 17
+    turns the tier on, a workspace has no `mipmap_options` and every
+    photograph is in core, so the cache keeps whole decodes' tiles, and a
+    tile it has evicted is read by decoding the whole photograph again. The
+    refinement takes its clusters in the file's order, in parallel, and each
+    reads several photographs, so once the photographs' tiles are more than
+    the budget, they are decoded again many times. Measured on the first 8
+    of the user's 36 photographs (16320 x 12240), copied to a scratch
+    workspace, with the 24,805 clusters (63,492 members) of the user's
+    clusters file that lie among them; each figure is one run, wall clock,
+    with the process's peak working set:
+
+    | Run | Cache budget | Whole decodes | Time | Peak working set |
+    |-----|--------------|---------------|------|------------------|
+    | before 16b: `read_image_rgb` arrays | none | 8 | 6.4 s | 14.4 GB |
+    | 16b, in core | 15.9 GiB (default) | 8 | 5.3 s | 8.8 GB |
+    | 16b, in core | 3.3 GiB | 65 | 36 s (61 s in a second run) | 8.9 GB |
+    | 16b, in core | 0.9 GiB | 408 (446) | 188 s (279 s) | 8.9 GB |
+    | 16b, `mipmap_options` (4096, 95, 95), making the mipmaps | 15.9 GiB | 0, 8 mipmaps made | 7.0 s | 7.6 GB |
+    | 16b, `mipmap_options`, mipmaps current | 15.9 GiB | 0 | 4.4 s | 2.3 GB |
+    | 16b, `mipmap_options`, mipmaps current | 0.9 GiB | 0 | 7.0 s | 1.4 GB |
+
+    In core every 16b run wrote the file of the run before 16b, byte for
+    byte (with the timestamp fixed); with the tier the runs agree with each
+    other, and 882 of the 63,492 members take another status than in core,
+    since they read the stored levels.
+
+    The tiles of one photograph are about 0.85 GB, so the user's 36 are
+    about 30 GB against the default budget of 16 GiB on the 64 GB machine,
+    about the 3.3 GiB row's ratio. Before 16b the command held all 36 as
+    arrays and tiles at once, about 1.8 GB each, 65 GB in all. The peak
+    working set does not fall below about 9 GB however small the budget,
+    because the decodes in progress are bounded by the build budget (16 GiB
+    on that machine), not by the cache's budget. The options:
+    - (a) take the clusters in an order that reads each photograph's tiles
+      together: the kernel, or the command, groups the clusters by a
+      member image and refines a group at a time. Grouping by the lowest
+      member image and refining each group in its own kernel call, tried in
+      a scratch script, decoded about as often (62 against 67 at 3.3 GiB,
+      421 against 446 at 0.9 GiB) and was no faster, since a group's
+      clusters still reach most photographs and rayon runs a group's
+      clusters across every thread; an order that helps would have to
+      bound the photographs a stretch of clusters reads;
+    - (b) a budget for the command that holds every photograph when memory
+      allows, such as the photographs' tile bytes up to half of physical
+      memory, which keeps the time and holds about 0.85 GB per 200 MP
+      photograph, still half of what the arrays held, but needs about 30 GB
+      for the user's 36;
+    - (c) leave it, and recommend the tier for photographs of this size
+      (`mipmap_options` in the workspace file now; step 17 makes `sfm ws
+      init` write it): with it the same run reads tiles of the mip level
+      files and decodes no photograph whole, at any budget.

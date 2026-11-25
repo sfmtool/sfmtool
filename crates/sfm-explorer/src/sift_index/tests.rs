@@ -254,6 +254,16 @@ pub(crate) fn write_sift(
 /// off the track after it is put on, so a search from that observation looks at
 /// the patch this planted.
 pub(crate) fn searchable(dir: &Path) -> (AppState, ReconId, String) {
+    searchable_with(dir, |_, _| {})
+}
+
+/// [`searchable`], with `photographs` run once the fixture's photographs are
+/// written and before the index files are built, to write others in their
+/// place.
+pub(crate) fn searchable_with(
+    dir: &Path,
+    photographs: impl FnOnce(&AppState, ReconId),
+) -> (AppState, ReconId, String) {
     let (mut state, id) = state_in(dir);
     let label = state
         .put_point_on_bench(PointRef::new(id, POINT as usize), None)
@@ -269,6 +279,7 @@ pub(crate) fn searchable(dir: &Path) -> (AppState, ReconId, String) {
         [f64::from(keypoint[0]), f64::from(keypoint[1])]
     };
     with_sift_files(&state, id, center);
+    photographs(&state, id);
     state
         .start_build_index_files(id)
         .expect("a node with .sift files can be indexed");
