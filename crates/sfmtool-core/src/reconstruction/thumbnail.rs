@@ -26,6 +26,9 @@
 use ndarray::Array3;
 
 use crate::camera::image::area_resize::area_resize;
+use crate::camera::photograph_cache::TileError;
+use crate::camera::PhotographCache;
+use crate::progress::{Cancelled, Progress};
 use crate::{SfmrReconstruction, THUMBNAIL_SIZE};
 use sfmtool_archive_io::parse_hash_bytes;
 
@@ -279,20 +282,49 @@ pub const PLACEHOLDER_GREY: u8 = 128;
 pub enum ThumbnailSource {
     /// Read from the image's verified `.sift` ([`verified_sift_thumbnail`]).
     Sift,
-    /// Decoded from the photograph and resized by area averaging.
+    /// Made from the photograph by area averaging: from its coarsest mip
+    /// level file when it is out of core, and from a whole decode otherwise.
     Photograph,
     /// Neither could supply one; the row is flat [`PLACEHOLDER_GREY`].
     Placeholder,
 }
 
+/// What [`display_thumbnail_row`] does for an out-of-core photograph whose
+/// mipmap is missing or stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotCurrentMipmap {
+    /// Make the mipmap through the photograph cache, then read the row from
+    /// its coarsest mip level file: `sfm web-export`, which writes its
+    /// thumbnails once.
+    Make,
+    /// Decode the original whole, as an in-core photograph is: SfM
+    /// Explorer's open, which makes no mipmap.
+    DecodeOriginal,
+}
+
 /// Image `index`'s display thumbnail row for a reconstruction that carries no
 /// thumbnail column: `THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3` RGB bytes, row major.
 ///
-/// The image's `.sift` thumbnail when a `.sift` verifiably belongs to it,
+/// The image's `.sift` thumbnail when a `.sift` verifiably belongs to it;
 /// otherwise its photograph (`workspace_dir` joined with the image name)
-/// decoded and resized by [`thumbnail_from_rgb`], otherwise flat
-/// [`PLACEHOLDER_GREY`]. SfM Explorer's open and `sfm web-export` both fill a
-/// missing column with this, so the two show the same picture.
+/// resized by [`thumbnail_from_rgb`]; otherwise flat [`PLACEHOLDER_GREY`].
+/// An in-core photograph is decoded whole, outside `photographs`, so its row
+/// is the one a `.sift` extractor makes from it. An out-of-core photograph
+/// (one its workspace's `mipmap_options` put out of core) is resized from
+/// level `K`, read from its coarsest mip level file through `photographs`,
+/// which turns a decode of the whole photograph into one of a file at most a
+/// photograph tile on a side; its row differs slightly from one made from
+/// level 0, and is for display only. When its mipmap is missing or stale,
+/// `not_current` says whether to make it first or to decode the original
+/// whole. SfM Explorer's open and `sfm web-export` both fill a missing
+/// column with this, so the two show the same picture of a photograph whose
+/// mipmap is current.
+///
+/// # Errors
+///
+/// [`Cancelled`] when `progress` was cancelled while a mipmap was made or
+/// read: the photograph cache polls it as [`PhotographCache::get`] does, and
+/// passes on only a build's messages through it.
 ///
 /// # Panics
 ///
@@ -300,29 +332,46 @@ pub enum ThumbnailSource {
 pub fn display_thumbnail_row(
     recon: &SfmrReconstruction,
     index: usize,
-) -> (Vec<u8>, ThumbnailSource) {
+    photographs: &PhotographCache,
+    not_current: NotCurrentMipmap,
+    progress: &Progress<'_>,
+) -> Result<(Vec<u8>, ThumbnailSource), Cancelled> {
     if let Some(thumbnail) = verified_sift_thumbnail(recon, index) {
         let pixels = thumbnail.as_standard_layout().iter().copied().collect();
-        return (pixels, ThumbnailSource::Sift);
+        return Ok((pixels, ThumbnailSource::Sift));
     }
     let path = recon
         .workspace_dir
         .join(&recon.image_set.images[index].name);
     if path.is_file() {
+        let make = not_current == NotCurrentMipmap::Make;
+        match photographs.coarsest_level(&path, make, progress) {
+            Ok(Some(level)) => {
+                let (width, height) = (level.width() as usize, level.height() as usize);
+                return Ok((
+                    thumbnail_from_rgb(level.data(), width, height),
+                    ThumbnailSource::Photograph,
+                ));
+            }
+            Err(TileError::Cancelled) => return Err(Cancelled),
+            // In core, or its mipmap could not be read or made: the
+            // original, decoded whole.
+            Ok(None) | Err(_) => {}
+        }
         if let Ok(image) = crate::camera::image::ImageU8::read_rgb(&path) {
             let (width, height) = (image.width() as usize, image.height() as usize);
             if width > 0 && height > 0 {
-                return (
+                return Ok((
                     thumbnail_from_rgb(image.data(), width, height),
                     ThumbnailSource::Photograph,
-                );
+                ));
             }
         }
     }
-    (
+    Ok((
         vec![PLACEHOLDER_GREY; THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3],
         ThumbnailSource::Placeholder,
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -485,5 +534,165 @@ mod tests {
         let row = verified_sift_thumbnail(&embedded, 1).expect("the photograph's .sift");
         assert!(row.iter().all(|&b| b == 90));
         assert!(verified_sift_thumbnail(&embedded, 0).is_none());
+    }
+
+    /// A reconstruction of two images in a temporary workspace, each a
+    /// 300 x 200 synthetic PNG, `images/0.png` and `images/1.png`, with no
+    /// `.sift`. When `mipmaps`, the workspace's `mipmap_options` put a
+    /// photograph with a side over 64 px out of core, so with tiles of 512
+    /// each stores level 1, 150 x 100, as its coarsest.
+    fn two_photographs(
+        mipmaps: bool,
+    ) -> (
+        tempfile::TempDir,
+        SfmrReconstruction,
+        Vec<std::path::PathBuf>,
+    ) {
+        use crate::camera::mipmap::test_support::{encode_png, synthetic_rgb};
+        let dir = tempfile::tempdir().unwrap();
+        let object = if mipmaps {
+            r#", "mipmap_options": {"out_of_core_long_side": 64, "jpeg_quality": 95,
+            "full_resolution_jpeg_quality": 95}"#
+        } else {
+            ""
+        };
+        std::fs::write(
+            dir.path().join(crate::workspace::WORKSPACE_FILE_NAME),
+            format!(r#"{{"version": 2{object}}}"#),
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("images")).unwrap();
+        let mut recon = SfmrReconstruction::demo(4);
+        recon.workspace_dir = dir.path().to_path_buf();
+        recon.image_set.images.truncate(2);
+        let paths = (0..2)
+            .map(|i| {
+                let name = format!("images/{i}.png");
+                let path = dir.path().join(&name);
+                std::fs::write(&path, encode_png(&synthetic_rgb(300, 200 + i))).unwrap();
+                recon.image_set.images[i as usize].name = name;
+                path
+            })
+            .collect();
+        (dir, recon, paths)
+    }
+
+    /// The thumbnail row of the photograph at `path` decoded whole.
+    fn whole_decode_row(path: &std::path::Path) -> Vec<u8> {
+        let image = crate::camera::image::ImageU8::read_rgb(path).unwrap();
+        thumbnail_from_rgb(
+            image.data(),
+            image.width() as usize,
+            image.height() as usize,
+        )
+    }
+
+    /// The thumbnail row of the photograph at `path`'s coarsest mip level
+    /// file, level 1, decoded from the file on disk.
+    fn coarsest_file_row(path: &std::path::Path) -> Vec<u8> {
+        use crate::camera::mipmap::{
+            mipmap_location, ExpectedMipLevel, MipLevelFile, MipmapSource, PyramidLayout,
+        };
+        let location = mipmap_location(path).unwrap();
+        let source = MipmapSource::read(path, &location).unwrap();
+        let (w, h) = source.size();
+        let options = crate::workspace::read_mipmap_options(location.root())
+            .unwrap()
+            .unwrap();
+        let layout =
+            PyramidLayout::for_size(w, h, Some(&options), crate::camera::PHOTOGRAPH_TILE_SIZE)
+                .unwrap();
+        assert_eq!(layout.stored_levels(), 1);
+        let expected = ExpectedMipLevel::new(&layout, source.relative(), 1).unwrap();
+        let file = MipLevelFile::open(&location.level_path(1, 95), &expected).unwrap();
+        let level = file.decode().unwrap();
+        assert_eq!((level.width(), level.height()), (150, 100));
+        thumbnail_from_rgb(
+            level.data(),
+            level.width() as usize,
+            level.height() as usize,
+        )
+    }
+
+    #[test]
+    fn an_out_of_core_photographs_row_is_made_from_its_coarsest_mip_level_file() {
+        use crate::camera::mipmap::{build_mipmaps, mipmap_location};
+        use crate::camera::{PhotographCache, PhotographCacheOptions};
+        let (_dir, recon, paths) = two_photographs(true);
+        let options = crate::workspace::read_mipmap_options(&recon.workspace_dir)
+            .unwrap()
+            .unwrap();
+        // Photograph 0's mipmap is current; photograph 1 has none.
+        build_mipmaps(
+            &paths[0],
+            None,
+            &options,
+            crate::camera::PHOTOGRAPH_TILE_SIZE,
+            &Progress::none(),
+            &mut |_| {},
+        )
+        .unwrap();
+        let level_1_of = |path: &std::path::Path| mipmap_location(path).unwrap().level_path(1, 95);
+        let cache = PhotographCache::new(PhotographCacheOptions::default());
+        let row = |index, not_current| {
+            display_thumbnail_row(&recon, index, &cache, not_current, &Progress::none())
+                .expect("nothing cancels it")
+        };
+
+        // Read from the coarsest file, whatever `not_current` says, and not
+        // the row of a whole decode.
+        for not_current in [NotCurrentMipmap::DecodeOriginal, NotCurrentMipmap::Make] {
+            let (pixels, source) = row(0, not_current);
+            assert_eq!(source, ThumbnailSource::Photograph);
+            assert!(pixels == coarsest_file_row(&paths[0]), "{not_current:?}");
+        }
+        assert!(coarsest_file_row(&paths[0]) != whole_decode_row(&paths[0]));
+
+        // Without a current mipmap the viewer's open decodes the original
+        // whole and makes nothing.
+        let (pixels, source) = row(1, NotCurrentMipmap::DecodeOriginal);
+        assert_eq!(source, ThumbnailSource::Photograph);
+        assert!(pixels == whole_decode_row(&paths[1]));
+        assert!(!level_1_of(&paths[1]).exists());
+        assert_eq!(cache.stats().mipmaps_made, 0);
+
+        // A web export makes the mipmap, then reads the row from it.
+        let (pixels, _) = row(1, NotCurrentMipmap::Make);
+        assert!(level_1_of(&paths[1]).exists());
+        assert!(pixels == coarsest_file_row(&paths[1]));
+        let stats = cache.stats();
+        assert_eq!(stats.mipmaps_made, 1);
+        assert_eq!(
+            stats.decodes, 0,
+            "no photograph was decoded whole in the cache"
+        );
+    }
+
+    #[test]
+    fn a_photograph_in_a_workspace_without_mipmap_options_is_decoded_whole_outside_the_cache() {
+        use crate::camera::mipmap::MIPMAP_DIR_NAME;
+        use crate::camera::{PhotographCache, PhotographCacheOptions};
+        let (dir, recon, paths) = two_photographs(false);
+        let cache = PhotographCache::new(PhotographCacheOptions::default());
+        let (pixels, source) =
+            display_thumbnail_row(&recon, 0, &cache, NotCurrentMipmap::Make, &Progress::none())
+                .unwrap();
+        assert_eq!(source, ThumbnailSource::Photograph);
+        assert!(pixels == whole_decode_row(&paths[0]));
+        let stats = cache.stats();
+        assert_eq!((stats.hits, stats.misses, stats.tiles), (0, 0, 0));
+        assert!(!dir.path().join(MIPMAP_DIR_NAME).exists());
+    }
+
+    #[test]
+    fn a_cancelled_build_of_a_thumbnails_mipmap_is_cancelled() {
+        use crate::camera::{PhotographCache, PhotographCacheOptions};
+        let (_dir, recon, _paths) = two_photographs(true);
+        let cache = PhotographCache::new(PhotographCacheOptions::default());
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        let progress = Progress::none().cancelled_by(&stop);
+        assert!(
+            display_thumbnail_row(&recon, 0, &cache, NotCurrentMipmap::Make, &progress).is_err()
+        );
     }
 }

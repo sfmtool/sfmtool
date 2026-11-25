@@ -10,8 +10,10 @@
 //! is the image set's own [`Arc`], shared rather than copied. When it does
 //! not, [`DisplayThumbnails::build`] fills every row in as part of the open
 //! ([`crate::state::open`]): from the image's `.sift` first, which already holds
-//! the row reduced, from the photograph second, and as a flat grey placeholder
-//! only for an image neither can supply.
+//! the row reduced, from the photograph second (from its coarsest mip level
+//! file when it is out of core and that file is current, read through the
+//! viewer's photograph cache, and from a whole decode otherwise), and as a
+//! flat grey placeholder only for an image neither can supply.
 //!
 //! **Display thumbnails belong to the node.** They are held on the
 //! [`crate::scene::SceneNode`] beside its history and never enter an
@@ -29,8 +31,11 @@ use std::sync::Arc;
 
 use ndarray::{Array4, ArrayView3, Axis};
 use rayon::prelude::*;
+use sfmtool_core::camera::PhotographCache;
 use sfmtool_core::progress::{Cancelled, Progress};
-use sfmtool_core::reconstruction::thumbnail::{display_thumbnail_row, ThumbnailSource};
+use sfmtool_core::reconstruction::thumbnail::{
+    display_thumbnail_row, NotCurrentMipmap, ThumbnailSource,
+};
 use sfmtool_core::{SfmrReconstruction, THUMBNAIL_SIZE};
 
 #[cfg(test)]
@@ -76,11 +81,14 @@ impl DisplayThumbnails {
     /// Each row is the image's `.sift` thumbnail when a `.sift` verifiably
     /// belongs to it
     /// ([`verified_sift_thumbnail`](sfmtool_core::reconstruction::thumbnail::verified_sift_thumbnail)),
-    /// otherwise its photograph
-    /// decoded and resized by area averaging, otherwise the flat
-    /// [`PLACEHOLDER_GREY`]. The rows are built in parallel; `progress` gets an
+    /// otherwise its photograph resized by area averaging, otherwise the flat
+    /// [`PLACEHOLDER_GREY`]
+    /// ([`display_thumbnail_row`]). An out-of-core photograph whose mipmap is
+    /// current is read from its coarsest mip level file through
+    /// `photographs`; one whose mipmap is not is decoded whole, since the open
+    /// makes no mipmap. The rows are built in parallel; `progress` gets an
     /// `images` count as each lands, and is polled for cancellation before
-    /// each one.
+    /// each one and while a photograph is read.
     ///
     /// `Ok(None)` when there is nothing to show: the reconstruction has no
     /// images, or not one row came from either source. The node then has no
@@ -88,6 +96,7 @@ impl DisplayThumbnails {
     /// and the panels draw their placeholder.
     pub(crate) fn build(
         recon: &SfmrReconstruction,
+        photographs: &PhotographCache,
         progress: &Progress<'_>,
     ) -> Result<(Option<Arc<Self>>, BuiltFrom), Cancelled> {
         let images = &recon.image_set.images;
@@ -99,7 +108,9 @@ impl DisplayThumbnails {
                 if progress.is_cancelled() {
                     return (Vec::new(), ThumbnailSource::Placeholder);
                 }
-                let row = build_row(recon, index);
+                let Ok(row) = build_row(recon, index, photographs, progress) else {
+                    return (Vec::new(), ThumbnailSource::Placeholder);
+                };
                 let n = landed.fetch_add(1, Ordering::Relaxed) + 1;
                 progress.count(n as u64, Some(total as u64), "images");
                 row
@@ -156,8 +167,19 @@ fn names_to_rows(recon: &SfmrReconstruction) -> HashMap<String, usize> {
 
 /// Image `index`'s row: the verified `.sift` copy, the photograph, or the grey
 /// ([`display_thumbnail_row`], which `sfm web-export` fills a column with too).
-fn build_row(recon: &SfmrReconstruction, index: usize) -> (Vec<u8>, ThumbnailSource) {
-    let (pixels, source) = display_thumbnail_row(recon, index);
+fn build_row(
+    recon: &SfmrReconstruction,
+    index: usize,
+    photographs: &PhotographCache,
+    progress: &Progress<'_>,
+) -> Result<(Vec<u8>, ThumbnailSource), Cancelled> {
+    let (pixels, source) = display_thumbnail_row(
+        recon,
+        index,
+        photographs,
+        NotCurrentMipmap::DecodeOriginal,
+        progress,
+    )?;
     if source == ThumbnailSource::Placeholder {
         log::warn!(
             "Display thumbnail: neither a .sift nor the photograph {} could be read; \
@@ -168,7 +190,7 @@ fn build_row(recon: &SfmrReconstruction, index: usize) -> (Vec<u8>, ThumbnailSou
                 .display()
         );
     }
-    (pixels, source)
+    Ok((pixels, source))
 }
 
 /// The row a panel draws for image `index` of `recon`, the value a node shows.

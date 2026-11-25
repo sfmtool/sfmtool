@@ -44,7 +44,13 @@ each image's row is its `.sift` thumbnail, or its photograph decoded and resized
 or a flat grey placeholder, in that order: the rows SfM Explorer's open builds
 for its display thumbnails ([GLOSSARY](../../GLOSSARY.md) "display thumbnails"),
 made by the same function. When no image yields a row, the thumbnail atlas is
-left out.
+left out. A photograph its workspace's `mipmap_options` put out of core is
+resized from its coarsest mip level file rather than from a whole decode. An
+export writes its thumbnails once, so for such a photograph whose mipmap is
+missing or stale it makes the mipmap first, through the photograph cache the
+patch bitmap render reads with, writing its files into the workspace, and then
+reads the row from it (`NotCurrentMipmap::Make`): the row SfM Explorer shows
+once that mipmap is made.
 
 **Patch bitmaps come from the file** when it carries them. A file with patch
 frames and inline keypoints but no bitmaps has them rendered from its

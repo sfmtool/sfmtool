@@ -440,7 +440,15 @@ column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails
      averaging with `sfmtool_core::reconstruction::thumbnail::thumbnail_from_rgb`. For
      a photograph at least 128 pixels on each side that resize follows OpenCV's
      `INTER_AREA` arithmetic, so the row equals the one an extractor stores in the
-     `.sift`.
+     `.sift`. An out-of-core photograph, one its workspace's `mipmap_options` put out
+     of core ([mipmaps.md](../core/camera/mipmaps.md)), whose coarsest mip level file
+     is current is resized from that file's level instead, read through the viewer's
+     photograph cache, which turns a decode of the whole photograph into one of a file
+     at most a photograph tile on a side; its row differs slightly from one of the
+     whole photograph and is for display only. One whose mipmap is not current is
+     decoded whole, since the open makes no mipmap. The function is
+     `sfmtool_core::reconstruction::thumbnail::display_thumbnail_row`, with
+     `NotCurrentMipmap::DecodeOriginal`.
   3. **A flat placeholder**, the neutral mid-grey `PLACEHOLDER_GREY` (128), for an image
      neither source can supply; its path is logged.
 

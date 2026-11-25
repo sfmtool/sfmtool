@@ -3619,10 +3619,14 @@ fn a_built_column_fills_the_atlas_and_keeps_it() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_path_buf();
     let recon = workspace_with_photographs(&dir, &[]);
-    let display = DisplayThumbnails::build(&recon, &SILENT)
-        .expect("nothing cancels it")
-        .0
-        .expect("photographs");
+    let display = DisplayThumbnails::build(
+        &recon,
+        &sfmtool_core::camera::PhotographCache::new(Default::default()),
+        &SILENT,
+    )
+    .expect("nothing cancels it")
+    .0
+    .expect("photographs");
     let (device, queue) = device();
     let mut r = SceneRenderer::new();
 

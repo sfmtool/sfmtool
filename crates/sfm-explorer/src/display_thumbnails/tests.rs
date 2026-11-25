@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use ndarray::{Array2, Array3, Array4};
+use sfmtool_core::camera::PhotographCache;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{ObservationSource, SfmrReconstruction, THUMBNAIL_SIZE};
 
@@ -116,7 +117,12 @@ pub(crate) fn is_flat(row: ndarray::ArrayView3<'_, u8>, rgb: [u8; 3]) -> bool {
 /// Build without a sink, which is what a caller that wants the rows and not
 /// the report does.
 fn build(recon: &SfmrReconstruction) -> (Option<Arc<DisplayThumbnails>>, BuiltFrom) {
-    DisplayThumbnails::build(recon, &Progress::none()).expect("nothing cancels it")
+    DisplayThumbnails::build(
+        recon,
+        &PhotographCache::new(Default::default()),
+        &Progress::none(),
+    )
+    .expect("nothing cancels it")
 }
 
 #[test]
@@ -198,7 +204,8 @@ fn a_build_that_is_cancelled_says_so() {
     let recon = workspace_with_photographs(&dir, &[]);
     let stop = AtomicBool::new(true);
     let progress = Progress::none().cancelled_by(&stop);
-    assert!(DisplayThumbnails::build(&recon, &progress).is_err());
+    let cache = PhotographCache::new(Default::default());
+    assert!(DisplayThumbnails::build(&recon, &cache, &progress).is_err());
 }
 
 #[test]
@@ -240,4 +247,58 @@ fn an_image_the_column_was_not_built_for_falls_back_to_the_values_column() {
         row_for(Some(&display), &other, 4).unwrap(),
         colour_of(4)
     ));
+}
+
+/// In a workspace whose `mipmap_options` put its 300 x 200 photographs out of
+/// core: the row of one whose mipmap is current is made from its coarsest
+/// mip level file, level 1, read through the viewer's cache; the row of one
+/// whose mipmap is not is made from a whole decode, and the open makes no
+/// mipmap.
+#[test]
+fn an_out_of_core_photograph_is_read_from_its_coarsest_mip_level_file_when_it_is_current() {
+    use crate::state::build_mipmaps::tests::{mipmap_options, out_of_core_photographs_of};
+    use sfmtool_core::camera::image::ImageU8;
+    use sfmtool_core::camera::mipmap::{build_mipmaps, mipmap_location};
+    use sfmtool_core::camera::PHOTOGRAPH_TILE_SIZE;
+    use sfmtool_core::reconstruction::thumbnail::thumbnail_from_rgb;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut recon = SfmrReconstruction::demo(16);
+    let paths = out_of_core_photographs_of(&mut recon, tmp.path(), &[0, 1]);
+    let built = build_mipmaps(
+        &paths[0],
+        None,
+        &mipmap_options(),
+        PHOTOGRAPH_TILE_SIZE,
+        &Progress::none(),
+        &mut |_| {},
+    )
+    .unwrap();
+    let thumbnail = |image: &ImageU8| {
+        thumbnail_from_rgb(
+            image.data(),
+            image.width() as usize,
+            image.height() as usize,
+        )
+    };
+    let coarsest = built.level(1).unwrap().decode().unwrap();
+    let cache = PhotographCache::new(Default::default());
+    let (display, from) = DisplayThumbnails::build(&recon, &cache, &Progress::none()).unwrap();
+    let display = display.expect("two photographs");
+    assert_eq!(from.photographs, 2);
+    let row = |i: usize| -> Vec<u8> {
+        let row = display.row(&recon.image_set.images[i].name).unwrap();
+        row.iter().copied().collect()
+    };
+    let whole_0 = thumbnail(&ImageU8::read_rgb(&paths[0]).unwrap());
+    assert!(row(0) == thumbnail(&coarsest));
+    assert!(
+        row(0) != whole_0,
+        "the coarsest level's row is not level 0's"
+    );
+    assert!(row(1) == thumbnail(&ImageU8::read_rgb(&paths[1]).unwrap()));
+    let level_1 = mipmap_location(&paths[1]).unwrap().level_path(1, 95);
+    assert!(!level_1.exists(), "the open made a mipmap");
+    let stats = cache.stats();
+    assert_eq!((stats.decodes, stats.mipmaps_made), (0, 0));
 }

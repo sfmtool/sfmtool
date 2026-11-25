@@ -47,7 +47,9 @@ use crate::camera::{PhotographCache, PhotographCacheOptions, PhotographReadError
 use crate::numeric::quantile_in_place;
 use crate::patch::display_bitmaps::render_display_patch_bitmaps;
 use crate::progress::{Cancelled, Progress};
-use crate::reconstruction::thumbnail::{display_thumbnail_row, resize_area, ThumbnailSource};
+use crate::reconstruction::thumbnail::{
+    display_thumbnail_row, resize_area, NotCurrentMipmap, ThumbnailSource,
+};
 use crate::reconstruction::{patch_bitmap_is_stored, patch_frame_is_stored};
 use crate::{progress_note, CameraIntrinsics, SfmrReconstruction, THUMBNAIL_SIZE};
 
@@ -125,7 +127,8 @@ pub struct ThumbnailCounts {
     pub file: usize,
     /// Rows from each image's verified `.sift`.
     pub sift: usize,
-    /// Rows decoded and resized from the photograph.
+    /// Rows resized from the photograph: from its coarsest mip level file
+    /// when it is out of core, and from a whole decode otherwise.
     pub photographs: usize,
     /// Grey rows for images neither could supply.
     pub placeholders: usize,
@@ -337,6 +340,13 @@ pub fn build_web_export(
     };
     let [thumb_progress, bitmap_progress, rest] = progress.split([1.0, 4.0, 1.0]);
     let mut report = WebExportReport::default();
+    // The bitmap render and the thumbnails read each photograph once, so a
+    // cache that keeps nothing: each pyramid is dropped once its reader is
+    // done. Both make the mipmaps they need through it.
+    let photographs = PhotographCache::new(PhotographCacheOptions {
+        budget_bytes: 0,
+        ..Default::default()
+    });
 
     // The points kept, in their order in the file.
     let points = &recon.point_set.points;
@@ -360,12 +370,6 @@ pub fn build_web_export(
         Some(bitmaps.as_ref())
     } else {
         let mut phase = bitmap_progress.phase("patch bitmaps");
-        // Nothing else in the export reads a photograph, so a cache that
-        // keeps nothing: each pyramid is dropped once the render is done.
-        let photographs = PhotographCache::new(PhotographCacheOptions {
-            budget_bytes: 0,
-            ..Default::default()
-        });
         rendered_bitmaps = render_display_patch_bitmaps(
             recon,
             &photographs,
@@ -399,7 +403,7 @@ pub fn build_web_export(
     // Thumbnail rows.
     let thumbnail_rows = if options.thumbnails && !images.is_empty() {
         let mut phase = thumb_progress.phase("thumbnails");
-        let rows = thumbnail_rows(recon, &mut report.thumbnails, &phase)?;
+        let rows = thumbnail_rows(recon, &photographs, &mut report.thumbnails, &phase)?;
         progress_note!(
             phase,
             "{} from the file, {} from .sift files, {} from photographs, {} placeholders",
@@ -689,10 +693,14 @@ fn relative_position(position: &Point3<f64>, w: f64, centre: &Point3<f64>) -> [f
 }
 
 /// One RGB thumbnail row per image, `THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3`
-/// bytes each: the file's column, or the display rows. `None` when every row
-/// would be a placeholder.
+/// bytes each: the file's column, or the display rows, read through
+/// `photographs`. An export writes its thumbnails once, so it makes the
+/// mipmap of an out-of-core photograph whose mipmap is not current and reads
+/// the row from its coarsest mip level file, the row SfM Explorer shows once
+/// that mipmap is made. `None` when every row would be a placeholder.
 fn thumbnail_rows(
     recon: &SfmrReconstruction,
+    photographs: &PhotographCache,
     counts: &mut ThumbnailCounts,
     progress: &Progress<'_>,
 ) -> Result<Option<Vec<Vec<u8>>>, Cancelled> {
@@ -712,7 +720,11 @@ fn thumbnail_rows(
             if progress.is_cancelled() {
                 return (Vec::new(), ThumbnailSource::Placeholder);
             }
-            let row = display_thumbnail_row(recon, i);
+            let Ok(row) =
+                display_thumbnail_row(recon, i, photographs, NotCurrentMipmap::Make, progress)
+            else {
+                return (Vec::new(), ThumbnailSource::Placeholder);
+            };
             let n = landed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             progress.count(n as u64, Some(total as u64), "images");
             row

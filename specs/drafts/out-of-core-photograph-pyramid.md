@@ -3754,6 +3754,46 @@ in core. Step 17 turns the tier on.
       task has made the mipmap; a web export of an out-of-core photograph
       with no mipmap writes its mipmap and the same row. Visible: a
       thumbnail's pixels change slightly.
+
+      Built in two parts, since the fill is a viewer change of its own
+      (rows replaced in a node's column after the open, and the atlas and
+      the Image Browser's textures made again for them):
+      - **15c1, the row from the coarsest file.** **Built.**
+        `display_thumbnail_row` takes the photograph cache, a
+        `NotCurrentMipmap` (`Make` or `DecodeOriginal`) and a `Progress`,
+        and answers `Cancelled`; an out-of-core photograph's row is
+        `thumbnail_from_rgb` of level `K`, read whole by the cache's
+        crate-private `coarsest_level`
+        ([tiles.rs](../../crates/sfmtool-core/src/camera/photograph_cache/tiles.rs),
+        [thumbnail.rs](../../crates/sfmtool-core/src/reconstruction/thumbnail.rs)).
+        In a workspace without `mipmap_options` it reads no header and the
+        row is a whole decode outside the cache, byte for byte today's.
+        `sfm web-export` passes `Make` through the budget-0 cache its
+        bitmap render reads with, now made once for both
+        ([web_export.rs](../../crates/sfmtool-core/src/web_export.rs)). The
+        viewer's open passes its own cache and `DecodeOriginal`
+        ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails.rs)),
+        so a photograph whose mipmap is current is read from the coarsest
+        file and one whose mipmap is not is decoded whole, as before this
+        step, until 15c2. Tests: the row of a photograph with a current
+        mipmap is the coarsest file's under either choice and differs from
+        the whole decode's, `DecodeOriginal` decodes a photograph without
+        one whole and makes nothing, `Make` makes it and reads the row from
+        it with no whole decode in the cache, and a cancelled build is
+        `Cancelled` (`reconstruction::thumbnail::tests`); a workspace
+        without the object decodes whole outside the cache and writes no
+        mipmap directory; the open's build reads a current coarsest file
+        and makes no mipmap (`display_thumbnails::tests`); and a web export
+        makes every missing mipmap, a second export reading them writes the
+        same thumbnail pages, and an export without the object writes other
+        pages (`web_export::tests`).
+      - **15c2, the placeholder and its fill.** The open gives a photograph
+        whose mipmap is not current the placeholder row instead of a whole
+        decode (`NotCurrentMipmap::DecodeOriginal` becomes a placeholder),
+        and the row is filled on the rayon pool from the coarsest file once
+        *Build mipmaps* reports the photograph made. Tests: a placeholder
+        row is filled once the task has made the mipmap, and the atlas and
+        the Image Browser draw the filled row.
     - **15d, the Python makers and `sfm sift`.** The `sfmtool.photographs`
       submodule with the `PhotographCache` class, only its constructor,
       `build_mipmaps` and `stats` (open question 17), wired as § "Python
