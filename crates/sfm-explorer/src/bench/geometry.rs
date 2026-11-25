@@ -985,6 +985,41 @@ const BARB_BACK: f64 = 0.25;
 /// How far to either side they reach, in the same units.
 const BARB_SIDE: f64 = 0.1;
 
+/// The tangent of the angle each barb makes with the normal: how far it
+/// reaches to the side for each unit it reaches back along the normal.
+pub(crate) const BARB_TAN_ANGLE: f64 = BARB_SIDE / BARB_BACK;
+
+/// The parts of the normal's arrow that do not depend on where it is seen
+/// from: the segment from `tail` to `tip`, and the `foot` on that segment,
+/// [`BARB_BACK`] of its length back from the tip, which the barbs' far ends
+/// stand to either side of.
+///
+/// A barb runs from `tip` to the point [`BARB_TAN_ANGLE`] times the distance
+/// from `tip` to `foot` to one side of `foot`, the side square to the normal
+/// and as square to the viewer as it can be. [`arrow`] chooses that side for
+/// one eye; the 3D viewport hands these three points to its shader, which
+/// chooses it each frame, so nothing the viewport writes depends on the camera.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ArrowShaft {
+    /// Where the segment leaves the patch: its centre.
+    pub(crate) tail: Point3<f64>,
+    /// The far end, where the arrowhead is and where it is grabbed.
+    pub(crate) tip: Point3<f64>,
+    /// The point of the segment the barbs' far ends stand to either side of.
+    pub(crate) foot: Point3<f64>,
+}
+
+/// The shaft of the arrow that stands `length` along the unit `normal` from
+/// `centre`.
+pub(crate) fn arrow_shaft(centre: Point3<f64>, normal: Vector3<f64>, length: f64) -> ArrowShaft {
+    let tip = centre + normal * length;
+    ArrowShaft {
+        tail: centre,
+        tip,
+        foot: tip - normal * (BARB_BACK * length),
+    }
+}
+
 /// The normal's arrow as world points: the segment from `tail` to `tip`, and
 /// the arrowhead's two barbs, each running from `tip` back to its point.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1013,20 +1048,19 @@ pub(crate) fn arrow(
     eye: Point3<f64>,
     fallback: Vector3<f64>,
 ) -> Arrow {
-    let tip = centre + normal * length;
+    let ArrowShaft { tail, tip, foot } = arrow_shaft(centre, normal, length);
     let side = normal.cross(&(eye - tip));
     let side = if side.norm() > MIN_DIRECTION {
         side.normalize()
     } else {
         fallback.normalize()
     };
-    let back = tip - normal * (BARB_BACK * length);
     Arrow {
-        tail: centre,
+        tail,
         tip,
         barbs: [
-            back + side * (BARB_SIDE * length),
-            back - side * (BARB_SIDE * length),
+            foot + side * (BARB_SIDE * length),
+            foot - side * (BARB_SIDE * length),
         ],
     }
 }

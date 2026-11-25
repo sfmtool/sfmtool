@@ -55,7 +55,8 @@ fn an_upload_holds_one_instance_per_stroke_and_the_disc_beside_it() {
 
     assert_eq!(
         r.overlay_ribbons.drawn_count(OverlayTarget::Scene),
-        figure.strokes().count() as u32
+        figure.strokes().count() as u32 + 2,
+        "a segment per stroke and the arrowhead's two barbs"
     );
     assert_eq!(r.bench_track_disc_count, figure.disc.len() as u32);
     assert!(r.overlay_ribbons.buffer().is_some());
@@ -104,7 +105,7 @@ fn an_upload_after_a_figure_is_gone_draws_nothing_and_keeps_the_room() {
     let (device, queue) = device();
     let mut r = SceneRenderer::new();
     let figure = staged_figure();
-    let figure_edges = figure.strokes().count() as u32;
+    let figure_edges = super::figure_instances(&figure).len() as u32;
     r.upload_bench_track(&device, &queue, Some(&figure));
     assert_eq!(
         r.overlay_ribbons.drawn_count(OverlayTarget::Scene),
@@ -230,6 +231,10 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
 
     let figure = staged_figure();
     let edges = super::figure_instances(&figure);
+    assert!(
+        edges.iter().any(|edge| edge.kind == OverlayInstance::BARB),
+        "the figure's barbs go through the pipeline too"
+    );
     // Every kind of piece: a segment, a ring and a disc.
     let measurements = [segment(1.0), ring(), disc()];
     // A track ray to a finite point and one to a point at infinity, whose far
@@ -336,26 +341,248 @@ fn disc() -> OverlayInstance {
     OverlayInstance::disc([0.0, 0.0, 0.0, 1.0], [1.0; 4], 1.5, MEASUREMENT)
 }
 
-/// The figure's pieces are segments at the bench's width in points, fading
-/// behind the scene and not pulled toward the eye.
+/// The figure's pieces are segments, and the arrowhead's two barbs, at the
+/// bench's width in points, fading behind the scene and not pulled toward the
+/// eye: the strokes, then the barbs.
 #[test]
-fn the_figure_is_segments_that_fade_behind_the_scene() {
+fn the_figure_is_segments_and_barbs_that_fade_behind_the_scene() {
     let figure = staged_figure();
     let edges = super::figure_instances(&figure);
-    assert_eq!(edges.len(), figure.strokes().count());
-    for (edge, stroke) in edges.iter().zip(figure.strokes()) {
+    let normal = figure
+        .normal
+        .expect("a finite patch frame carries its normal");
+    assert_eq!(edges.len(), figure.strokes().count() + 2);
+    let (segments, barbs) = edges.split_at(edges.len() - 2);
+    for (edge, stroke) in segments.iter().zip(figure.strokes()) {
         assert_eq!(
             (edge.a, edge.b, edge.color),
             (stroke.a, stroke.b, stroke.color)
         );
         assert_eq!(edge.kind, OverlayInstance::SEGMENT);
         assert_eq!((edge.half_width, edge.radius), (BENCH_LINE_HALF_WIDTH, 0.0));
+    }
+    assert_eq!(segments[4].b, normal.shaft.b, "the normal's segment");
+    for (edge, barb) in barbs.iter().zip(normal.barbs) {
+        assert_eq!(
+            (edge.a, edge.b, edge.color, edge.radius),
+            (barb.tip, barb.foot, barb.color, barb.tan_angle)
+        );
+        assert_eq!(edge.kind, OverlayInstance::BARB);
+        assert_eq!(edge.half_width, BENCH_LINE_HALF_WIDTH);
+    }
+    for edge in &edges {
         assert_eq!(
             edge.flags,
             OverlayInstance::FADE,
             "the figure fades with distance behind, and is not pulled"
         );
     }
+}
+
+/// An upload of a figure equal to the one last written writes nothing: not
+/// its region of the store, and not its disc, whose buffer is kept. A frame
+/// that only moves the camera hands the upload such a figure
+/// (`viewer_3d::tests::a_camera_move_leaves_the_bench_figure_as_it_was`). A
+/// figure that differs is written, and so is the figure going away, once.
+#[test]
+fn an_upload_of_the_figure_last_written_writes_nothing() {
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    let figure = staged_figure();
+    let writes = |r: &SceneRenderer| {
+        r.overlay_ribbons
+            .issued
+            .iter()
+            .filter(|write| write.producer == ProducerId::BenchFigure)
+            .count()
+    };
+
+    r.upload_measurements(&device, &queue, &[]);
+    r.upload_bench_track(&device, &queue, None);
+    assert_eq!(writes(&r), 0, "nothing was written and nothing is there");
+
+    r.upload_bench_track(&device, &queue, Some(&figure));
+    let written = writes(&r);
+    assert!(written > 0);
+    let disc = r.bench_track_disc_buffer.clone().expect("the disc");
+
+    r.upload_bench_track(&device, &queue, Some(&figure.clone()));
+    assert_eq!(writes(&r), written, "the same figure was written again");
+    assert_eq!(
+        r.bench_track_disc_buffer.as_ref(),
+        Some(&disc),
+        "the disc was made again"
+    );
+
+    let mut moved = figure.clone();
+    moved.square[0].a[0] += 1.0;
+    r.upload_bench_track(&device, &queue, Some(&moved));
+    assert_eq!(writes(&r), written + 1, "a changed figure is written");
+    assert_ne!(r.bench_track_disc_buffer.as_ref(), Some(&disc));
+
+    r.upload_bench_track(&device, &queue, None);
+    assert_eq!(r.overlay_ribbons.drawn_count(OverlayTarget::Scene), 0);
+    assert!(r.bench_track_disc_buffer.is_none());
+    r.upload_bench_track(&device, &queue, Some(&moved));
+    assert_eq!(
+        r.overlay_ribbons.drawn_count(OverlayTarget::Scene),
+        super::figure_instances(&moved).len() as u32,
+        "a figure after none is written again"
+    );
+    device.poll(wgpu::PollType::Poll).expect("device poll");
+}
+
+/// Where `bench_track.wgsl`'s `barb_end` puts a barb's far end, in view space:
+/// that function line for line, in `f64`.
+fn barb_end(
+    tip: nalgebra::Vector3<f64>,
+    foot: nalgebra::Vector3<f64>,
+    tan_angle: f64,
+) -> nalgebra::Vector3<f64> {
+    const BARB_MIN_SINE: f64 = 1.0e-5;
+    let shaft = tip - foot;
+    let back = shaft.norm();
+    if back == 0.0 {
+        return foot;
+    }
+    let mut side = shaft.cross(&-tip);
+    if side.norm() <= BARB_MIN_SINE * back * tip.norm() {
+        side = shaft.cross(&nalgebra::Vector3::y());
+        if side.norm() <= BARB_MIN_SINE * back {
+            side = shaft.cross(&nalgebra::Vector3::x());
+        }
+    }
+    foot + side.normalize() * (tan_angle * back)
+}
+
+/// The barbs the shader draws are the barbs Image Detail's construction,
+/// `geometry::arrow`, squares to the same eye, from every view but the one
+/// straight down the normal, where the shader stands them across the screen's
+/// vertical rather than along the patch's own `u`.
+///
+/// The shader is mirrored by [`barb_end`] rather than run: the `noop` device
+/// draws nothing to read back. The lines of `barb_end` and of the barb's branch
+/// of `vs_overlay` are pinned in the shader's text, so a change to either that
+/// the mirror does not follow fails here; what the pin cannot catch is a change
+/// to the mirror and the shader together that `geometry::arrow` would not
+/// agree with, which the comparison below does catch.
+#[test]
+fn the_shader_s_barbs_are_geometry_s_arrow_squared_to_the_eye() {
+    use crate::bench::geometry;
+    use nalgebra::{Point3, Vector3};
+
+    let bench = include_str!("../../shaders/bench_track.wgsl");
+    for line in [
+        "const KIND_BARB: u32 = 3u;",
+        "const BARB_MIN_SINE: f32 = 1.0e-5;",
+        "if in.kind == KIND_RING || in.kind == KIND_DISC {",
+        "if in.kind == KIND_BARB {",
+        "vb = vec4<f32>(barb_end(va.xyz, vb.xyz, in.radius), 1.0);",
+        "out.shape = vec3<f32>(f32(KIND_SEGMENT), 0.0, half_px);",
+        "let shaft = tip - foot;",
+        "let back = length(shaft);",
+        "var side = cross(shaft, -tip);",
+        "if length(side) <= BARB_MIN_SINE * back * length(tip) {",
+        "side = cross(shaft, vec3<f32>(0.0, 1.0, 0.0));",
+        "if length(side) <= BARB_MIN_SINE * back {",
+        "side = cross(shaft, vec3<f32>(1.0, 0.0, 0.0));",
+        "return foot + normalize(side) * (tan_angle * back);",
+    ] {
+        assert!(
+            bench.lines().any(|l| l.trim() == line),
+            "bench_track.wgsl does not declare `{line}`"
+        );
+    }
+    assert_eq!(OverlayInstance::BARB, 3);
+
+    // The staged figure's arrow, against the construction it was built from.
+    let figure = staged_figure();
+    let normal = figure
+        .normal
+        .expect("a finite patch frame carries its normal");
+    let v3 = |p: [f32; 4]| Vector3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
+    let (tail, tip) = (v3(normal.shaft.a), v3(normal.shaft.b));
+    let length = (tip - tail).norm();
+    let n = (tip - tail) / length;
+    let u = n.cross(&Vector3::z()).normalize();
+    let up = n.cross(&u);
+
+    // Off to the side, a little off the normal, and nearly down it. The
+    // last is so nearly down it that the `f32` places the instance holds
+    // turn the side by a few degrees about the shaft from where `f64` puts
+    // it, so there the barb is held to what the side is rather than to
+    // `geometry::arrow`'s own: square to the shaft and to the line of sight,
+    // at the barb's length.
+    for (degrees, roll) in [
+        (70.0_f64, 0.0_f64),
+        (25.0, 1.0),
+        (3.0, 2.0),
+        (0.5, 3.0),
+        (0.01, 0.5),
+    ] {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let towards = n * cos + (u * roll.cos() + up * roll.sin()) * sin;
+        let eye = Point3::from(tip + towards * (6.0 * length));
+        let camera = crate::viewer_3d::ViewportCamera {
+            camera: sfmtool_core::Camera::look_at(eye, Point3::from(tail), up),
+            ..Default::default()
+        };
+        let view = camera.view_matrix();
+        let to_view = |p: Vector3<f64>| (view * p.push(1.0)).xyz();
+        let drawn = geometry::arrow(Point3::from(tail), n, length, eye, u);
+        for (k, barb) in normal.barbs.iter().enumerate() {
+            let end = barb_end(
+                to_view(v3(barb.tip)),
+                to_view(v3(barb.foot)),
+                f64::from(barb.tan_angle),
+            );
+            let expected = to_view(drawn.barbs[k].coords);
+            // The `f32` places' rounding turns the side by an angle that
+            // grows as the view comes round to the shaft.
+            if degrees >= 0.5 {
+                let tolerance = 1e-3 * 0.1 * length / degrees.to_radians().sin();
+                assert!(
+                    (end - expected).norm() < tolerance,
+                    "{degrees} degrees off the normal, barb {k}: {end:?} != {expected:?}"
+                );
+            }
+            let (tip, foot) = (to_view(v3(barb.tip)), to_view(v3(barb.foot)));
+            let side = end - foot;
+            assert!(
+                (side.norm() - 0.1 * length).abs() < 1e-5 * length,
+                "{degrees} degrees off the normal, barb {k} is {} long",
+                side.norm()
+            );
+            assert!(side.normalize().dot(&(tip - foot).normalize()).abs() < 1e-4);
+            assert!(side.normalize().dot(&tip.normalize()).abs() < 1e-4);
+        }
+    }
+
+    // Straight down the normal: the barbs lie across it, along the screen's
+    // horizontal, the same length as from any other view.
+    let eye = Point3::from(tip + n * (6.0 * length));
+    let camera = crate::viewer_3d::ViewportCamera {
+        camera: sfmtool_core::Camera::look_at(eye, Point3::from(tail), up),
+        ..Default::default()
+    };
+    let view = camera.view_matrix();
+    let to_view = |p: Vector3<f64>| (view * p.push(1.0)).xyz();
+    let ends: Vec<_> = normal
+        .barbs
+        .iter()
+        .map(|barb| {
+            barb_end(
+                to_view(v3(barb.tip)),
+                to_view(v3(barb.foot)),
+                f64::from(barb.tan_angle),
+            )
+        })
+        .collect();
+    let foot = to_view(v3(normal.barbs[0].foot));
+    let across = ends[0] - ends[1];
+    assert!(across.y.abs() < 1e-6 * length && across.z.abs() < 1e-6 * length);
+    assert!((across.norm() - 2.0 * 0.1 * length).abs() < 1e-5 * length);
+    assert!(((ends[0] + ends[1]) / 2.0 - foot).norm() < 1e-6 * length);
 }
 
 /// The camera block carries the projection on its own, so the shader can

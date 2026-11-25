@@ -141,6 +141,10 @@ pub(crate) struct SceneRenderer {
     /// The figure's own `4h`, kept from the upload so the frame's uniform write
     /// does not have to be handed the track again.
     bench_track_fog_distance: f32,
+    /// The figure the figure's region of the store and the disc buffer were
+    /// last written from, `None` when they hold nothing: the key an upload of
+    /// the same figure again writes nothing on.
+    bench_figure_written: Option<crate::viewer_3d::bench_track::Figure>,
     /// The instances of the figure's edges and of the drawn measurements'
     /// marks and lines, a region of one buffer each
     /// ([`SceneRenderer::upload_bench_track`],
@@ -277,6 +281,7 @@ impl SceneRenderer {
             bench_track_bind_group_layout: None,
             bench_track_bind_group: None,
             bench_track_fog_distance: 0.0,
+            bench_figure_written: None,
             overlay_ribbons: Default::default(),
             frustum_pipeline: None,
             frustum_uniform_buffer: None,

@@ -153,6 +153,37 @@ pub(crate) struct Stroke {
     pub(crate) color: [f32; 4],
 }
 
+/// One barb of the normal's arrowhead, which the pass turns to face the eye.
+///
+/// It runs from `tip` to the point `tan_angle` times the distance from `tip` to
+/// `foot` to one side of `foot`, the side square to the normal and as square to
+/// the viewer as it can be. Which way that is depends on the eye, so the figure
+/// does not hold it: the shader works it out each frame
+/// ([`OverlayInstance::barb`](crate::scene_renderer::OverlayInstance::barb)),
+/// and nothing in the figure depends on the camera.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Barb {
+    /// The arrow's tip, `(xyz, w)` on [`Stroke`]'s convention.
+    pub(crate) tip: [f32; 4],
+    /// The point of the shaft the barb's far end stands to one side of.
+    pub(crate) foot: [f32; 4],
+    /// How far to the side the far end stands, per unit of the distance from
+    /// `tip` to `foot`, signed by the side: the tangent of the barb's angle to
+    /// the shaft.
+    pub(crate) tan_angle: f32,
+    /// The colour, on [`Stroke::color`]'s convention.
+    pub(crate) color: [f32; 4],
+}
+
+/// The patch's normal: its segment and its arrowhead's two barbs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct NormalArrow {
+    /// From the patch frame's centre out to the tip.
+    pub(crate) shaft: Stroke,
+    /// One to either side of the shaft.
+    pub(crate) barbs: [Barb; 2],
+}
+
 /// One vertex of the filled centre disc, which is a triangle list rather than a
 /// ribbon.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -203,7 +234,7 @@ pub(crate) struct Figure {
     /// The normal's segment and the arrowhead's two barbs, or `None` for a
     /// track at infinity: a direction patch's normal is fixed by its bearing,
     /// so there is nothing to say and nothing to grab.
-    pub(crate) normal: Option<[Stroke; 3]>,
+    pub(crate) normal: Option<NormalArrow>,
     /// One per observation whose keypoint ray meets the patch frame, in the
     /// track's own observation order.
     pub(crate) marks: Vec<Mark>,
@@ -214,11 +245,12 @@ pub(crate) struct Figure {
 }
 
 impl Figure {
-    /// Every stroke, in the order the pass uploads them.
+    /// Every stroke, in the order the pass uploads them: everything the figure
+    /// draws but the disc and the barbs, which the pass uploads after them.
     pub(crate) fn strokes(&self) -> impl Iterator<Item = &Stroke> {
         self.square
             .iter()
-            .chain(self.normal.iter().flatten())
+            .chain(self.normal.iter().map(|normal| &normal.shaft))
             .chain(
                 self.marks
                     .iter()
@@ -230,9 +262,9 @@ impl Figure {
 /// The figure the focused item draws, or `None` when it draws nothing.
 ///
 /// `None` for a cluster-stage item, which has no geometry behind it, and for a
-/// track nothing has given a patch frame. `eye` is the viewport camera's position
-/// in world coordinates, which the arrowhead's barbs turn to face.
-pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure> {
+/// track nothing has given a patch frame. Nothing in it depends on the camera:
+/// the arrowhead's barbs turn to face the eye in the pass's shader ([`Barb`]).
+pub(crate) fn figure(bench: &BenchTrack<'_>) -> Option<Figure> {
     let Stage::Track(payload) = &bench.track.stage else {
         return None;
     };
@@ -277,7 +309,7 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
 
     let radius = half * CIRCLE_RADIUS;
     let disc = disc(patch_frame, radius, &place, in_color);
-    let normal = (!at_infinity).then(|| arrow(patch_frame, half, bench.transform, &rotation, eye));
+    let normal = (!at_infinity).then(|| arrow(patch_frame, half, bench.transform, &rotation));
 
     let image_set = &bench.edited.base.image_set;
     let marks = bench
@@ -393,44 +425,41 @@ fn ring(patch_frame: &OrientedPatch, at: Vector3<f64>, radius: f64) -> Vec<Vecto
 
 /// The normal's segment and the arrowhead's two barbs, in world coordinates.
 ///
-/// [`geometry::arrow`] is the construction, which Image Detail draws the same
-/// arrow by. It runs after the transform rather than before it, because what
-/// squares the barbs to the viewer is the eye, which is in world coordinates.
-/// A similarity preserves angles, so the head is the same shape either way.
+/// [`geometry::arrow_shaft`] is the construction, which Image Detail's
+/// [`geometry::arrow`] builds the same arrow on. It runs after the transform,
+/// where the shader turns the barbs to the eye. A similarity preserves angles,
+/// so the head is the same shape either way.
 fn arrow(
     patch_frame: &OrientedPatch,
     half: f64,
     transform: &Se3Transform,
     rotation: &nalgebra::Matrix3<f64>,
-    eye: Point3<f64>,
-) -> [Stroke; 3] {
+) -> NormalArrow {
     let color = rgba(crate::bench::IN_COLOR);
-    let arrow = geometry::arrow(
+    let shaft = geometry::arrow_shaft(
         transform.apply_to_point(&patch_frame.center),
         rotation * patch_frame.normal(),
         geometry::NORMAL_LENGTH * half * transform.scale,
-        eye,
-        rotation * patch_frame.u_axis,
     );
     let point = |p: Point3<f64>| [p.x as f32, p.y as f32, p.z as f32, 1.0];
-    let tip = point(arrow.tip);
-    [
-        Stroke {
-            a: point(arrow.tail),
+    let (tip, foot) = (point(shaft.tip), point(shaft.foot));
+    let barb = |tan_angle: f64| Barb {
+        tip,
+        foot,
+        tan_angle: tan_angle as f32,
+        color,
+    };
+    NormalArrow {
+        shaft: Stroke {
+            a: point(shaft.tail),
             b: tip,
             color,
         },
-        Stroke {
-            a: tip,
-            b: point(arrow.barbs[0]),
-            color,
-        },
-        Stroke {
-            a: tip,
-            b: point(arrow.barbs[1]),
-            color,
-        },
-    ]
+        barbs: [
+            barb(geometry::BARB_TAN_ANGLE),
+            barb(-geometry::BARB_TAN_ANGLE),
+        ],
+    }
 }
 
 // ---- The handles -----------------------------------------------------------
@@ -663,11 +692,11 @@ impl Handles {
                 .filter_map(|mark| Some((mark.observation, at(mark.segment.b)?)))
                 .collect(),
             // The drawn segment's own endpoints, so what is grabbed is the line
-            // on screen: the first stroke of the arrow runs centre to tip.
+            // on screen: the arrow's shaft runs centre to tip.
             normal: figure
                 .normal
                 .as_ref()
-                .and_then(|arrow| Some((at(arrow[0].a)?, at(arrow[0].b)?))),
+                .and_then(|arrow| Some((at(arrow.shaft.a)?, at(arrow.shaft.b)?))),
             tilt,
         }
     }

@@ -384,10 +384,12 @@ pub(crate) struct Viewer3D {
     /// The figure the focused item draws in the scene, as of the last
     /// frame this panel was shown, or `None` when there is nothing to draw.
     ///
-    /// Built here rather than in the upload because it is a reading of the
-    /// viewport camera -- the arrowhead's barbs turn to face the eye -- and the
-    /// eye is this panel's. `app.rs` uploads it and the pass draws it, on the
-    /// frame-behind cadence every other camera-derived value already runs on.
+    /// Built here rather than in the upload because the handles read the
+    /// same figure, and the preview a held handle draws is this panel's.
+    /// Nothing in it depends on the camera, the arrowhead's barbs turning to
+    /// face the eye in the pass's shader. `app.rs` hands it to the upload each
+    /// frame, which writes it only when it differs from the figure last
+    /// written.
     pub(crate) bench_figure: Option<bench_track::Figure>,
     /// The camera model proposal banner's lines, set by the dock each frame
     /// from the proposal open on the selected node; empty with none open.
@@ -1218,14 +1220,13 @@ impl Viewer3D {
         self.draw_measurements(&painter, &response, rect);
 
         // The focused item, as the scene geometry the next frame's
-        // upload draws. After the camera has been moved by this frame's input,
-        // because the arrowhead is squared to the eye.
+        // upload draws. Nothing in it depends on the camera, so an upload of
+        // the same figure again writes nothing.
         //
         // While a handle is held what is drawn is the **preview**: the track the
         // release would push, through the same function the release goes
         // through, so there is one answer rather than a drawn guess and a
         // pushed result.
-        let eye = self.camera.position();
         let drag = self.bench_drag;
         self.bench_figure = bench.and_then(|bench| {
             let previewed = drag
@@ -1239,7 +1240,7 @@ impl Viewer3D {
                 track: previewed.as_ref().unwrap_or(bench.track),
                 ..bench
             };
-            bench_track::figure(&shown, eye)
+            bench_track::figure(&shown)
         });
 
         // The lock banner, over the scene and under nothing: it is what the

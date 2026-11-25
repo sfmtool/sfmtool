@@ -317,9 +317,11 @@ Pass 4:  Measurements, then the track rays and the bench figure (while the
          the focused item)
   Input:  The overlay ribbon store's regions for each target (the
           measurements' segments, rings and discs; then the track rays'
-          segments, the figure's centre disc mesh and the figure's segments)
-          + the frame's pixels per point and pull toward the eye + hw depth
-          (sampled)
+          segments, the figure's centre disc mesh and the figure's segments
+          and arrowhead barbs) + the frame's pixels per point and pull toward
+          the eye + hw depth (sampled). Nothing in an instance depends on the
+          camera, the shader turning the barbs to face the eye, so each
+          producer writes only when what it draws changes
   Output: The measurement layer, a Rgba8Unorm texture of its own cleared
           to transparent every frame; then EDL output color (alpha blending,
           reads depth for occlusion; neither writes a pick ID or depth)

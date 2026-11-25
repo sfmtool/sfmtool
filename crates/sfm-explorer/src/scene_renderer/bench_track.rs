@@ -39,13 +39,13 @@
 //! pass has one colour target and no depth attachment, so it writes no pick id
 //! and no depth: what a click picks is the scene under it.
 //!
-//! The figure is rebuilt and written again every frame it is drawn, because the
-//! arrowhead's barbs turn to face the eye: there is no state it could be keyed
-//! on that a camera move does not invalidate. It is a few hundred instances.
-//! The measurements are written only when they change: nothing in their
-//! instances depends on the camera, and the camera block this pass writes each
-//! frame carries the frame's pixels per point and pull toward the eye
-//! ([`bench_track_uniforms`]).
+//! The figure and the measurements are written only when they change: nothing
+//! in their instances depends on the camera, and the camera block this pass
+//! writes each frame carries the frame's pixels per point and pull toward the
+//! eye ([`bench_track_uniforms`]). The figure's arrowhead turns its barbs to
+//! face the eye in the shader ([`OverlayInstance::barb`]), so the figure is its
+//! own key: an upload of a figure equal to the one last written writes nothing,
+//! neither its region of the store nor its disc.
 
 use wgpu::util::DeviceExt;
 
@@ -54,7 +54,7 @@ use super::gpu_types::{
 };
 use super::overlay_ribbons::{OverlayTarget, ProducerId};
 use super::SceneRenderer;
-use crate::viewer_3d::bench_track::Figure;
+use crate::viewer_3d::bench_track::{Barb, Figure, Stroke};
 use crate::viewer_3d::ViewportCamera;
 
 /// What the overlay pieces are drawn with on one frame that their instances do
@@ -79,21 +79,39 @@ impl Default for OverlayView {
     }
 }
 
-/// The segments `figure` draws: in its strokes' colours at the bench's width in
-/// points, fading with how far behind the scene they are, and not pulled
-/// toward the eye.
+/// The segments and barbs `figure` draws: in their colours at the bench's
+/// width in points, fading with how far behind the scene they are, and not
+/// pulled toward the eye: its strokes, in [`Figure::strokes`]' order, and then
+/// the arrowhead's two barbs.
 pub(super) fn figure_instances(figure: &Figure) -> Vec<OverlayInstance> {
+    let segment = |stroke: &Stroke| {
+        OverlayInstance::segment(
+            stroke.a,
+            stroke.b,
+            stroke.color,
+            BENCH_LINE_HALF_WIDTH,
+            OverlayInstance::FADE,
+        )
+    };
+    let barb = |barb: &Barb| {
+        OverlayInstance::barb(
+            barb.tip,
+            barb.foot,
+            barb.tan_angle,
+            barb.color,
+            BENCH_LINE_HALF_WIDTH,
+            OverlayInstance::FADE,
+        )
+    };
     figure
         .strokes()
-        .map(|stroke| {
-            OverlayInstance::segment(
-                stroke.a,
-                stroke.b,
-                stroke.color,
-                BENCH_LINE_HALF_WIDTH,
-                OverlayInstance::FADE,
-            )
-        })
+        .map(segment)
+        .chain(
+            figure
+                .normal
+                .iter()
+                .flat_map(|normal| normal.barbs.iter().map(barb)),
+        )
         .collect()
 }
 
@@ -157,7 +175,9 @@ impl SceneRenderer {
     }
 
     /// Write the figure the focused item draws into its region of the overlay
-    /// ribbon store, and upload its centre disc; or clear both.
+    /// ribbon store, and upload its centre disc; or clear both. Called every
+    /// frame, it writes nothing when `figure` equals the figure it last wrote,
+    /// which a frame that only moves the camera leaves it.
     ///
     /// `None` -- a cluster-stage item, a track with no frame, or no focused
     /// item at all -- draws nothing.
@@ -167,6 +187,10 @@ impl SceneRenderer {
         queue: &wgpu::Queue,
         figure: Option<&Figure>,
     ) {
+        if figure == self.bench_figure_written.as_ref() {
+            return;
+        }
+        self.bench_figure_written = figure.cloned();
         let Some(figure) = figure else {
             self.clear_bench_track(device, queue);
             return;

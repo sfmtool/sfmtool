@@ -16,10 +16,6 @@ use super::*;
 use crate::bench::geometry;
 use crate::state::AppState;
 
-/// Where the eye stands for these figures. Off to one side of the demo, so the
-/// arrowhead's barbs have a direction to be squared to.
-const EYE: Point3<f64> = Point3::new(10.0, -10.0, 10.0);
-
 /// A state holding the demo node with a point on its bench, and that item's
 /// label.
 ///
@@ -32,13 +28,13 @@ pub(crate) fn staged() -> (AppState, crate::scene::ReconId, String) {
     (state, id, label)
 }
 
-/// The figure `track` draws on `id`'s node, from [`EYE`].
+/// The figure `track` draws on `id`'s node.
 pub(crate) fn figure_of(
     state: &AppState,
     id: crate::scene::ReconId,
     track: &EditableTrack,
 ) -> Option<Figure> {
-    figure(&bench_of(state, id, track), EYE)
+    figure(&bench_of(state, id, track))
 }
 
 /// The value the dock hands the viewport for `track` on `id`'s node, with no
@@ -101,17 +97,36 @@ fn the_figure_holds_the_frame_the_disc_the_arrow_and_one_mark_per_observation() 
     let normal = figure
         .normal
         .expect("a finite patch frame carries its normal");
-    assert_eq!(normal.len(), 3, "the segment and the arrowhead's two barbs");
     assert_eq!(figure.marks.len(), with_keypoints);
     for mark in &figure.marks {
         assert_eq!(mark.circle.len(), CIRCLE_SEGMENTS);
     }
     // The arrow stands off the centre along the outward normal, one side
-    // length long, and the barbs come back off its tip.
+    // length long, and the barbs come back off its tip, one to either side of
+    // the same foot a quarter of the way back along it.
     let centre = figure.square[0].a;
-    assert_ne!(normal[0].b, normal[0].a, "the normal has length");
-    assert_eq!(normal[1].a, normal[0].b, "a barb starts at the tip");
-    assert_eq!(normal[2].a, normal[0].b);
+    let shaft = normal.shaft;
+    assert_ne!(shaft.b, shaft.a, "the normal has length");
+    let [one, other] = normal.barbs;
+    assert_eq!(
+        (one.tip, other.tip),
+        (shaft.b, shaft.b),
+        "a barb starts at the tip"
+    );
+    assert_eq!(one.foot, other.foot);
+    for k in 0..3 {
+        let quarter = shaft.b[k] - 0.25 * (shaft.b[k] - shaft.a[k]);
+        assert!((one.foot[k] - quarter).abs() < 1e-5, "{:?}", one.foot);
+    }
+    assert_eq!(one.foot[3], 1.0, "the foot is a place");
+    assert_eq!(
+        (one.tan_angle, other.tan_angle),
+        (
+            geometry::BARB_TAN_ANGLE as f32,
+            -geometry::BARB_TAN_ANGLE as f32
+        ),
+        "the barbs stand to either side, at the arrowhead's angle"
+    );
     assert!(centre.iter().all(|c| c.is_finite()));
 }
 
@@ -250,9 +265,18 @@ fn the_marks_carry_their_verdicts_while_the_frame_and_the_normal_stay_in() {
     let figure = figure_of(&state, id, &judged).expect("a figure");
 
     let in_color = rgba(crate::bench::IN_COLOR);
-    for stroke in figure.square.iter().chain(figure.normal.iter().flatten()) {
+    let normal = figure
+        .normal
+        .expect("a finite patch frame carries its normal");
+    for color in figure
+        .square
+        .iter()
+        .chain([&normal.shaft])
+        .map(|stroke| stroke.color)
+        .chain(normal.barbs.map(|barb| barb.color))
+    {
         assert_eq!(
-            stroke.color, in_color,
+            color, in_color,
             "the square and the normal are the patch, not any one sighting"
         );
     }
