@@ -58,7 +58,10 @@ The keypoints and descriptors are read from each image's `.sift` file in the
 `feature_prefix_dir` the reconstruction records. An image whose `.sift` file is
 missing or older than the image is extracted again with the feature tool and
 options the reconstruction records, and the extraction writes `.sift` version 2
-([workspace.md § Versions](../../workspace/workspace.md#versions)).
+([workspace.md § Versions](../../workspace/workspace.md#versions)); in a
+workspace with `mipmap_options` the extraction also makes the mipmaps of the
+out-of-core photographs it extracted
+([sift-command.md § Mipmaps](../image-feature/sift-command.md#mipmaps)).
 When every file is present and current, nothing is extracted.
 
 The reconstruction's workspace must be version 2, and a version 1 one is

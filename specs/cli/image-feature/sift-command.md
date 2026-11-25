@@ -122,8 +122,8 @@ not made again, an in-core photograph is not decoded, and each out-of-core one
 whose mipmap is missing or stale is decoded again for its build, whichever the
 feature tool. The builds start after the extraction's decodes are freed, and
 the cache's default build budget (a quarter of physical memory, between 1 and
-16 GiB) bounds them, where the extraction runs as many images as fit in half
-of it, so they do not raise the command's peak memory: over two 24-megapixel
+16 GiB) bounds them, where the `sfmtool` tool's extraction runs as many images
+as fit in half of physical memory, so they do not raise the command's peak memory: over two 24-megapixel
 JPEGs it peaks at about 960 MiB with the object and without it. The `.sift`
 files are the same bytes with or without the object.
 

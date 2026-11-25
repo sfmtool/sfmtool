@@ -6,7 +6,9 @@ Matches SIFT features between image pairs and writes a `.matches` file. Requires
 with previously extracted SIFT features. Uses COLMAP to perform the matching, except for the
 track-cluster matcher and the experimental "flow" mode, which has some promise for videos.
 An image whose `.sift` file is missing or older than the image is extracted first, with the
-workspace's options, as `sfm sift --extract` extracts it. A version 1 workspace is refused
+workspace's options, as `sfm sift --extract` extracts it, and in a workspace with
+`mipmap_options` the mipmaps of the out-of-core photographs extracted are made after it
+([sift-command.md § Mipmaps](sift-command.md#mipmaps)). A version 1 workspace is refused
 before any work, naming the workspace file and sfmtool 0.4.1, the last release that upgrades it
 ([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
 
