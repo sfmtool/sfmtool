@@ -4050,7 +4050,8 @@ in core. Step 17 turns the tier on.
       `get_photographs` in
       [photographs.rs](../../crates/sfmtool-py/src/photographs.rs); the
       cluster binding taking a set in
-      [cluster.rs](../../crates/sfmtool-py/src/matching/cluster.rs); and
+      [cluster.rs](../../crates/sfmtool-py/src/matching/cluster.rs), beside
+      the list of arrays it still takes, as the `PatchCloud` kernels do; and
       `sfm cluster-patches` reading through it, with a cache it makes, and
       printing the cache's whole decodes, mipmaps made and budget. Choices
       made in building it: `TiledPhotograph` is `Clone`, a clone copying no
