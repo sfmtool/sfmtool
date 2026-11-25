@@ -363,6 +363,9 @@ struct Changing {
     other: Option<ReconId>,
 }
 
+/// One change in [`each_input_of_the_key_builds_the_layer_again`].
+type Change = fn(&mut AppState, &mut Changing);
+
 /// Each thing the layer is built from builds it again when it changes, once,
 /// and the layer then is the one `measurement_layer` builds: a table over the
 /// key's fields, each change made on top of the ones before it.
@@ -381,7 +384,7 @@ fn each_input_of_the_key_builds_the_layer_again() {
     let mut cache = MeasurementLayerCache::default();
     cache.update(&state, at.show_all);
     assert_eq!(cache.builds, 1);
-    let changes: [(&str, fn(&mut AppState, &mut Changing)); 15] = [
+    let changes: [(&str, Change); 15] = [
         ("show all", |_, at| at.show_all = false),
         ("the selected measurement", |state, at| {
             state.select_measurement(MeasurementRef::distance(at.id, 2))

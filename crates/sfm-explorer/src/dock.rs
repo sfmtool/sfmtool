@@ -260,7 +260,7 @@ impl TabContext<'_> {
         // built again only when what they are built from has changed.
         self.viewer_3d
             .measurements
-            .update(&self.state, self.state.show_all_measurements);
+            .update(self.state, self.state.show_all_measurements);
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
@@ -730,10 +730,9 @@ impl TabContext<'_> {
             let bench_view_only = self.state.bench_view_only_refusal(id);
             // The measurements it draws, with its own Show all measurements,
             // built again only when what they are built from has changed.
-            self.image_detail.measurements.update(
-                &self.state,
-                self.state.feature_display.show_all_measurements,
-            );
+            self.image_detail
+                .measurements
+                .update(self.state, self.state.feature_display.show_all_measurements);
             // Why *Create Track Here* and *Find Nearby Tracks* are greyed on the
             // image shown, if they are.
             let create_track_refusal = selected_image
