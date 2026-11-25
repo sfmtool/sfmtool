@@ -12,6 +12,8 @@ end-to-end cost reasonable. See ``specs/cli/reconstruction/embed-patches-command
 
 from __future__ import annotations
 
+import json
+import zipfile
 from pathlib import Path
 from unittest.mock import patch as mock_patch
 
@@ -50,10 +52,9 @@ def _stub_embed_patches(monkeypatch, captured: dict | None = None) -> None:
     monkeypatch.setattr(ep, "embed_patches", stub)
 
 
-def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_path):
-    """The CLI converts sift_files -> embedded_patches and the output loads + verifies
-    with no .sift companion. It reads every eighth point of the workspace's
-    reconstruction, saved beside it."""
+def _subset_at_resolution_12(monkeypatch, seoul_bull_workspace) -> Path:
+    """Every eighth point of the workspace's reconstruction, saved beside it,
+    with the command's run at resolution 12, which keeps it cheap."""
     real = ep.embed_patches
     monkeypatch.setattr(
         ep,
@@ -64,6 +65,25 @@ def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_pa
     every_nth_point(
         SfmrReconstruction.load(seoul_bull_workspace), SEOUL_BULL_POINT_STEP
     ).save(str(src), operation="test subset")
+    return src
+
+
+def _entries(path: Path) -> dict[str, bytes]:
+    """Every entry of a ``.sfmr`` but its write record, whose timestamp
+    differs between two saves of one value."""
+    with zipfile.ZipFile(path) as archive:
+        return {
+            name: archive.read(name)
+            for name in archive.namelist()
+            if name != "written.json.zst"
+        }
+
+
+def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_path):
+    """The CLI converts sift_files -> embedded_patches and the output loads + verifies
+    with no .sift companion. It reads every eighth point of the workspace's
+    reconstruction, saved beside it."""
+    src = _subset_at_resolution_12(monkeypatch, seoul_bull_workspace)
     out = tmp_path / "out.sfmr"
     args = ["embed-patches", str(src), str(out)]
     with mock_patch("sys.argv", ["sfm"] + args):
@@ -84,6 +104,70 @@ def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_pa
     # Each stored bitmap names the observation of its own track it is the tile of.
     assert reloaded.patch_bitmaps is not None
     assert_references_name_track_observations(reloaded)
+
+
+def test_embed_patches_through_the_photograph_cache_writes_the_file_the_arrays_gave(
+    monkeypatch, seoul_bull_workspace, tmp_path
+):
+    """In core, reading the photographs through `ImagePyramidSet.read` writes
+    the same file, byte for byte, as the `read_image_rgb` arrays the command
+    read before, and every kernel call of the run reads through the one cache,
+    which decodes each photograph once."""
+    import sfmtool.patches as patches_module
+    from sfmtool.fileio import read_image_rgb
+
+    src = _subset_at_resolution_12(monkeypatch, seoul_bull_workspace)
+    runner = CliRunner()
+    through_cache = runner.invoke(
+        main, ["embed-patches", str(src), str(tmp_path / "cache.sfmr")]
+    )
+    assert through_cache.exit_code == 0, through_cache.output
+    assert "Photographs: 17 whole decodes, 0 mipmaps made" in through_cache.output
+    assert "mipmap_options" not in through_cache.output
+
+    class _Arrays:
+        """The photographs as the command read them before: whole arrays."""
+
+        @staticmethod
+        def read(recon, cache=None, progress=None):
+            workspace_dir = Path(recon.workspace_dir)
+            return [read_image_rgb(workspace_dir / name) for name in recon.image_names]
+
+    monkeypatch.setattr(patches_module, "ImagePyramidSet", _Arrays)
+    from_arrays = runner.invoke(
+        main, ["embed-patches", str(src), str(tmp_path / "arrays.sfmr")]
+    )
+    assert from_arrays.exit_code == 0, from_arrays.output
+    # The arrays reached the kernels: the command's cache decoded nothing.
+    assert "Photographs: 0 whole decodes" in from_arrays.output
+
+    assert _entries(tmp_path / "cache.sfmr") == _entries(tmp_path / "arrays.sfmr")
+
+
+def test_embed_patches_reads_out_of_core_photographs_from_their_mipmaps(
+    monkeypatch, seoul_bull_workspace
+):
+    """With `mipmap_options` in the workspace, the command makes each
+    photograph's mipmap once and reads it in every kernel call."""
+    workspace_dir = seoul_bull_workspace.parent
+    marker = workspace_dir / ".sfm-workspace.json"
+    config = json.loads(marker.read_text())
+    # Every 270 x 480 photograph has a side over 64 px.
+    config["mipmap_options"] = {
+        "out_of_core_long_side": 64,
+        "jpeg_quality": 95,
+        "full_resolution_jpeg_quality": 95,
+    }
+    marker.write_text(json.dumps(config))
+    src = _subset_at_resolution_12(monkeypatch, seoul_bull_workspace)
+    out = workspace_dir / "out-of-core.sfmr"
+
+    result = CliRunner().invoke(main, ["embed-patches", str(src), str(out)])
+
+    assert result.exit_code == 0, result.output
+    assert "Photographs: 0 whole decodes, 17 mipmaps made" in result.output
+    assert "The cache decoded" not in result.output
+    assert SfmrReconstruction.load(out).patch_bitmaps is not None
 
 
 def test_embed_patches_default_output_path(monkeypatch, seoul_bull_workspace):

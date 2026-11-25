@@ -359,10 +359,8 @@ class TestReconstructionEquivalence:
         _assert_clouds_equal(cloud_recon, cloud_tracks)
 
     def test_localize_keypoints_matches_across_modes(self, seoul_bull_workspace):
-        from sfmtool.xform._images import load_workspace_images
-
         recon = SfmrReconstruction.load(seoul_bull_workspace)
-        images = load_workspace_images(recon)
+        images = ImagePyramidSet.read(recon)
 
         kwargs = dict(
             normal="mean_viewing",
@@ -412,10 +410,8 @@ class TestReconstructionEquivalence:
             )
 
     def test_select_views_candidate_override_in_recon_mode(self, seoul_bull_workspace):
-        from sfmtool.xform._images import load_workspace_images
-
         recon = SfmrReconstruction.load(seoul_bull_workspace)
-        images = load_workspace_images(recon)
+        images = ImagePyramidSet.read(recon)
         cloud = PatchCloud.from_reconstruction(
             recon, normal="mean_viewing", extent="pixel_radius", extent_value=4.0
         )

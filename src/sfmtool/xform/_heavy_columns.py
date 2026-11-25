@@ -24,7 +24,6 @@ import numpy as np
 
 from .._sfmtool import THUMBNAIL_SIZE
 from .._sfmtool.reconstruction import SfmrReconstruction
-from ._images import load_workspace_images
 from ._patch_params import validate_patch_params
 
 
@@ -248,6 +247,8 @@ class AddPatchBitmapsTransform:
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
     required_feature_source = "embedded_patches"
+    # `apply_transforms` passes these steps the run's photograph cache.
+    reads_photographs = True
 
     def __init__(self, *, resolution: int = 24, sampler: str = "per_view"):
         if resolution < 2:
@@ -258,7 +259,7 @@ class AddPatchBitmapsTransform:
         # Set by the parser when an earlier --minimal dropped this column.
         self.restores_minimal = False
 
-    def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+    def apply(self, recon: SfmrReconstruction, cache=None) -> SfmrReconstruction:
         if recon.patch_bitmap_resolution is not None:
             print("  Patch bitmaps already present; nothing to add")
             return recon
@@ -271,7 +272,9 @@ class AddPatchBitmapsTransform:
                 "expected embedded_patches (run `sfm xform --to-embedded-patches` "
                 "first)"
             )
-        images = load_workspace_images(recon)
+        from ..patches import ImagePyramidSet
+
+        images = ImagePyramidSet.read(recon, cache=cache)
         print(
             f"  Rendering {self.resolution}x{self.resolution} patch bitmaps for "
             f"{recon.point_count} points"

@@ -32,7 +32,6 @@ See ``specs/cli/reconstruction/xform/refine-keypoints-command.md`` and
 import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
-from ._images import load_workspace_images
 from .._patch_compaction import (
     reference_images_by_point,
     reference_observations_from_images,
@@ -60,6 +59,8 @@ class RefineKeypointsTransform:
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
     required_feature_source = "embedded_patches"
+    # `apply_transforms` passes these steps the run's photograph cache.
+    reads_photographs = True
 
     def __init__(
         self,
@@ -99,8 +100,10 @@ class RefineKeypointsTransform:
         self.convergence_px = convergence_px
         self.max_offset_px = max_offset_px
 
-    def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        images = load_workspace_images(recon)
+    def apply(self, recon: SfmrReconstruction, cache=None) -> SfmrReconstruction:
+        from ..patches import ImagePyramidSet
+
+        images = ImagePyramidSet.read(recon, cache=cache)
 
         # The reconstruction is embedded_patches (enforced by apply_transforms), so
         # the patch frame is already stored — read it back as the cloud rather than

@@ -10,7 +10,7 @@ the viewer's *Refine All Normals ▸ Grown Plane* or *▸ Pairwise Flow* run fro
 the command line, through `sfmtool.bench.refine_normals`
 ([refine-normals.md](../../../core/bench/refine-normals.md)), with the chosen
 step's default settings. It moves no point, no camera and no keypoint, removes
-no point and no observation, and reads the workspace's source images.
+no point and no observation, and reads the workspace's photographs.
 
 ## Command syntax
 
@@ -80,9 +80,11 @@ refines and then bundle-adjusts.
   patch frame, and only an embedded-patches reconstruction stores them.
 - **Patch frames.** A reconstruction with no patch frames is refused with a
   `ValueError` naming `--to-embedded-patches` before any image is read.
-- **The source images**, one per image, read by `load_workspace_images`
-  (`workspace_dir / image_name`, decoded by `read_image_rgb`,
-  [reading-and-writing-images.md](../../../core/camera/reading-and-writing-images.md)).
+- **The photographs**, one per image, `workspace_dir / image_name`, read by
+  `ImagePyramidSet.read(recon, cache=…)` through the run's photograph cache
+  ([xform-command.md § "Photographs"](xform-command.md#photographs)); in core
+  their pixels are those `read_image_rgb` decodes
+  ([reading-and-writing-images.md](../../../core/camera/reading-and-writing-images.md)).
   A missing image or an unresolvable workspace is a `FileNotFoundError`.
 
 Any refusal `sfmtool.bench.refine_normals` makes of the run as a whole (no

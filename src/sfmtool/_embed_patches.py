@@ -429,7 +429,7 @@ def _mean_keypoint_shift(
 
 def embed_patches(
     recon: SfmrReconstruction,
-    images: list[np.ndarray],
+    images: list[np.ndarray] | ImagePyramidSet,
     *,
     min_relative_zncc: float = 0.7,
     min_absolute_zncc: float = 0.5,
@@ -505,8 +505,12 @@ def embed_patches(
 
     Args:
         recon: A ``sift_files`` reconstruction (the caller validates this).
-        images: One full-resolution image per ``recon.image_names`` entry, matching
-            each camera's dimensions (e.g. via ``read_workspace_image``).
+        images: The photographs, one per ``recon.image_names`` entry: an
+            :class:`ImagePyramidSet` (``ImagePyramidSet.read(recon)``, as
+            ``sfm embed-patches`` passes, which reads them through a
+            photograph cache), or a list of full-resolution arrays matching
+            each camera's dimensions (e.g. via ``read_image_rgb``), whose
+            pyramids are built once here.
         patch_size: Surfel size — the full patch edge (feature-size multiples),
             halved to the library half-extent and passed to ``to_embedded_patches``.
             The ``11.0`` default sits at SIFT's ~12x descriptor window; smaller
@@ -588,12 +592,14 @@ def embed_patches(
     cull_self_similar = max_zncc_self_similarity_radius > 0
     keypoint_anchor = _keypoint_anchoring_enabled()
 
-    # Decode every source image into its full pyramid ONCE. Each kernel call
-    # below (six on a default two-round run) previously rebuilt all the
-    # pyramids from the numpy list on entry; the shared set removes that
-    # per-call marshalling cost without changing any pyramid content.
-    with _timed_step(log, f"  building image pyramids ({len(images)} imgs)..."):
-        pyramids = ImagePyramidSet(recon, images)
+    # Every kernel call below (six on a default two-round run) reads one
+    # shared set. A list of arrays is cut into its pyramids once here, rather
+    # than by each call.
+    if isinstance(images, ImagePyramidSet):
+        pyramids = images
+    else:
+        with _timed_step(log, f"  building image pyramids ({len(images)} imgs)..."):
+            pyramids = ImagePyramidSet(recon, images)
 
     # 0. The single `.sift`-consuming step: baseline embedded conversion. It sizes
     #    each point's mean-viewing frame by SIFT feature scale, copies the SIFT

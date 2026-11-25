@@ -96,10 +96,11 @@ so a `--to-embedded-patches --localize-keypoints` chain converts first and
 passes. The localizer searches over the patch frame stored for each point,
 which only that source carries; the frame is never rebuilt.
 
-Because the search is photometric it reads the workspace source images
-(`workspace_dir / image_name`), exactly like `--refine-keypoints` /
-`--refine-normals`; a missing image (or unresolvable workspace) is a hard error
-(`FileNotFoundError`).
+Because the search is photometric it reads the workspace's photographs
+(`workspace_dir / image_name`) through the run's photograph cache, exactly like
+`--refine-keypoints` / `--refine-normals`
+([xform-command.md § "Photographs"](xform-command.md#photographs)); a missing
+image (or unresolvable workspace) is a hard error (`FileNotFoundError`).
 
 ## Command syntax
 

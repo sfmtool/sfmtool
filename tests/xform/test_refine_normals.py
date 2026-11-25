@@ -429,7 +429,7 @@ def test_cli_refine_normals_bare_before_other_option(seoul_bull_workspace):
     ]
     captured: list[RefineNormalsTransform] = []
 
-    def _stub_apply(self, recon):
+    def _stub_apply(self, recon, cache=None):
         captured.append(self)
         return recon
 
@@ -504,10 +504,10 @@ def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(
     poll = _refine_normals._poll_progress
     apply = RefineNormalsTransform.apply
 
-    def _apply_to_the_points(self, recon):
+    def _apply_to_the_points(self, recon, cache=None):
         mask = np.zeros(recon.point_count, dtype=bool)
         mask[_CTRL_C_POINTS] = True
-        return apply(self, recon.filter_points_by_mask(mask))
+        return apply(self, recon.filter_points_by_mask(mask), cache=cache)
 
     finished = threading.Event()
 
@@ -579,7 +579,7 @@ def test_cli_refine_normals_method_reaches_the_transform(seoul_bull_workspace):
     output_sfmr = seoul_bull_workspace.with_name("refined_method.sfmr")
     captured: list[RefineNormalsTransform] = []
 
-    def _stub_apply(self, recon):
+    def _stub_apply(self, recon, cache=None):
         captured.append(self)
         return recon
 

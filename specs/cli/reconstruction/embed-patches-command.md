@@ -85,6 +85,24 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
 
 ## Behaviour Notes
 
+- **Photographs.** The command reads the photographs
+  `workspace_dir / image_name` with `ImagePyramidSet.read(recon, cache=…)`
+  ([patch-cloud.md](../../core/patch/patch-cloud.md#cameraviews)) through one
+  `PhotographCache` it makes with the default budgets, and every kernel call
+  of the run reads that one set. It reads them as the viewer reads them: the
+  set holds no pixel, and the cache keeps the photographs' tiles under its
+  budget, decoding an in-core photograph again for a tile it has evicted. A
+  photograph out of core, in a workspace whose `.sfm-workspace.json` has
+  `mipmap_options`, is read from its mipmap, which is made first when it is
+  missing or stale ([mipmaps.md](../../core/camera/mipmaps.md)). In core the
+  pixels are those of `sfmtool.fileio.read_image_rgb`, so the command writes
+  the file it wrote when it decoded every photograph whole, byte for byte.
+  After the pipeline it prints the cache's whole decodes, mipmaps made and
+  budget, and, when it decoded the in-core photographs more times than there
+  are of them, the line recommending `mipmap_options`, both as
+  [`sfm cluster-patches`](../image-feature/cluster-patches-command.md#process)
+  prints them (`Photographs: 17 whole decodes, 0 mipmaps made, cache budget
+  15.9 GiB`).
 - **Normal step.** Each round turns every finite point's patch to its
   grown-plane normal: `sfmtool.bench.refine_normals` at the patch resolution
   `R` the other kernels run at (24 from this command, which has no option for
@@ -257,10 +275,11 @@ and its orchestration in [_embed_patches.py](../../../src/sfmtool/_embed_patches
 which drives the Rust patch kernels through the `sfmtool._sfmtool` bindings.
 
 - `src/sfmtool/_commands/embed_patches.py` — the Click command (argument
-  parsing, validation, default-output derivation, image load, write-out). The
-  image decode (`read_image_rgb`) runs in a thread pool (the decoder
-  releases the GIL), preserving
-  `image_names` order.
+  parsing, validation, default-output derivation, the photographs' read
+  through `ImagePyramidSet.read`, write-out); the lines it prints of the
+  photograph cache are `photograph_cache_lines` in
+  [_photograph_cache_report.py](../../../src/sfmtool/_photograph_cache_report.py),
+  shared with `sfm cluster-patches` and `sfm xform`.
 - `src/sfmtool/_embed_patches.py::embed_patches` — the orchestration: a single
   `SfmrReconstruction.to_embedded_patches` bridge (the only `.sift` read) followed
   by each round's normal step (`sfmtool.bench.refine_normals`), the Rust patch
