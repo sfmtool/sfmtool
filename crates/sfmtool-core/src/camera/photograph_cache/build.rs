@@ -13,21 +13,28 @@
 //! `build_mipmaps` reads a level whose file is current rather than make it
 //! again. See the spec `specs/core/camera/photograph-cache.md` § "Making a
 //! mipmap".
+//!
+//! [`PhotographCache::build_mipmaps`] makes the mipmaps of the out-of-core
+//! photographs among a list of paths, through `get_many`, and reports what
+//! it did for each: the call `sfm sift` and the Python binding make.
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use super::files::{cut_coarse, Checked, Failure, LevelSource, MipmapFiles, Tier};
 use super::{
     file_stamp, header, whole_decode_bytes, Asked, CoarsestLevel, Found, GetError, Got, Making,
-    PeekedLayout, PhotographCache, Share, Slot, WorkspaceSetting, COARSEST_PUBLISHED,
+    MipmapBuildReport, PeekedLayout, PhotographCache, Share, Slot, WorkspaceSetting,
+    COARSEST_PUBLISHED,
 };
 use crate::camera::mipmap::{
     build_mipmaps, mipmap_location, BuiltMipmap, MipLevelFile, MipmapError, PyramidLayout,
 };
 use crate::camera::tiled_photograph::TileKey;
-use crate::progress::{Event, Progress};
+use crate::progress::{Cancelled, Event, Progress};
 use crate::progress_warn;
 
 /// Whether a request makes an out-of-core photograph's mipmap when its files
@@ -538,5 +545,94 @@ impl PhotographCache {
         };
         slot.ready.notify_all();
         answer
+    }
+}
+
+impl PhotographCache {
+    /// Make the mipmaps of the out-of-core photographs among `paths` whose
+    /// mipmaps are missing or stale, through [`Self::get_many`], and say what
+    /// was done for each path.
+    ///
+    /// Each path's header is read first, on the rayon pool, with its
+    /// workspace's `mipmap_options`; an in-core photograph is decoded by
+    /// nothing, and so is one too thin to store a level. The out-of-core
+    /// ones go to one `get_many`, so a mipmap already current, made by this
+    /// cache, another cache or another process, is read rather than made
+    /// again, the build budget bounds the builds in progress, and `progress`
+    /// hears what `get_many` reports: `images` counted as each is answered,
+    /// the value `mipmaps_made` and a build's messages. It opens no phase.
+    /// The photographs `get_many` answers are dropped, so under a budget of 0
+    /// the call keeps nothing.
+    ///
+    /// A path that cannot be read, whose workspace file is invalid, that is
+    /// too large or whose build fails is in the report's `failed` with why;
+    /// it does not stop the others.
+    ///
+    /// # Errors
+    ///
+    /// [`Cancelled`] when `progress` was cancelled. The mipmaps made before
+    /// that stay made.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
+    /// use sfmtool_core::Progress;
+    ///
+    /// let dir = tempfile::tempdir()?;
+    /// let path = dir.path().join("a.png");
+    /// image::RgbImage::new(8, 6).save(&path)?;
+    /// let cache = PhotographCache::new(PhotographCacheOptions {
+    ///     budget_bytes: 0,
+    ///     ..PhotographCacheOptions::default()
+    /// });
+    /// // Outside every workspace, so in core: nothing is made or decoded.
+    /// let report = cache.build_mipmaps(&[path.as_path()], &Progress::none())?;
+    /// assert_eq!(report.in_core, vec![path]);
+    /// assert_eq!(cache.stats().decodes, 0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn build_mipmaps(
+        &self,
+        paths: &[&Path],
+        progress: &Progress<'_>,
+    ) -> Result<MipmapBuildReport, Cancelled> {
+        let tile_size = self.shared.options.tile_size;
+        let sorted: Vec<Result<bool, GetError>> = paths
+            .par_iter()
+            .map(|path| {
+                if progress.is_cancelled() {
+                    return Ok(false);
+                }
+                let setting = self.setting_for(path);
+                let (width, height) = header(path, &setting)?;
+                let options = setting.options.ok().flatten();
+                Ok(
+                    PyramidLayout::for_size(width, height, options.as_ref(), tile_size)
+                        .is_some_and(|layout| layout.stored_levels() > 0),
+                )
+            })
+            .collect();
+        progress.check_cancel()?;
+        let mut report = MipmapBuildReport::default();
+        let mut out_of_core = Vec::new();
+        for (path, sorted) in paths.iter().zip(sorted) {
+            match sorted {
+                Ok(true) => out_of_core.push(*path),
+                Ok(false) => report.in_core.push(path.to_path_buf()),
+                Err(e) => report.failed.push((path.to_path_buf(), e)),
+            }
+        }
+        let answers = self.get_many_answers(&out_of_core, progress)?;
+        for (path, (answer, how)) in out_of_core.into_iter().zip(answers) {
+            let path = path.to_path_buf();
+            match (answer, how) {
+                (Err(e), _) => report.failed.push((path, e)),
+                (Ok(_), Found::Made) => report.made.push(path),
+                (Ok(_), Found::FromFiles | Found::Reused) => report.current.push(path),
+                (Ok(_), Found::Decoded) => report.in_core.push(path),
+            }
+        }
+        Ok(report)
     }
 }

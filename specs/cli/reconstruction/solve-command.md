@@ -82,7 +82,10 @@ Exactly one is required:
 
 When `PATHS` are image files or directories, the command extracts features (if needed), runs
 matching, and then solves. The matching strategy is exhaustive by default, or flow-based with
-`--flow-match`. Extraction writes `.sift` version 2 with the workspace's options. A version 1
+`--flow-match`. Extraction writes `.sift` version 2 with the workspace's options, and in a
+workspace with `mipmap_options` makes the mipmaps of the out-of-core photographs it extracted
+and prints their count, as `sfm sift --extract` does
+([sift-command.md § Mipmaps](../image-feature/sift-command.md#mipmaps)). A version 1
 workspace is refused before any work, from images or from a `.matches` file, naming the
 workspace file and sfmtool 0.4.1, the last release that upgrades it
 ([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).

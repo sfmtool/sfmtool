@@ -127,8 +127,8 @@ def test_binding_modules_are_package_attributes():
     code = (
         "import sfmtool\n"
         "for name in ('analysis', 'bench', 'explorer', 'fileio', 'flow', 'geometry',\n"
-        "             'matching', 'patches', 'reconstruction', 'spatial', 'spherical',\n"
-        "             'workspace'):\n"
+        "             'matching', 'patches', 'photographs', 'reconstruction', 'spatial',\n"
+        "             'spherical', 'workspace'):\n"
         "    assert getattr(sfmtool, name).__name__ == f'sfmtool.{name}', name\n"
         "assert callable(sfmtool.fileio.read_sfmr)"
     )

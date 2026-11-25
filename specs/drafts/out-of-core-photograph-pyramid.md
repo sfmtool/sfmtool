@@ -781,10 +781,13 @@ the budget, so the panel never asks for more than the cache can keep.
   opens it. `sfm sift` runs the Python extractors (`sfmtool` and OpenCV
   backends decode with `read_image_rgb`; COLMAP decodes inside COLMAP), and
   the user has decided that the SIFT path and the mipmap build stay separate
-  (open question 4): after each `.sift` is written, the extractor calls
-  `PhotographCache.build_mipmaps` (§ "Python bindings") for the photograph,
-  on one cache the extraction run holds, so its worker threads share one
-  build count, and that call decodes the photograph itself. So on the command
+  (open question 4): once every `.sift` of the run is written,
+  `image_files_to_sift_files` calls `PhotographCache.build_mipmaps`
+  (§ "Python bindings") once over the photographs it extracted, on one cache
+  of budget 0 the run holds, so its builds share one build count, and that
+  call decodes each out-of-core photograph whose mipmap is not current
+  itself (built in step 15d, whose note says why after the run rather than
+  after each file). So on the command
   line the mipmaps cost a second decode (0.8 to 1.7 s at 200 MP) besides the
   reduction and the encodes (about 0.8 s, plus 1.4 to 2.1 s for a
   `-mip0`, estimated from the parts above). Only the Rust `build_sift_file`
@@ -1533,7 +1536,8 @@ class PhotographCache:
   its whole region; a tile is its key's rectangle) with the GIL released.
 - **`build_mipmaps(paths, progress=None)`** makes the mipmaps of the
   out-of-core photographs among `paths` (directories expanded as
-  `sfm ws mipmaps` expands them, skipping `.sfm-mipmaps`) through the cache's
+  `sfm ws mipmaps` expands them, skipping `.sfm-mipmaps`, from step 15e;
+  15d's takes photographs' paths) through the cache's
   `get_many`, so a mipmap already made in this cache, or by another cache or
   process, is
   read rather than made again, and the build budget and its reservations
@@ -1542,8 +1546,8 @@ class PhotographCache:
   with the keys `made`, `current` and `in_core` (lists of the paths in each
   case, as given) and `failed` (a list of `(path, message)` pairs). **It is the one way to
   build mipmaps from Python**; there is no free function for it. `sfm ws mipmaps` makes a
-  `PhotographCache()` and calls it; the Python SIFT extractors call it after
-  each `.sift` is written, on one cache the extraction run holds (§ "Who
+  `PhotographCache()` and calls it; the Python SIFT extraction calls it once
+  its `.sift` files are written, on one cache the extraction run holds (§ "Who
   makes the mipmaps, and when").
 - **`stats()`** returns a dict, as reports are, with the keys `entries`,
   `bytes`, `budget_bytes`, `hits` and `misses` (the tiles and file bytes the
@@ -3860,11 +3864,63 @@ in core. Step 17 turns the tier on.
       `sfm sift` on a small-threshold synthetic workspace writes the files;
       in a workspace without the object it writes none; the new submodule
       passes `tests/test_module_layout.py`, the registration test and the
-      lazy-loading test.
+      lazy-loading test. **Built.**
+      **As built** ([photographs.rs](../../crates/sfmtool-py/src/photographs.rs),
+      [photograph_cache/build.rs](../../crates/sfmtool-core/src/camera/photograph_cache/build.rs),
+      [sift/extract.py](../../src/sfmtool/sift/extract.py)): the binding's
+      work is core's `PhotographCache::build_mipmaps`, which reads each
+      path's header and workspace on the rayon pool and hands only the
+      out-of-core photographs that store a level to one `get_many`, so no
+      photograph in core is decoded, as a `get_many` over every path would
+      decode it, and answers a `MipmapBuildReport` of the paths `made`,
+      `current`, `in_core` and `failed` (with the `GetError`); `get_many`'s
+      answers with how each was found are now a private
+      `get_many_answers`, which `get_many` tallies. The binding runs the
+      call on a thread of its own while the calling thread runs Python's
+      signal handlers every 50 ms, as `refine_normals` does, so Ctrl+C
+      stops a build within one stage, and sets its `ProgressCounter` from
+      the value `mipmaps_made`. Two things differ from the plan.
+      `image_files_to_sift_files` calls `build_mipmaps` once, after the
+      `SiftWriteQueue` has written every `.sift` of the run, over the
+      images it extracted, on a cache of budget 0, rather than after each
+      file: a build per file would run beside the extraction of the next
+      images, whose decodes are held then, and add a photograph's decode
+      and reductions to the command's peak memory, while after the run the
+      extraction's memory is freed and the builds, bounded by the default
+      build budget (a quarter of memory) where the extraction runs as many
+      images as fit in half, stay below it (measured on two 24-megapixel
+      JPEGs: about 960 MiB at the peak with the object and without it, at
+      one and at the default number of images at once); and the budget is
+      0 since the run reads nothing back. The mipmaps of the photographs
+      of all three feature tools are made this way, with a decode of their
+      own (open question 4), the Rust `build_sift_file` keeping its own
+      for the viewer and `pick-images`' `sfmtool` tool; `sfm solve`,
+      `sfm match`, `sfm to-colmap-db` and `pick-images`' other tools,
+      which extract through the same function, make them too. And 15d's
+      `build_mipmaps` takes photographs' paths: the expansion of
+      directories, whose rule `sfm ws mipmaps` sets, comes with that command
+      in 15e. `sfm sift`'s summary gains the line `New mipmaps: {made} /
+      {made + current} out-of-core image(s)` when there is an out-of-core
+      photograph, and a `Warning: no mipmap was made: …` line on standard
+      error for each failure, the `.sift` still written; without the object
+      it prints nothing new, and the `.sift` files are the same bytes either
+      way. Tests: `build_mipmaps` makes the missing mipmap, names each path
+      in its list and decodes nothing whole, and a second call finds both
+      current, with a budget and one of 0, a workspace without the object
+      names the photograph in core and writes no mipmap directory, and a
+      cancelled call makes nothing (`photograph_cache::build_tests`); the
+      binding's report, counter, `stats` keys and budgets, and a negative
+      budget's `ValueError` (`tests/rust_bindings/photographs/`); `sfm sift`
+      writes the mip level files of the 300 x 200 photograph and none of
+      the 60 x 40 one, and in a workspace without the object no mipmap
+      directory and no word of mipmaps, with the same `.sift` bytes, and an
+      invalid object warns of each photograph and writes every `.sift`
+      (`tests/sift/test_sift_workspace.py`).
     - **15e, `sfm ws mipmaps PATHS…` with `--prune` and `--check`.** The
       `ws` subcommand, its spec beside `ws-init-command.md`, and the core
       functions that prune and check, behind a binding; the builds through
-      15d's `PhotographCache.build_mipmaps`. Tests: `--prune` deletes an
+      15d's `PhotographCache.build_mipmaps`, which gains the expansion of a
+      directory among its paths, in core, by the rule the command sets. Tests: `--prune` deletes an
       orphan and keeps a current mipmap, and deletes every mip level file in
       a workspace without the object; `--check` writes nothing. Visible:
       the new subcommand's help.

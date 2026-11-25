@@ -5,6 +5,8 @@ import json
 import shutil
 from pathlib import Path
 
+import cv2
+import numpy as np
 from click.testing import CliRunner
 
 from sfmtool.cli import main
@@ -242,3 +244,88 @@ def test_sift_workspace_detection_from_subdirectory(tmp_path):
     assert result.exit_code == 0, result.output
     assert "Using workspace:" in result.output
     assert str(workspace_dir) in result.output
+
+
+def _mipmap_workspace(root: Path, with_mipmap_options: bool) -> tuple[Path, Path]:
+    """An `sfmtool` workspace at `root` with a 300 x 200 noise photograph and
+    a 60 x 40 one in `images/`, its `.sfm-workspace.json` given
+    `mipmap_options` with a threshold of 64 px when `with_mipmap_options`, so
+    the first is out of core and the second in core."""
+    result = CliRunner().invoke(
+        main, ["ws", "init", "--feature-tool", "sfmtool", str(root)]
+    )
+    assert result.exit_code == 0, result.output
+    if with_mipmap_options:
+        config_file = root / ".sfm-workspace.json"
+        config = json.loads(config_file.read_text())
+        config["mipmap_options"] = {
+            "out_of_core_long_side": 64,
+            "jpeg_quality": 95,
+            "full_resolution_jpeg_quality": 95,
+        }
+        config_file.write_text(json.dumps(config))
+    images = root / "images"
+    images.mkdir()
+    rng = np.random.default_rng(7)
+    for name, (width, height) in (("big.png", (300, 200)), ("small.png", (60, 40))):
+        pixels = rng.integers(0, 256, (height, width, 3), dtype=np.uint8)
+        cv2.imwrite(str(images / name), cv2.GaussianBlur(pixels, (5, 5), 1.5))
+    return images / "big.png", images / "small.png"
+
+
+def test_sift_extract_makes_the_mipmaps_of_out_of_core_photographs(tmp_path):
+    """`sfm sift --extract` in a workspace with `mipmap_options` writes the
+    mip level files of the out-of-core photograph and none for the in-core
+    one, and counts them; in a workspace without the object it writes no
+    mipmap directory and says nothing of mipmaps. The `.sift` files are the
+    same bytes in both."""
+    sift_bytes = {}
+    for with_options in (True, False):
+        root = tmp_path / ("with" if with_options else "without")
+        big, small = _mipmap_workspace(root, with_options)
+        result = CliRunner().invoke(main, ["sift", "--extract", str(root / "images")])
+        assert result.exit_code == 0, result.output
+        prefix = json.loads((root / ".sfm-workspace.json").read_text())[
+            "feature_prefix_dir"
+        ]
+        sift_bytes[with_options] = [
+            (big.parent / prefix / (p.name + ".sift")).read_bytes()
+            for p in (big, small)
+        ]
+        mipmaps = root / ".sfm-mipmaps" / "images"
+        if with_options:
+            assert "New mipmaps: 1 / 1 out-of-core image(s)" in result.output
+            assert sorted(p.name for p in mipmaps.iterdir()) == [
+                f"big.png-mip{level}-q95.jpg" for level in (0, 1)
+            ]
+        else:
+            assert "mipmap" not in result.output.lower()
+            assert not (root / ".sfm-mipmaps").exists()
+    assert sift_bytes[True] == sift_bytes[False]
+
+
+def test_sift_extract_warns_of_each_mipmap_an_invalid_object_stops(tmp_path):
+    """An invalid `mipmap_options` makes no mipmap: `sfm sift --extract`
+    warns of each photograph, naming the key at fault, and still writes every
+    `.sift` file."""
+    big, small = _mipmap_workspace(tmp_path, with_mipmap_options=True)
+    config_file = tmp_path / ".sfm-workspace.json"
+    config = json.loads(config_file.read_text())
+    config["mipmap_options"]["jpeg_quality"] = 0
+    config_file.write_text(json.dumps(config))
+
+    result = CliRunner().invoke(main, ["sift", "--extract", str(big), str(small)])
+
+    assert result.exit_code == 0, result.output
+    warnings = [
+        line
+        for line in result.output.splitlines()
+        if line.startswith("Warning: no mipmap was made:")
+    ]
+    assert len(warnings) == 2
+    assert all("mipmap_options.jpeg_quality" in line for line in warnings)
+    assert "New mipmaps" not in result.output
+    assert not (tmp_path / ".sfm-mipmaps").exists()
+    prefix = config["feature_prefix_dir"]
+    for photograph in (big, small):
+        assert (photograph.parent / prefix / (photograph.name + ".sift")).is_file()

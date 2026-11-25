@@ -22,8 +22,12 @@ its `get` makes the mipmap of one whose files are missing or stale
 `build_sift_files`, behind the viewer's *Build SIFT Files* and `pick-images`,
 makes the mipmap of each out-of-core photograph it decodes, from that decode
 ([sift.md § "Building `.sift` files"](../features/sift.md#building-sift-files)).
-No command writes `mipmap_options` yet; `sfm sift`'s and the viewer's other
-makers and the object's writers come in the steps of
+`sfm sift --extract` makes the mipmaps of the out-of-core photographs it
+extracted once their `.sift` files are written, through
+`PhotographCache::build_mipmaps`
+([sift-command.md § Mipmaps](../../cli/image-feature/sift-command.md#mipmaps)).
+No command writes `mipmap_options` yet; `sfm ws mipmaps` and the object's
+writers come in the steps of
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
 which also has the measurements behind the choices below.
 

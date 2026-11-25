@@ -15,7 +15,7 @@ column reads *none* is a binding that no spec describes.
 
 ## How the module is assembled
 
-[`lib.rs`](../crates/sfmtool-py/src/lib.rs) registers thirteen submodules, each
+[`lib.rs`](../crates/sfmtool-py/src/lib.rs) registers fourteen submodules, each
 through the `register` function of its source module, and sets each
 submodule's `__name__` to the public `sfmtool.<name>`, so tracebacks and help
 text name the public location. Three names are registered at the root for
@@ -69,6 +69,7 @@ the same objects:
 | [`sfmtool.geometry`](../src/sfmtool/geometry.py) | `_sfmtool.geometry` |
 | [`sfmtool.matching`](../src/sfmtool/matching.py) | `_sfmtool.matching` |
 | [`sfmtool.patches`](../src/sfmtool/patches.py) | `_sfmtool.patches` |
+| [`sfmtool.photographs`](../src/sfmtool/photographs.py) | `_sfmtool.photographs` |
 | [`sfmtool.reconstruction`](../src/sfmtool/reconstruction.py) | `_sfmtool.reconstruction` |
 | [`sfmtool.sift`](../src/sfmtool/sift/__init__.py) | `_sfmtool.sift` |
 | [`sfmtool.spatial`](../src/sfmtool/spatial.py) | `_sfmtool.spatial` |
@@ -103,7 +104,7 @@ this way, where a flat root surface would hold the binding
 `match_image_pair` and `sfmtool.feature_match` the Python
 `match_image_pair` that takes different arguments, and the bench's steps
 (`commit`, `split`, `fit`) would read as something else beside the rest. The
-thirteen public modules, and `sfmtool.rig`, are listed in `_LAZY_SUBPACKAGES`
+fourteen public modules, and `sfmtool.rig`, are listed in `_LAZY_SUBPACKAGES`
 and bound on the root on first use by the root's module `__getattr__`, so
 `import sfmtool` followed by `sfmtool.fileio.read_sfmr(…)` works and
 `import sfmtool` still loads nothing but the extension. The root also holds
@@ -454,6 +455,12 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `NamedImageListSlice`, `is_named_image_list_name`, `split_named_image_list_value`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the one a record states; `feature_prefix_dir`: the features folder named from a record's options, the one implementation every Python writer calls; `feature_type_for_tool`: the `feature_type` a workspace records for a tool, the one implementation every Python writer calls; `find_workspace_for_path`: the upward search for a path's workspace; `sfmtool_workspace_marker`, `write_sfmtool_workspace_marker`: the text of a new `sfmtool` workspace's `.sfm-workspace.json` and its one writer, which `init_workspace` and `get_default_sfmtool_feature_options` call; `upgrade_workspace`: the upgrade of a workspace's files to the current versions, which `sfm ws upgrade` calls | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md), [ws-upgrade-command.md](cli/workspace/ws-upgrade-command.md#interface) |
+
+### `photographs`
+
+| Source | Exposes | Spec |
+|--------|---------|------|
+| [photographs.rs](../crates/sfmtool-py/src/photographs.rs) | `PhotographCache`: the photograph cache, made with its byte and build budgets (`None` the core defaults, a negative one `ValueError`); `build_mipmaps(paths, *, progress=None)`, which makes the mipmaps of the out-of-core photographs among `paths` through `PhotographCache::build_mipmaps`, decoding no photograph in core, and returns a dict of the paths `made`, `current` and `in_core` and the `(path, message)` pairs `failed`, a `ProgressCounter` set to the mipmaps made, and Ctrl+C stopping the builds as `KeyboardInterrupt`; and `stats()`, a dict of `entries`, `bytes`, `budget_bytes`, `hits`, `misses`, `decodes`, `build_budget_bytes`, `build_reserved_bytes` and `mipmaps_made`. `sfm sift --extract` calls `build_mipmaps` once its `.sift` files are written ([sift-command.md § Mipmaps](cli/image-feature/sift-command.md#mipmaps)) | [photograph-cache.md](core/camera/photograph-cache.md), [mipmaps.md](core/camera/mipmaps.md) |
 
 ## Keeping the index current
 

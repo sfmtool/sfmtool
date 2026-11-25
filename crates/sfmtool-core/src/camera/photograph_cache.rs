@@ -381,6 +381,25 @@ pub struct GetManyTally {
     pub unreadable: usize,
 }
 
+/// What [`PhotographCache::build_mipmaps`] did for each path it was given,
+/// each path in one list, as given and in the order given.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MipmapBuildReport {
+    /// Out-of-core photographs whose mipmap the call made, its files written
+    /// or, when they could not be written, held in memory.
+    pub made: Vec<PathBuf>,
+    /// Out-of-core photographs whose mipmap was current, or was made by
+    /// another caller the call waited on.
+    pub current: Vec<PathBuf>,
+    /// Photographs in core, which have no mipmap: in a workspace without
+    /// `mipmap_options`, outside every workspace, not over the threshold, or
+    /// too thin to store a level.
+    pub in_core: Vec<PathBuf>,
+    /// Paths that could not be read, or whose mipmap could not be made, with
+    /// why.
+    pub failed: Vec<(PathBuf, GetError)>,
+}
+
 /// What [`PhotographCache::peek_state`] found for a path: [`PhotographCache::peek`]
 /// with a failure told apart from a photograph not yet decoded.
 #[derive(Clone)]
@@ -1404,6 +1423,31 @@ impl PhotographCache {
         paths: &[&Path],
         progress: &Progress<'_>,
     ) -> Result<(Vec<Option<Arc<TiledPhotograph>>>, GetManyTally), Cancelled> {
+        let mut tally = GetManyTally::default();
+        let photographs = self
+            .get_many_answers(paths, progress)?
+            .into_iter()
+            .map(|(photograph, how)| {
+                match (&photograph, how) {
+                    (Err(_), _) => tally.unreadable += 1,
+                    (Ok(_), Found::Decoded) => tally.read += 1,
+                    (Ok(_), Found::Made) => tally.mipmaps_made += 1,
+                    (Ok(_), Found::FromFiles) => tally.from_mipmaps += 1,
+                    (Ok(_), Found::Reused) => tally.reused += 1,
+                }
+                photograph.ok()
+            })
+            .collect();
+        Ok((photographs, tally))
+    }
+
+    /// [`Self::get_many`]'s answer for each path, in order, with how it was
+    /// found and, for a path it could not answer, why.
+    fn get_many_answers(
+        &self,
+        paths: &[&Path],
+        progress: &Progress<'_>,
+    ) -> Result<Vec<Answer>, Cancelled> {
         let total = paths.len();
         let answered = AtomicUsize::new(0);
         let counted = || {
@@ -1468,25 +1512,12 @@ impl PhotographCache {
             }
         }
         progress.check_cancel()?;
-        let mut tally = GetManyTally::default();
-        let photographs = found
+        // Every entry is `Some`, and none is `GetError::Cancelled`, which only
+        // a cancelled `progress` gives, when the call was not cancelled.
+        found
             .into_iter()
-            .map(|entry| {
-                // Every entry is `Some`, and none is `GetError::Cancelled`,
-                // which only a cancelled `progress` gives, when the call was
-                // not cancelled.
-                let (photograph, how) = entry.ok_or(Cancelled)?;
-                match (&photograph, how) {
-                    (Err(_), _) => tally.unreadable += 1,
-                    (Ok(_), Found::Decoded) => tally.read += 1,
-                    (Ok(_), Found::Made) => tally.mipmaps_made += 1,
-                    (Ok(_), Found::FromFiles) => tally.from_mipmaps += 1,
-                    (Ok(_), Found::Reused) => tally.reused += 1,
-                }
-                Ok(photograph.ok())
-            })
-            .collect::<Result<Vec<_>, Cancelled>>()?;
-        Ok((photographs, tally))
+            .map(|entry| entry.ok_or(Cancelled))
+            .collect()
     }
 
     /// Put `image` in the cache as the decode of `path`, cut into tiles as a

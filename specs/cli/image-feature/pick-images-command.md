@@ -316,7 +316,10 @@ input frame's images and the workspace's `feature_tool`, `feature_options` and
 `feature_prefix_dir`, as `sfm sift --extract` calls it in a workspace, with its
 own output, and then calls `pick_images` with no feature options, which reads
 the files and extracts nothing. Such a workspace gets a `.sift` file for every
-input frame, not only for those the walk reads.
+input frame, not only for those the walk reads, and in a workspace with
+`mipmap_options` the mipmap of each out-of-core frame extracted, made after
+the `.sift` files from a decode of its own, as `sfm sift --extract` makes them
+([sift-command.md § Mipmaps](sift-command.md#mipmaps)).
 
 A frame whose `.sift` file was written in the run counts as **extracted** in
 the report and the JSON file, and one read from a file already up to date as

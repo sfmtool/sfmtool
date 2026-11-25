@@ -49,7 +49,7 @@ The cache lives in
 beside `ImageU8Pyramid` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs),
 exported as `sfmtool_core::camera::PhotographCache` together with
 `PhotographCacheOptions`, `BuildReservation`, `GetError`, `PeekedPhotograph`,
-`GetManyTally` and `PhotographCacheStats`, and the layout and tile requests'
+`GetManyTally`, `MipmapBuildReport` and `PhotographCacheStats`, and the layout and tile requests'
 `PeekedLayout`, `PeekedTile`, `TileError` and `TryDecode`. `default_budget_bytes`,
 `default_build_budget_bytes`, `BUDGET_ENV_VAR`, `BUILD_BUDGET_ENV_VAR` and
 `SLOT_WAIT_POLL` are
@@ -142,6 +142,19 @@ impl PhotographCache {
         progress: &Progress<'_>,
     ) -> Result<(Vec<Option<Arc<TiledPhotograph>>>, GetManyTally), Cancelled>;
 
+    /// Make the mipmaps of the out-of-core photographs among `paths` whose
+    /// files are missing or stale, and report what was done for each path.
+    /// Each header is read first, on the rayon pool, so an in-core
+    /// photograph, or one too thin to store a level, is decoded by nothing;
+    /// the out-of-core ones go to one `get_many`, whose `Progress` reports
+    /// `progress` hears. A path that cannot be read, whose workspace file is
+    /// invalid, or whose build fails is in `failed` and does not stop the
+    /// others. The photographs `get_many` answers are dropped, so under a
+    /// budget of 0 nothing is kept. What `sfm sift --extract` and the
+    /// Python `PhotographCache.build_mipmaps` call.
+    pub fn build_mipmaps(&self, paths: &[&Path], progress: &Progress<'_>)
+        -> Result<MipmapBuildReport, Cancelled>;
+
     /// The layout and tile requests of § "Layouts and tiles". `layout` and
     /// `peek_tile` read nothing and never wait; `request_layout` reads the
     /// header, and for an out-of-core photograph checks its coarsest mip
@@ -204,6 +217,13 @@ pub enum PeekedPhotograph { Decoded(Arc<TiledPhotograph>), Unreadable, NotDecode
 /// unreadable.
 pub struct GetManyTally { pub read: usize, pub from_mipmaps: usize, pub mipmaps_made: usize,
                           pub reused: usize, pub unreadable: usize }
+
+/// What `build_mipmaps` did for each path, each in one list, as given and in
+/// the order given: mipmaps made (written, or held in memory when their files
+/// could not be written), mipmaps current or made by another caller waited
+/// on, photographs in core, and paths that failed with why.
+pub struct MipmapBuildReport { pub made: Vec<PathBuf>, pub current: Vec<PathBuf>,
+                               pub in_core: Vec<PathBuf>, pub failed: Vec<(PathBuf, GetError)> }
 
 pub enum PeekedLayout { Known(Arc<PyramidLayout>), Building { coarsest: Option<Arc<CoarsestLevel>> },
                         Unreadable(GetError), NotKnown }
@@ -1316,7 +1336,14 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   reading both out-of-core ones from their files and decoding the in-core
   one again; and a `get_many` that finds a build in progress by another
   caller waiting on the slot, keeping its share, rather than start a second,
-  and counting the photograph as reused.
+  and counting the photograph as reused. `build_mipmaps` over a photograph
+  with no mipmap, one whose mipmap is current, an in-core photograph and a
+  missing file making the one mipmap, naming each path in its list of the
+  report and decoding nothing whole, the in-core photograph included, then
+  finding both mipmaps current on a second call, with a budget and with one
+  of 0; in a workspace without `mipmap_options` naming the photograph in
+  core and writing no mipmap directory; and a cancelled call answering
+  `Cancelled` and making nothing.
 - [bench/tests/bulk_budget.rs](../../../crates/sfmtool-core/src/bench/tests/bulk_budget.rs),
   bulk kernels on one thread over six photographs written to a temporary
   directory: *Refit all points* under a budget of one photograph and under

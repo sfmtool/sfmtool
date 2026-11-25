@@ -3,6 +3,7 @@
 
 """Extract SIFT features and write them to .sift files."""
 
+import sys
 import textwrap
 from pathlib import Path
 
@@ -101,6 +102,37 @@ _SIFT_DATA_KEYS = (
 )
 
 
+def _build_mipmaps(image_paths: list[Path]) -> dict:
+    """Make the mipmaps of the out-of-core photographs among ``image_paths``,
+    the images whose ``.sift`` files were just written, and return
+    ``PhotographCache.build_mipmaps``' report.
+
+    It runs once every ``.sift`` is written, when the extraction's decodes
+    are freed, so the builds, bounded by the cache's build budget, do not add
+    to the extraction's peak memory. Each out-of-core photograph is decoded
+    again for its build. The cache's budget is 0, since the run reads nothing
+    back from it. In a workspace without ``mipmap_options`` every photograph
+    is in core: each header is read and nothing is written.
+    """
+    from sfmtool.photographs import PhotographCache
+
+    return PhotographCache(budget_bytes=0).build_mipmaps(image_paths)
+
+
+def _print_mipmaps(report: dict) -> None:
+    """Print what ``_build_mipmaps`` did: a line counting the mipmaps made
+    when there is an out-of-core photograph, and a warning for each photograph
+    whose mipmap could not be made. Prints nothing when every photograph is in
+    core."""
+    out_of_core = len(report["made"]) + len(report["current"])
+    if out_of_core:
+        print(
+            f"New mipmaps: {len(report['made'])} / {out_of_core} out-of-core image(s)"
+        )
+    for _, message in report["failed"]:
+        print(f"Warning: no mipmap was made: {message}", file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # Extraction pipeline
 # ---------------------------------------------------------------------------
@@ -126,6 +158,12 @@ def image_files_to_sift_files(
     version 1 settings (``feature_options`` with no ``image_to_gray``), and a
     ``colmap`` or ``opencv`` ``image_to_gray`` other than the tool's.
     When every file is up to date it writes nothing and refuses nothing.
+
+    Once the files are written, it makes the mipmaps of the out-of-core
+    photographs among the images it extracted, in a workspace whose
+    ``.sfm-workspace.json`` has ``mipmap_options``, through one
+    ``sfmtool.photographs.PhotographCache``; a photograph whose mipmap could
+    not be made is a warning, and its ``.sift`` file is still written.
 
     Args:
         image_filename_list: List of absolute paths to image files
@@ -249,6 +287,9 @@ def image_files_to_sift_files(
                     sift_filename_filtered_list[index_start : index_start + chunk_size],
                 ):
                     writer.submit(sift_filename, dict(zip(_SIFT_DATA_KEYS, sift)))
+        mipmaps = _build_mipmaps(image_filename_filtered_list)
+    else:
+        mipmaps = None
 
     print()
     if len(sift_filename_filtered_list) != len(sift_filename_list):
@@ -262,6 +303,8 @@ def image_files_to_sift_files(
         f"New SIFT feature extraction{tool_label}: "
         f"{len(sift_filename_filtered_list)} / {len(sift_filename_list)} image(s)"
     )
+    if mipmaps is not None:
+        _print_mipmaps(mipmaps)
     print()
     print("Image files:")
     print(textwrap.indent(summarize_path_list(image_filename_list), "  "))
