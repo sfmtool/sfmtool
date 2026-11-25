@@ -107,6 +107,15 @@ pub(super) struct CompassEdgeInstance {
     pub(crate) endpoint_b: [f32; 4],
 }
 
+/// Four colour bytes in one `u32`, R in the low byte and A in the high one:
+/// how a point's colour is packed ([`PointInstance::color`]) and how WGSL's
+/// `unpack4x8unorm` reads a word back. What the bytes mean, sRGB-encoded with
+/// straight alpha or egui's premultiplied bytes, is the field's that holds
+/// them.
+pub(crate) const fn pack_rgba8(rgba: [u8; 4]) -> u32 {
+    u32::from_le_bytes(rgba)
+}
+
 /// One piece of an overlay figure, as the
 /// [overlay ribbon store](super::overlay_ribbons::OverlayRibbons) holds it: a
 /// segment, a barb, a ring or a disc of a track ray, of the bench figure or of
@@ -133,8 +142,15 @@ pub(crate) struct OverlayInstance {
     pub(crate) a: [f32; 4],
     /// A segment's other end; a barb's foot; unused by a ring or a disc.
     pub(crate) b: [f32; 4],
-    /// Not premultiplied, in the colour space of the target it is drawn into.
-    pub(crate) color: [f32; 4],
+    /// Four bytes packed by [`pack_rgba8`], as the target it is drawn into
+    /// takes them. On the scene texture, an sRGB-encoded colour with straight
+    /// alpha, which the shader decodes into linear light and premultiplies
+    /// (`vs_overlay`). In the measurements' layer, egui's premultiplied
+    /// sRGB-encoded bytes, which the shader draws as they are
+    /// (`vs_measurement`): the layer holds encoded values for egui to
+    /// composite, and premultiplied bytes carry a translucent colour exactly,
+    /// where dividing the alpha out before rounding to a byte would not.
+    pub(crate) color: u32,
     /// Half the stroke's width, in panel points; 0 for a disc.
     pub(crate) half_width: f32,
     /// A ring's or a disc's radius, in panel points; for a barb, the tangent
@@ -181,14 +197,14 @@ impl OverlayInstance {
     pub(crate) fn segment(
         a: [f32; 4],
         b: [f32; 4],
-        color: [f32; 4],
+        color: [u8; 4],
         half_width: f32,
         flags: u32,
     ) -> Self {
         Self {
             a,
             b,
-            color,
+            color: pack_rgba8(color),
             half_width,
             radius: 0.0,
             kind: Self::SEGMENT,
@@ -230,14 +246,14 @@ impl OverlayInstance {
         tip: [f32; 4],
         foot: [f32; 4],
         tan_angle: f32,
-        color: [f32; 4],
+        color: [u8; 4],
         half_width: f32,
         flags: u32,
     ) -> Self {
         Self {
             a: tip,
             b: foot,
-            color,
+            color: pack_rgba8(color),
             half_width,
             radius: tan_angle,
             kind: Self::BARB,
@@ -250,7 +266,7 @@ impl OverlayInstance {
     /// `half_width` points to either side.
     pub(crate) fn ring(
         centre: [f32; 4],
-        color: [f32; 4],
+        color: [u8; 4],
         radius: f32,
         half_width: f32,
         flags: u32,
@@ -258,7 +274,7 @@ impl OverlayInstance {
         Self {
             a: centre,
             b: [0.0; 4],
-            color,
+            color: pack_rgba8(color),
             half_width,
             radius,
             kind: Self::RING,
@@ -268,11 +284,11 @@ impl OverlayInstance {
     }
 
     /// A disc about `centre`, of radius `radius` points.
-    pub(crate) fn disc(centre: [f32; 4], color: [f32; 4], radius: f32, flags: u32) -> Self {
+    pub(crate) fn disc(centre: [f32; 4], color: [u8; 4], radius: f32, flags: u32) -> Self {
         Self {
             a: centre,
             b: [0.0; 4],
-            color,
+            color: pack_rgba8(color),
             half_width: 0.0,
             radius,
             kind: Self::DISC,
@@ -287,7 +303,7 @@ impl OverlayInstance {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BenchDiscVertex {
     pub(crate) position: [f32; 4],
-    pub(crate) color: [f32; 4],
+    pub(crate) color: u32,
 }
 
 /// Uniforms for the bench track pass.

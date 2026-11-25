@@ -13,14 +13,14 @@ use super::super::SceneRenderer;
 use crate::scene::{ImageRef, PointRef};
 use sfmtool_core::{EditedReconstruction, Se3Transform};
 
-/// The rays' orange, in linear light, the colour space of the scene target
-/// they are drawn into.
+/// The rays' orange, sRGB-encoded with straight alpha, which the shader
+/// decodes into linear light.
 ///
 /// The orange of the observing frustums and of the Image Browser's track
-/// highlights. Its alpha is below 1 so that where the rays of a track meet,
-/// near their point, they build up, and a ray over a bright point cloud does
-/// not hide the points under it.
-pub(super) const TRACK_RAY_COLOR: [f32; 4] = [1.0, 0.647, 0.0, 0.6];
+/// highlights, (255, 165, 0). Its alpha, 0.6, is below 1 so that where the
+/// rays of a track meet, near their point, they build up, and a ray over a
+/// bright point cloud does not hide the points under it.
+pub(super) const TRACK_RAY_COLOR: [u8; 4] = [255, 165, 0, 153];
 
 /// Half a track ray's width, in panel points: a stroke 1.5 points wide.
 ///

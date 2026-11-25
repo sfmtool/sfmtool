@@ -243,14 +243,14 @@ fn the_pass_pipelines_agree_with_the_buffers_the_upload_writes() {
         OverlayInstance::segment(
             [0.0, 0.0, 0.0, 1.0],
             [1.0, 0.0, 0.0, 1.0],
-            [1.0, 0.647, 0.0, 0.6],
+            [255, 165, 0, 153],
             0.75,
             OverlayInstance::HOLD,
         ),
         OverlayInstance::segment(
             [0.0, 0.0, 0.0, 1.0],
             [0.0, 1.0, 0.0, 0.0],
-            [1.0, 0.647, 0.0, 0.6],
+            [255, 165, 0, 153],
             0.75,
             OverlayInstance::HOLD,
         ),
@@ -325,7 +325,7 @@ fn segment(x: f32) -> OverlayInstance {
     OverlayInstance::segment(
         [0.0, 0.0, 0.0, 1.0],
         [x, 0.0, 0.0, 1.0],
-        [1.0, 0.5, 0.0, 0.55],
+        [140, 70, 0, 140],
         1.5,
         MEASUREMENT,
     )
@@ -333,12 +333,12 @@ fn segment(x: f32) -> OverlayInstance {
 
 /// A measurement's ring at the origin, 5 points to the middle of its stroke.
 fn ring() -> OverlayInstance {
-    OverlayInstance::ring([0.0, 0.0, 0.0, 1.0], [1.0; 4], 5.0, 1.0, MEASUREMENT)
+    OverlayInstance::ring([0.0, 0.0, 0.0, 1.0], [255; 4], 5.0, 1.0, MEASUREMENT)
 }
 
 /// A measurement's dot at the origin.
 fn disc() -> OverlayInstance {
-    OverlayInstance::disc([0.0, 0.0, 0.0, 1.0], [1.0; 4], 1.5, MEASUREMENT)
+    OverlayInstance::disc([0.0, 0.0, 0.0, 1.0], [255; 4], 1.5, MEASUREMENT)
 }
 
 /// The figure's pieces are segments, and the arrowhead's two barbs, at the
@@ -355,7 +355,7 @@ fn the_figure_is_segments_and_barbs_that_fade_behind_the_scene() {
     let (segments, barbs) = edges.split_at(edges.len() - 2);
     for (edge, stroke) in segments.iter().zip(figure.strokes()) {
         assert_eq!(
-            (edge.a, edge.b, edge.color),
+            (edge.a, edge.b, edge.color.to_le_bytes()),
             (stroke.a, stroke.b, stroke.color)
         );
         assert_eq!(edge.kind, OverlayInstance::SEGMENT);
@@ -364,7 +364,7 @@ fn the_figure_is_segments_and_barbs_that_fade_behind_the_scene() {
     assert_eq!(segments[4].b, normal.shaft.b, "the normal's segment");
     for (edge, barb) in barbs.iter().zip(normal.barbs) {
         assert_eq!(
-            (edge.a, edge.b, edge.color, edge.radius),
+            (edge.a, edge.b, edge.color.to_le_bytes(), edge.radius),
             (barb.tip, barb.foot, barb.color, barb.tan_angle)
         );
         assert_eq!(edge.kind, OverlayInstance::BARB);
@@ -664,10 +664,11 @@ fn an_upload_of_measurements_holds_its_instances_and_nothing_for_none() {
 /// format, opened cleared to transparent: drawing the measurements into an
 /// `Rgba8Unorm` view of the `Rgba8UnormSrgb` scene texture instead read the
 /// scene back decoded to linear light on a real GPU, and a background of 35
-/// came back as 4 in every tile a ribbon touched. The pass's blend is straight
-/// alpha for colour and `One, OneMinusSrcAlpha` for alpha, which over a
-/// transparent layer leaves egui's premultiplied colour in it. egui then
-/// composites the layer exactly as it composites a colour it paints itself:
+/// came back as 4 in every tile a ribbon touched. The pass's blend is
+/// premultiplied alpha, `One, OneMinusSrcAlpha`, and the pieces carry egui's
+/// premultiplied bytes as they are, so over a transparent layer one piece
+/// leaves exactly those bytes in it. egui then composites the layer exactly as
+/// it composites a colour it paints itself:
 /// `p + dst · (1 − a)` on encoded values onto an encoded surface, and
 /// `linear(p) + dst · (1 − a)` in linear light onto an sRGB one. Blending the
 /// colour in linear light onto the scene texture, as the pass first did, drew
@@ -690,7 +691,7 @@ fn a_translucent_measurement_composites_as_egui_painted_it() {
         wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
     );
     let blend = super::super::pipelines::bench_track::BLEND;
-    assert_eq!(blend.color.src_factor, wgpu::BlendFactor::SrcAlpha);
+    assert_eq!(blend.color.src_factor, wgpu::BlendFactor::One);
     assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
     assert_eq!(blend.color.operation, wgpu::BlendOperation::Add);
     assert_eq!(blend.alpha.src_factor, wgpu::BlendFactor::One);
@@ -702,9 +703,10 @@ fn a_translucent_measurement_composites_as_egui_painted_it() {
     let fill = |pieces: &[Color32]| {
         let (mut c, mut a) = (0.0_f32, 0.0_f32);
         for piece in pieces {
-            let src = encoded_rgba(*piece);
-            c = f32::from(level(src[0] * src[3] + c * (1.0 - src[3]))) / 255.0;
-            a = f32::from(level(src[3] + a * (1.0 - src[3]))) / 255.0;
+            // What `vs_measurement` hands on: the bytes over 255, not decoded.
+            let [p, _, _, pa] = encoded_rgba(*piece).map(|v| f32::from(v) / 255.0);
+            c = f32::from(level(p + c * (1.0 - pa))) / 255.0;
+            a = f32::from(level(pa + a * (1.0 - pa))) / 255.0;
         }
         (c, a)
     };
@@ -729,6 +731,15 @@ fn a_translucent_measurement_composites_as_egui_painted_it() {
     let grey = Color32::from_rgb(STORED_RGB[0], STORED_RGB[1], STORED_RGB[2]);
     let dimmed = grey.gamma_multiply(OTHER_OPACITY);
     let tint = Color32::from_rgb(220, 120, 40).gamma_multiply(OTHER_OPACITY);
+    // One translucent piece leaves egui's own bytes in the layer, exactly.
+    for piece in [dimmed, tint, HALO] {
+        let [p, _, _, a] = piece.to_array();
+        assert_eq!(
+            fill(&[piece]),
+            (f32::from(p) / 255.0, f32::from(a) / 255.0),
+            "{piece:?}"
+        );
+    }
     for srgb_surface in [true, false] {
         for pieces in [
             &[HALO, grey][..],

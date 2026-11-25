@@ -633,3 +633,225 @@ fn the_splat_and_the_outline_share_the_highlight_colours_and_the_bench_stroke() 
         std::mem::offset_of!(super::super::gpu_types::PatchUniforms, camera_pos) + 12
     );
 }
+
+/// The sRGB transfer function, `IEC 61966-2-1`, in `f64`: the reference the
+/// shaders' decode is checked against.
+fn srgb_to_linear_reference(encoded: f64) -> f64 {
+    if encoded <= 0.04045 {
+        encoded / 12.92
+    } else {
+        ((encoded + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// The scene shaders decode a packed sRGB byte into linear light with the
+/// exact piecewise transfer function, so the `Rgba8UnormSrgb` target encodes
+/// every byte back to itself: a stored colour is drawn as it is stored.
+///
+/// The noop device runs no shader, so the WGSL is pinned line by line and
+/// mirrored here in `f32`, the precision the shader computes in.
+#[test]
+fn the_shaders_decode_a_packed_srgb_byte_to_the_light_the_target_encodes_back() {
+    let common = include_str!("../../shaders/common.wgsl");
+    for line in [
+        "fn srgb_to_linear(encoded: vec3<f32>) -> vec3<f32> {",
+        "let low = encoded / 12.92;",
+        "let high = pow((encoded + 0.055) / 1.055, vec3<f32>(2.4));",
+        "return select(high, low, encoded <= vec3<f32>(0.04045));",
+        "fn unpack_srgb_rgba(packed: u32) -> vec4<f32> {",
+        "let encoded = unpack4x8unorm(packed);",
+        "return vec4<f32>(srgb_to_linear(encoded.rgb), encoded.a);",
+    ] {
+        assert!(
+            common.lines().any(|l| l.trim() == line),
+            "common.wgsl does not declare `{line}`"
+        );
+    }
+    // The WGSL, in f32.
+    let decode = |encoded: f32| -> f32 {
+        let low = encoded / 12.92;
+        let high = ((encoded + 0.055) / 1.055).powf(2.4);
+        if encoded <= 0.04045 {
+            low
+        } else {
+            high
+        }
+    };
+    // Known values of the transfer function.
+    for (encoded, linear) in [
+        (0.0_f32, 0.0_f64),
+        (0.04045, 0.0031308),
+        (0.5, 0.2140411),
+        (1.0, 1.0),
+    ] {
+        assert!(
+            (f64::from(decode(encoded)) - linear).abs() < 1e-6,
+            "{encoded} decodes to {}, not {linear}",
+            decode(encoded)
+        );
+    }
+    for byte in 0..=255u8 {
+        let linear = decode(f32::from(byte) / 255.0);
+        let reference = srgb_to_linear_reference(f64::from(byte) / 255.0);
+        assert!(
+            (f64::from(linear) - reference).abs() <= 1e-6 * reference.max(1e-3),
+            "byte {byte}: {linear} against {reference}"
+        );
+        // What the sRGB target writes for it: the byte it came from.
+        assert_eq!(
+            egui::ecolor::gamma_u8_from_linear_f32(linear),
+            byte,
+            "byte {byte} does not survive the decode and the target's encode"
+        );
+    }
+}
+
+/// Every scene shader that unpacks a packed colour decodes it there: the
+/// points, whose bytes are the stored colours, and the frustums, whose bytes
+/// are the frustum and highlight colours. Neither divides a byte by 255
+/// itself, which is what drew them encoded a second time, lighter and paler
+/// than stored.
+#[test]
+fn the_point_and_frustum_shaders_decode_their_packed_colours() {
+    for (name, source, line) in [
+        (
+            "points.wgsl",
+            include_str!("../../shaders/points.wgsl"),
+            "out.color = tinted(unpack_srgb_rgba(in.color_packed).rgb);",
+        ),
+        (
+            "frustum.wgsl",
+            include_str!("../../shaders/frustum.wgsl"),
+            "let unpacked = unpack_srgb_rgba(frustum_colors[in.frustum_index]);",
+        ),
+    ] {
+        assert!(
+            source.lines().any(|l| l.trim() == line),
+            "{name} does not declare `{line}`"
+        );
+        assert!(!source.contains("/ 255.0"), "{name} divides a byte by 255");
+    }
+}
+
+/// The overlay pass decodes the pieces it draws onto the scene texture and
+/// leaves the measurements' layer encoded: `vs_overlay` and `vs_disc` take
+/// each colour through `unpack_srgb_rgba`, and `vs_measurement`, the entry the
+/// measurements' pipeline is built on, draws egui's bytes as they are, so the
+/// layer composites as egui paints.
+#[test]
+fn the_overlay_pass_decodes_on_the_scene_and_not_into_the_measurements_layer() {
+    use super::bench_track::{MEASUREMENT_VERTEX_ENTRY, SCENE_VERTEX_ENTRY};
+    let bench = include_str!("../../shaders/bench_track.wgsl");
+    // The WGSL function `name`, up to the next one.
+    let body = |name: &str| -> &str {
+        let start = bench
+            .find(&format!("fn {name}("))
+            .unwrap_or_else(|| panic!("bench_track.wgsl has no fn {name}"));
+        let rest = &bench[start..];
+        let end = rest[1..].find("\nfn ").map_or(rest.len(), |e| e + 1);
+        &rest[..end]
+    };
+    assert_eq!(SCENE_VERTEX_ENTRY, "vs_overlay");
+    assert_eq!(MEASUREMENT_VERTEX_ENTRY, "vs_measurement");
+    let scene_color = body("scene_color");
+    assert!(scene_color.contains("let color = unpack_srgb_rgba(packed);"));
+    assert!(scene_color.contains("return vec4<f32>(color.rgb * color.a, color.a);"));
+    assert!(body(SCENE_VERTEX_ENTRY).contains("return overlay(in, scene_color(in.color));"));
+    assert!(body("vs_disc").contains("let color = scene_color(in.color);"));
+    let measurement = body(MEASUREMENT_VERTEX_ENTRY);
+    assert!(measurement.contains("return overlay(in, unpack4x8unorm(in.color));"));
+    assert!(
+        !measurement.contains("srgb") && !measurement.contains("scene_color"),
+        "the measurements' entry decodes: {measurement}"
+    );
+    // Premultiplied out of every entry, so the one blend serves both targets.
+    assert_eq!(
+        super::bench_track::BLEND,
+        wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING
+    );
+    for line in [
+        "return in.color * opacity;",
+        "return in.color * (opacity * covered);",
+        "@location(3) color: u32,",
+        "@location(1) color: u32,",
+    ] {
+        assert!(
+            bench.lines().any(|l| l.trim() == line),
+            "bench_track.wgsl does not declare `{line}`"
+        );
+    }
+}
+
+/// An overlay instance packs its colour as a point's is packed, R in the low
+/// byte and A in the high one, the order `unpack4x8unorm` reads, and is 60
+/// bytes: two homogeneous places, the packed colour and five words.
+#[test]
+fn an_overlay_instance_packs_its_colour_r_first_into_one_word() {
+    use super::super::gpu_types::{pack_rgba8, OverlayInstance};
+    let rgba = [255, 92, 246, 153];
+    let place = [0.0, 0.0, 0.0, 1.0];
+    for piece in [
+        OverlayInstance::segment(place, place, rgba, 1.0, OverlayInstance::HOLD),
+        OverlayInstance::barb(place, place, 0.5, rgba, 1.0, OverlayInstance::FADE),
+        OverlayInstance::ring(place, rgba, 2.0, 1.0, OverlayInstance::HOLD),
+        OverlayInstance::disc(place, rgba, 2.0, OverlayInstance::HOLD),
+    ] {
+        assert_eq!(piece.color, 0x99F6_5CFF);
+        assert_eq!(piece.color, pack_rgba8(rgba));
+        // The bytes in the buffer, in the order the attribute reads them.
+        let bytes = bytemuck::bytes_of(&piece);
+        let at = std::mem::offset_of!(OverlayInstance, color);
+        assert_eq!(bytes[at..at + 4], rgba);
+    }
+    assert_eq!(std::mem::size_of::<OverlayInstance>(), 60);
+}
+
+/// Each colour constant a shader writes for a named sRGB colour is that
+/// colour's linear value, so the sRGB target shows the colour it names: the
+/// line before it says `// sRGB (r, g, b)`, and the constant holds the decoded
+/// triple.
+#[test]
+fn each_named_srgb_colour_constant_holds_its_linear_value() {
+    let mut checked = 0;
+    for (name, source) in [
+        ("common.wgsl", include_str!("../../shaders/common.wgsl")),
+        (
+            "target_indicator.wgsl",
+            include_str!("../../shaders/target_indicator.wgsl"),
+        ),
+    ] {
+        let lines: Vec<&str> = source.lines().map(str::trim).collect();
+        for (k, line) in lines.iter().enumerate() {
+            let Some(named) = line
+                .strip_prefix("// sRGB (")
+                .and_then(|l| l.strip_suffix(')'))
+            else {
+                continue;
+            };
+            let bytes: Vec<u8> = named
+                .split(',')
+                .map(|v| v.trim().parse().expect("a byte"))
+                .collect();
+            let constant = lines[k + 1];
+            let values: Vec<f64> = constant
+                .split_once("= vec3<f32>(")
+                .unwrap_or_else(|| panic!("{name}: no vec3 after `{line}`: {constant}"))
+                .1
+                .trim_end_matches(");")
+                .split(',')
+                .map(|v| v.trim().parse().expect("a number"))
+                .collect();
+            assert_eq!((bytes.len(), values.len()), (3, 3), "{name}: {line}");
+            for (value, byte) in values.iter().zip(&bytes) {
+                let expected = srgb_to_linear_reference(f64::from(*byte) / 255.0);
+                assert!(
+                    (value - expected).abs() < 1e-6,
+                    "{name}: {constant} is not the linear value of {line}"
+                );
+            }
+            checked += 1;
+        }
+    }
+    // The brush's two reds, the failure colour, and the indicator's two.
+    assert_eq!(checked, 5);
+}

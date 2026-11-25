@@ -905,9 +905,9 @@ fn a_nodes_tint_reaches_its_uniform_block_and_no_one_elses() {
     assert_eq!(
         tinted,
         [
-            color.rgb[0] as f32 / 255.0,
-            color.rgb[1] as f32 / 255.0,
-            color.rgb[2] as f32 / 255.0,
+            egui::ecolor::linear_f32_from_gamma_u8(color.rgb[0]),
+            egui::ecolor::linear_f32_from_gamma_u8(color.rgb[1]),
+            egui::ecolor::linear_f32_from_gamma_u8(color.rgb[2]),
             crate::scene::TINT_STRENGTH,
         ],
     );
@@ -1451,7 +1451,7 @@ fn track_rays_are_held_unpulled_segments_in_the_rays_orange() {
         for ray in rays {
             assert_eq!(ray.kind, OverlayInstance::SEGMENT);
             assert_eq!(ray.flags, OverlayInstance::HOLD, "held, and not pulled");
-            assert_eq!(ray.color, TRACK_RAY_COLOR);
+            assert_eq!(ray.color.to_le_bytes(), TRACK_RAY_COLOR);
             assert_eq!(ray.half_width, TRACK_RAY_HALF_WIDTH);
             assert_eq!((ray.radius, ray.inset), (0.0, [0.0, 0.0]));
         }

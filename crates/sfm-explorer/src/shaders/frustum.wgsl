@@ -112,12 +112,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let pixel_to_ndc = vec2<f32>(2.0 / uniforms.screen_size.x, 2.0 / uniforms.screen_size.y);
     let offset_ndc = perp * in.corner.y * uniforms.line_half_width * pixel_to_ndc;
 
-    // Look up color from per-frustum storage buffer
-    let color_packed = frustum_colors[in.frustum_index];
-    let r = f32(color_packed & 0xFFu) / 255.0;
-    let g = f32((color_packed >> 8u) & 0xFFu) / 255.0;
-    let b = f32((color_packed >> 16u) & 0xFFu) / 255.0;
-    let a = f32((color_packed >> 24u) & 0xFFu) / 255.0;
+    // Look up the colour in the per-frustum storage buffer: sRGB bytes,
+    // unpacked into linear light, and the alpha as it is.
+    let unpacked = unpack_srgb_rgba(frustum_colors[in.frustum_index]);
+    let a = unpacked.a;
 
     // Tint the node's ordinary frustums, never its highlights. The CPU writes
     // this buffer under one invariant (`upload::frustums`): the plain frustum
@@ -125,7 +123,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // orange track cameras — is written at *full* alpha. So `a < 1` is exactly
     // "this is the node's own color, not a signal", and the signals stay the
     // colors they were chosen to be.
-    let base = vec3<f32>(r, g, b);
+    let base = unpacked.rgb;
     let color = select(base, mix(base, recon.tint_color.rgb, recon.tint_color.a), a < 1.0);
 
     var out: VertexOutput;

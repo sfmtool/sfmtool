@@ -50,7 +50,8 @@
 use wgpu::util::DeviceExt;
 
 use super::gpu_types::{
-    mat4_to_cols, BenchDiscVertex, BenchTrackUniforms, OverlayInstance, BENCH_LINE_HALF_WIDTH,
+    mat4_to_cols, pack_rgba8, BenchDiscVertex, BenchTrackUniforms, OverlayInstance,
+    BENCH_LINE_HALF_WIDTH,
 };
 use super::overlay_ribbons::{OverlayTarget, ProducerId};
 use super::SceneRenderer;
@@ -202,7 +203,7 @@ impl SceneRenderer {
             .iter()
             .map(|vertex| BenchDiscVertex {
                 position: vertex.at,
-                color: vertex.color,
+                color: pack_rgba8(vertex.color),
             })
             .collect();
         if edges.is_empty() && disc.is_empty() {

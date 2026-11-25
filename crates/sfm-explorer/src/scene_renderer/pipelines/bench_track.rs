@@ -10,10 +10,22 @@ const SHADER: &str = concat!(
 
 /// The blend of every bench track pipeline, the measurements' included.
 ///
-/// Ordinary alpha rather than the compass's additive blend: the three violets
-/// carry meaning, and additive light over a bright point cloud washes them all
-/// to white.
-pub(in crate::scene_renderer) const BLEND: wgpu::BlendState = wgpu::BlendState::ALPHA_BLENDING;
+/// Alpha compositing rather than the compass's additive blend: the three
+/// violets carry meaning, and additive light over a bright point cloud washes
+/// them all to white. Premultiplied, because the measurements' colours are
+/// egui's premultiplied bytes, drawn as they are (`vs_measurement`); the
+/// shader premultiplies the scene's colours after decoding them
+/// (`scene_color`), so both targets take the same blend.
+pub(in crate::scene_renderer) const BLEND: wgpu::BlendState =
+    wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING;
+
+/// The vertex entry point of the overlay pipeline onto the scene texture,
+/// which decodes each piece's sRGB colour into linear light.
+pub(in crate::scene_renderer) const SCENE_VERTEX_ENTRY: &str = "vs_overlay";
+
+/// The vertex entry point of the overlay pipeline into the measurements'
+/// layer, which draws each piece's colour as the encoded bytes it is.
+pub(in crate::scene_renderer) const MEASUREMENT_VERTEX_ENTRY: &str = "vs_measurement";
 
 /// [`OverlayInstance`]'s fields as `vs_overlay` reads them, each at the
 /// offset the struct puts it at.
@@ -34,7 +46,7 @@ const OVERLAY_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = {
     [
         attribute(Float32x4, offset_of!(OverlayInstance, a), 1),
         attribute(Float32x4, offset_of!(OverlayInstance, b), 2),
-        attribute(Float32x4, offset_of!(OverlayInstance, color), 3),
+        attribute(Uint32, offset_of!(OverlayInstance, color), 3),
         attribute(Float32, offset_of!(OverlayInstance, half_width), 4),
         attribute(Float32, offset_of!(OverlayInstance, radius), 5),
         attribute(Uint32, offset_of!(OverlayInstance, kind), 6),
@@ -108,14 +120,15 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
     let color_target = target(EDL_OUTPUT_FORMAT);
 
     // One overlay pipeline per target format: the figure's onto the sRGB view of
-    // the EDL output, the measurements' into their encoded layer.
-    let edge = |label, targets: &[Option<wgpu::ColorTargetState>]| {
+    // the EDL output, its colours decoded into linear light, and the
+    // measurements' into their encoded layer, their colours drawn as they are.
+    let edge = |label, vertex_entry, targets: &[Option<wgpu::ColorTargetState>]| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_overlay"),
+                entry_point: Some(vertex_entry),
                 buffers: &[
                     // Slot 0: quad corners (per-vertex), reuses the point quad buffer
                     Some(QUAD_VERTEX_LAYOUT),
@@ -147,9 +160,14 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
             cache: None,
         })
     };
-    let edge_pipeline = edge("bench track edge pipeline", &color_target);
+    let edge_pipeline = edge(
+        "bench track edge pipeline",
+        SCENE_VERTEX_ENTRY,
+        &color_target,
+    );
     let measurement_pipeline = edge(
         "measurement edge pipeline",
+        MEASUREMENT_VERTEX_ENTRY,
         &target(MEASUREMENT_TARGET_FORMAT),
     );
 
@@ -169,9 +187,9 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipe
                         shader_location: 0, // position (xyz + w)
                     },
                     wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x4,
-                        offset: 16,
-                        shader_location: 1, // color
+                        format: wgpu::VertexFormat::Uint32,
+                        offset: std::mem::offset_of!(BenchDiscVertex, color) as u64,
+                        shader_location: 1, // color, packed sRGB
                     },
                 ],
             })],

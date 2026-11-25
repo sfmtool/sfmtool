@@ -34,7 +34,7 @@ fn instances(n: u32, tag: f32) -> Vec<OverlayInstance> {
             OverlayInstance::segment(
                 [tag, i as f32, 0.0, 1.0],
                 [tag, i as f32, 1.0, 1.0],
-                [tag, 0.5, 0.25, 1.0],
+                [tag as u8, 128, 64, 255],
                 1.5,
                 OverlayInstance::HOLD,
             )

@@ -14,12 +14,15 @@
 // A segment can be cut short on screen at either end by an inset in points,
 // which a measurement's line is so that it stops at its rings.
 // Rendered as post-EDL passes onto edl_output and into the measurements'
-// layer.
+// layer. Every colour is packed as four bytes and leaves the vertex shader
+// premultiplied: decoded into linear light for the scene texture
+// (vs_overlay, vs_disc), and as it is for the measurements' layer
+// (vs_measurement).
 //
 // Two things differ from the target indicator, which this otherwise follows.
-// The blend is ordinary alpha rather than additive and there is no glow: the
-// three violets carry meaning, and additive light over a bright point cloud
-// washes them all to white. And the hue does not shift when occluded, for the
+// The blend is premultiplied alpha rather than additive and there is no glow:
+// the three violets carry meaning, and additive light over a bright point
+// cloud washes them all to white. And the hue does not shift when occluded, for the
 // same reason -- a verdict's colour stays that verdict's colour, and only the
 // opacity says the figure is behind something.
 
@@ -67,6 +70,7 @@ const FLAG_PULL_TOWARD_EYE: u32 = 2u;
 
 struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,
+    // Premultiplied, in the colour space of the target it is drawn into.
     @location(0) color: vec4<f32>,
     // 1.0 for a direction, whose occlusion has no distance to fade over.
     @location(1) @interpolate(flat) at_infinity: f32,
@@ -113,7 +117,8 @@ struct OverlayInput {
     // Per-instance: OverlayInstance.
     @location(1) a: vec4<f32>,
     @location(2) b: vec4<f32>,
-    @location(3) color: vec4<f32>,
+    // Four bytes, R in the low byte: see vs_overlay and vs_measurement.
+    @location(3) color: u32,
     @location(4) half_width: f32,
     @location(5) radius: f32,
     @location(6) kind: u32,
@@ -150,8 +155,35 @@ fn in_front(v: vec4<f32>) -> f32 {
     return -v.z - uniforms.near * v.w;
 }
 
+// A colour as the pieces drawn onto the scene texture carry it: sRGB bytes
+// with straight alpha, packed R first. Decoded into linear light, since the
+// scene texture is `Rgba8UnormSrgb` and encodes what the shader writes, and
+// premultiplied, as the pass's blend takes it.
+fn scene_color(packed: u32) -> vec4<f32> {
+    let color = unpack_srgb_rgba(packed);
+    return vec4<f32>(color.rgb * color.a, color.a);
+}
+
+// An overlay piece drawn onto the scene texture: a track ray's or the bench
+// figure's.
 @vertex
 fn vs_overlay(in: OverlayInput) -> VertexOutput {
+    return overlay(in, scene_color(in.color));
+}
+
+// An overlay piece drawn into the measurements' layer
+// (`MEASUREMENT_TARGET_FORMAT`, `Rgba8Unorm`): its packed colour is egui's
+// premultiplied sRGB-encoded bytes and is drawn as it is, not decoded, so the
+// layer holds the encoded values egui composites as it composites its own
+// painting.
+@vertex
+fn vs_measurement(in: OverlayInput) -> VertexOutput {
+    return overlay(in, unpack4x8unorm(in.color));
+}
+
+// Where an overlay piece is drawn, carrying `color`, premultiplied, in the
+// colour space of the target it is drawn into.
+fn overlay(in: OverlayInput, color: vec4<f32>) -> VertexOutput {
     let pull = (in.flags & FLAG_PULL_TOWARD_EYE) != 0u;
     let px = uniforms.pixels_per_point;
     let half_px = in.half_width * px;
@@ -162,7 +194,7 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
     let pixel_to_ndc = vec2<f32>(2.0 / uniforms.screen_size.x, 2.0 / uniforms.screen_size.y);
 
     var out: VertexOutput;
-    out.color = in.color;
+    out.color = color;
     out.fade = select(0.0, 1.0, (in.flags & FLAG_FADE) != 0u);
     out.shape = vec3<f32>(f32(in.kind), radius_px, half_px);
     out.past_ends = vec2<f32>(NOT_CUT, NOT_CUT);
@@ -172,7 +204,7 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
         // One whose centre is behind the near plane draws nothing.
         let v = to_view(in.a, pull);
         if in_front(v) <= 0.0 {
-            return clipped(in.color);
+            return clipped(color);
         }
         let centre = to_clip(v);
         let extent_px = radius_px + half_px + aa_px;
@@ -190,7 +222,7 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
         // side of its foot that faces this frame's eye. Drawn and covered as a
         // segment from here on.
         if in.a.w == 0.0 || in.b.w == 0.0 {
-            return clipped(in.color);
+            return clipped(color);
         }
         vb = vec4<f32>(barb_end(va.xyz, vb.xyz, in.radius), 1.0);
         out.shape = vec3<f32>(f32(KIND_SEGMENT), 0.0, half_px);
@@ -207,7 +239,7 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
         // clip at.
         at_infinity = 1.0;
         if va.z >= 0.0 || vb.z >= 0.0 {
-            return clipped(in.color);
+            return clipped(color);
         }
     } else {
         // Clipped at the near plane in homogeneous view space, before the
@@ -222,7 +254,7 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
         let fa = in_front(va);
         let fb = in_front(vb);
         if fa <= 0.0 && fb <= 0.0 {
-            return clipped(in.color);
+            return clipped(color);
         }
         let t = fa / (fa - fb);
         if fa <= 0.0 {
@@ -255,7 +287,7 @@ fn vs_overlay(in: OverlayInput) -> VertexOutput {
     let cut_b = inset_b > 0.0;
     if cut_a || cut_b {
         if edge_len <= inset_a + inset_b {
-            return clipped(in.color);
+            return clipped(color);
         }
         let start = at_screen_fraction(clip_a, clip_b, inset_a / edge_len);
         let end = at_screen_fraction(clip_a, clip_b, 1.0 - inset_b / edge_len);
@@ -324,13 +356,16 @@ fn at_screen_fraction(clip_a: vec4<f32>, clip_b: vec4<f32>, fraction: f32) -> ve
 
 struct DiscInput {
     @location(0) position: vec4<f32>,
-    @location(1) color: vec4<f32>,
+    // BenchDiscVertex.color: sRGB bytes with straight alpha, as vs_overlay
+    // takes them.
+    @location(1) color: u32,
 }
 
 @vertex
 fn vs_disc(in: DiscInput) -> VertexOutput {
     var out: VertexOutput;
-    out.color = in.color;
+    let color = scene_color(in.color);
+    out.color = color;
     out.at_infinity = 0.0;
     out.fade = 1.0;
     out.local = vec2<f32>(0.0, 0.0);
@@ -339,7 +374,7 @@ fn vs_disc(in: DiscInput) -> VertexOutput {
     if in.position.w == 0.0 {
         let clip = uniforms.view_proj * vec4<f32>(in.position.xyz, 0.0);
         if clip.w <= 0.0 {
-            return clipped(in.color);
+            return clipped(color);
         }
         out.clip_pos = vec4<f32>(clip.xy, INF_DEPTH * clip.w, clip.w);
         out.at_infinity = 1.0;
@@ -352,7 +387,7 @@ fn vs_disc(in: DiscInput) -> VertexOutput {
     // the frame's half-length across, so the three corners agree in every view
     // but a grazing one.
     if (uniforms.view * vec4<f32>(in.position.xyz, 1.0)).z >= -uniforms.near {
-        return clipped(in.color);
+        return clipped(color);
     }
     out.clip_pos = uniforms.view_proj * vec4<f32>(in.position.xyz, 1.0);
     return out;
@@ -391,7 +426,7 @@ fn depth_aware_opacity(clip_pos: vec4<f32>, at_infinity: f32, fade: f32) -> f32 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let opacity = depth_aware_opacity(in.clip_pos, in.at_infinity, in.fade);
-    return vec4<f32>(in.color.rgb, in.color.a * opacity);
+    return in.color * opacity;
 }
 
 // How much of its pixel an overlay piece covers: 1 inside its shape and 0 a
@@ -422,5 +457,5 @@ fn fs_overlay(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     let opacity = depth_aware_opacity(in.clip_pos, in.at_infinity, in.fade);
-    return vec4<f32>(in.color.rgb, in.color.a * opacity * covered);
+    return in.color * (opacity * covered);
 }

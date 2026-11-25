@@ -53,6 +53,8 @@ use upload::{BgMeshKey, LoadedBgLevel};
 /// What the overlay pieces are drawn with that their instances do not hold,
 /// which the 3D view sets each frame.
 pub(crate) use bench_track::OverlayView;
+#[cfg(test)]
+pub(crate) use gpu_types::pack_rgba8;
 /// One piece of an overlay figure, which a producer builds.
 pub(crate) use gpu_types::OverlayInstance;
 pub(crate) use gpu_types::{

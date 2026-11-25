@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+use egui::ecolor::linear_f32_from_gamma_u8;
 use sfmtool_core::{EditedReconstruction, Se3Transform, SfmrReconstruction};
 
 use crate::display_thumbnails::DisplayThumbnails;
@@ -306,16 +307,17 @@ pub(crate) enum NodeTint {
 }
 
 impl NodeTint {
-    /// The `tint_color` vec4 the shaders read: `rgb` in 0..1 with the strength
-    /// in `a`, and all-zero — hence `a == 0`, hence "original colors" — for
-    /// [`NodeTint::Original`].
+    /// The `tint_color` vec4 the shaders read: the palette colour in `rgb`,
+    /// decoded from its sRGB bytes into linear light, the light the scene
+    /// shaders mix in, with the strength in `a`; and all-zero, hence `a == 0`,
+    /// hence "original colors", for [`NodeTint::Original`].
     pub(crate) fn to_uniform(self) -> [f32; 4] {
         match self {
             NodeTint::Original => [0.0; 4],
             NodeTint::Tint(color) => [
-                color.rgb[0] as f32 / 255.0,
-                color.rgb[1] as f32 / 255.0,
-                color.rgb[2] as f32 / 255.0,
+                linear_f32_from_gamma_u8(color.rgb[0]),
+                linear_f32_from_gamma_u8(color.rgb[1]),
+                linear_f32_from_gamma_u8(color.rgb[2]),
                 TINT_STRENGTH,
             ],
         }

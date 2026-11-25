@@ -265,6 +265,50 @@ targets. `pipelines/tests.rs` binds every pass-1 pipeline inside a pass
 built from the same constants, so a producer that drifts from the consumer
 fails headlessly rather than at the first frame on a real GPU.
 
+### Colour spaces
+
+**A colour held as `u8` is sRGB-encoded; a colour held as floating point in a
+scene shader is linear light.** The scene's colour targets, the G-buffer's
+colour and the EDL output, are `Rgba8UnormSrgb`: the hardware takes what a
+shader writes as linear and encodes it on write, and decodes a sample of an
+`*Srgb` texture to linear on read. So:
+
+- **A colour stays sRGB-encoded in every buffer that holds it as bytes**: a
+  point's stored colour, a frustum's colour word, an overlay piece's colour
+  (`OverlayInstance::color`, `BenchDiscVertex::color`), the bench's violets and
+  the track rays' orange as `u8` constants. Converting to linear before
+  quantizing to 8 bits would lose the precision of the dark levels, where the
+  transfer function is steepest.
+- **The conversion happens in `f32`, where the byte becomes a float.** A
+  shader unpacks a packed colour with `unpack_srgb_rgba` in `common.wgsl`,
+  which applies the exact piecewise sRGB transfer function (IEC 61966-2-1)
+  to the colour channels and leaves the alpha linear. A CPU value bound for a
+  shader is decoded on the CPU when it becomes a float: the tint's colour in
+  `NodeTint::to_uniform`. The target encodes every decoded byte back to
+  itself, so a point is drawn in its stored colour.
+- **A texture sampled through an `*Srgb` format decodes on its own**: the
+  camera thumbnails, the background photograph and the patch atlas need no
+  shader code, and the EDL pass reads the G-buffer back in linear light.
+- **A colour constant written in a shader is linear.** One that names an sRGB
+  colour is written as that colour's linear value, with the sRGB triple named
+  on the line before it (`// sRGB (235, 30, 30)` over `FAILURE_COLOR`), and a
+  pipeline test checks each pair. Constants of 0 and 1 are the same in both
+  spaces, so the selection's yellow and the hover's cyan are written as they
+  are. A `wgpu::Color` clear value is linear too: the background's
+  (30, 30, 35) is cleared as `(0.013, 0.013, 0.017)`.
+
+**The exception is the measurements' layer** (`MEASUREMENT_TARGET_FORMAT`,
+`Rgba8Unorm`), which egui composites over the scene as it composites its own
+painting ([measurement-view.md](measurement-view.md) § "Drawing
+measurements"). egui works on encoded values, so the layer holds them: the
+measurements' pipeline is built on the overlay shader's `vs_measurement`
+entry, which draws each piece's bytes as they are, with no decoding. Those
+bytes are egui's own premultiplied ones (`Color32::to_array`) rather than a
+colour with the alpha divided out, since a division rounded back to a byte
+would move a translucent colour off what egui painted; the overlay pass's blend
+is premultiplied for that reason, and the scene's pieces are premultiplied in
+the shader after decoding.
+
 ### Pass Order
 
 `SceneRenderer::render` (`scene_renderer/render.rs`) records Passes 0 to 2b;
@@ -423,8 +467,8 @@ preview does not change").
 
 **Rendering**: the rays are drawn by the overlay ribbon store's pass onto the
 scene texture, first, before the bench figure's centre disc and segments, with
-`bench_track.wgsl`. Each is a segment in the rays' orange, `(1.0, 0.647, 0.0)`
-in linear light at alpha 0.6, the orange of the frustum highlights, 0.75 points
+`bench_track.wgsl`. Each is a segment in the rays' orange, sRGB `(255, 165, 0)`
+at alpha 153 (0.6), the orange of the frustum highlights, 0.75 points
 to either side (`TRACK_RAY_HALF_WIDTH`), anti-aliased over about a point as the
 other overlays are. Its flags are `HOLD` with no pull toward the eye: where the
 scene hides it, it is drawn at `BEHIND_OPACITY`, so a ray going into the scene

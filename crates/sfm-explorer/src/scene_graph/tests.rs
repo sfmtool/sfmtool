@@ -1869,6 +1869,25 @@ fn an_untinted_node_writes_the_original_colors_convention() {
     assert_eq!(tint.rgb(), Some(TINT_PALETTE[0].rgb));
 }
 
+/// A tint's colour reaches the shaders in linear light, the light they mix in,
+/// so the sRGB scene target encodes a fully tinted colour back to the palette
+/// entry's own bytes.
+#[test]
+fn a_tint_reaches_the_shaders_in_linear_light() {
+    use egui::ecolor::gamma_u8_from_linear_f32;
+    for entry in &TINT_PALETTE {
+        let uniform = NodeTint::Tint(entry).to_uniform();
+        let encoded = [0, 1, 2].map(|k| gamma_u8_from_linear_f32(uniform[k]));
+        assert_eq!(encoded, entry.rgb, "{}", entry.name);
+        // A channel strictly between 0 and 255 is darker in linear light.
+        for (linear, byte) in uniform.iter().zip(entry.rgb) {
+            if byte > 0 && byte < 255 {
+                assert!(*linear < f32::from(byte) / 255.0, "{}", entry.name);
+            }
+        }
+    }
+}
+
 /// The palette is meant to be told apart at a glance, so no two entries may be
 /// near-identical — and none of them may be the background this viewer paints
 /// on, which is what an eighth, black Okabe–Ito entry would have amounted to.

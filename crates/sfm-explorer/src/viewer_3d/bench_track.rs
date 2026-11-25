@@ -148,9 +148,10 @@ pub(crate) struct Stroke {
     pub(crate) a: [f32; 4],
     /// The other.
     pub(crate) b: [f32; 4],
-    /// The bench violet this stroke carries, its channels over 255 -- the
-    /// convention every pass in this renderer states its colours in.
-    pub(crate) color: [f32; 4],
+    /// The bench violet this stroke carries, as sRGB-encoded bytes with
+    /// straight alpha: a colour held as bytes is sRGB-encoded, and the pass
+    /// decodes it into linear light where it unpacks it.
+    pub(crate) color: [u8; 4],
 }
 
 /// One barb of the normal's arrowhead, which the pass turns to face the eye.
@@ -172,7 +173,7 @@ pub(crate) struct Barb {
     /// the shaft.
     pub(crate) tan_angle: f32,
     /// The colour, on [`Stroke::color`]'s convention.
-    pub(crate) color: [f32; 4],
+    pub(crate) color: [u8; 4],
 }
 
 /// The patch's normal: its segment and its arrowhead's two barbs.
@@ -191,7 +192,7 @@ pub(crate) struct DiscVertex {
     /// Where, `(xyz, w)`, on [`Stroke`]'s convention.
     pub(crate) at: [f32; 4],
     /// The colour, on [`Stroke::color`]'s convention.
-    pub(crate) color: [f32; 4],
+    pub(crate) color: [u8; 4],
 }
 
 /// One observation's mark: where that photograph sees the patch's centre.
@@ -372,7 +373,7 @@ fn disc(
     patch_frame: &OrientedPatch,
     radius: f64,
     place: &impl Fn(Vector3<f64>) -> [f32; 4],
-    color: [f32; 4],
+    color: [u8; 4],
 ) -> Vec<DiscVertex> {
     let centre = DiscVertex {
         at: place(patch_frame.center.coords),
@@ -396,7 +397,7 @@ fn circle(
     at: Vector3<f64>,
     radius: f64,
     place: &impl Fn(Vector3<f64>) -> [f32; 4],
-    color: [f32; 4],
+    color: [u8; 4],
 ) -> Vec<Stroke> {
     let rim: Vec<[f32; 4]> = ring(patch_frame, at, radius)
         .into_iter()
@@ -884,15 +885,10 @@ fn in_triangle(p: Pos2, a: Pos2, b: Pos2, c: Pos2) -> bool {
     !(sides.iter().any(|s| *s < 0.0) && sides.iter().any(|s| *s > 0.0))
 }
 
-/// One of the bench's violets as the pass takes it.
-fn rgba(color: Color32) -> [f32; 4] {
-    let [r, g, b, a] = color.to_array();
-    [
-        f32::from(r) / 255.0,
-        f32::from(g) / 255.0,
-        f32::from(b) / 255.0,
-        f32::from(a) / 255.0,
-    ]
+/// One of the bench's violets as the pass takes it: its sRGB-encoded bytes
+/// with straight alpha, which the shader decodes into linear light.
+fn rgba(color: Color32) -> [u8; 4] {
+    color.to_srgba_unmultiplied()
 }
 
 /// Crate-visible: the pass's own tests upload the figures these build.
