@@ -26,8 +26,9 @@ struct EdlUniforms {
 @group(0) @binding(3) var<uniform> edl: EdlUniforms;
 
 // The 3D view's background in linear light, BG_COLOR in gpu_types.rs: the
-// clear colour, which the sRGB target shows as (30, 30, 35).
-const BACKGROUND_COLOR: vec3<f32> = vec3<f32>(0.013, 0.013, 0.017);
+// clear colour.
+// sRGB (30, 30, 35)
+const BACKGROUND_COLOR: vec3<f32> = vec3<f32>(0.012983, 0.012983, 0.016807);
 // The luminance of linear light, ITU-R BT.709.
 const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 // The grey a dark point's silhouette is shaded toward, in linear light: what a

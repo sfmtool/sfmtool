@@ -482,9 +482,9 @@ pub(super) struct TargetIndicatorUniforms {
 /// EDL pass's `BACKGROUND_COLOR` names to decide whether a point is darker than
 /// the background.
 pub(super) const BG_COLOR: wgpu::Color = wgpu::Color {
-    r: 0.013,
-    g: 0.013,
-    b: 0.017,
+    r: 0.012983,
+    g: 0.012983,
+    b: 0.016807,
     a: 1.0,
 };
 

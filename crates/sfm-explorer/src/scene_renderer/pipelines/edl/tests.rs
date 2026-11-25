@@ -13,7 +13,7 @@ use super::super::tests::srgb_to_linear_reference;
 const SHADER: &str = include_str!("../../../shaders/edl.wgsl");
 
 // The WGSL constants, as the pinned lines declare them.
-const BACKGROUND_COLOR: [f32; 3] = [0.013, 0.013, 0.017];
+const BACKGROUND_COLOR: [f32; 3] = [0.012983, 0.012983, 0.016807];
 const LUMINANCE_WEIGHTS: [f32; 3] = [0.2126, 0.7152, 0.0722];
 const RIM_LIGHT: [f32; 3] = [0.1, 0.1, 0.1];
 const RIM_LIGHT_FROM: f32 = 1.0;
@@ -88,7 +88,7 @@ fn the_edl_shader_declares_the_rim_this_module_mirrors() {
     );
     for line in [
         background.as_str(),
-        "const BACKGROUND_COLOR: vec3<f32> = vec3<f32>(0.013, 0.013, 0.017);",
+        "const BACKGROUND_COLOR: vec3<f32> = vec3<f32>(0.012983, 0.012983, 0.016807);",
         "const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);",
         "const RIM_LIGHT: vec3<f32> = vec3<f32>(0.1, 0.1, 0.1);",
         "const RIM_LIGHT_FROM: f32 = 1.0;",

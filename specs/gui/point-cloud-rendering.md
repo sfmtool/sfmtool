@@ -417,7 +417,7 @@ These choices are deliberate:
 | `opacity` | 1.0 (`EDL_OPACITY`) | — | How much of the shade a point pixel takes |
 | `radius` | 2.4 | "EDL width" slider, 0.5–8 px (viewport HUD, Advanced) | Sampling distance in pixels |
 | `point_size` | auto | — | Normalizes depth differences |
-| `BACKGROUND_COLOR` | (0.013, 0.013, 0.017), linear | — | The background a point's luminance is compared with: `BG_COLOR`, sRGB (30, 30, 35) |
+| `BACKGROUND_COLOR` | (0.012983, 0.012983, 0.016807), linear | — | The background a point's luminance is compared with: `BG_COLOR`, sRGB (30, 30, 35) |
 | `RIM_LIGHT` | (0.1, 0.1, 0.1), linear | — | The grey a dark point's silhouette is shaded toward: sRGB (89, 89, 89) |
 | `RIM_LIGHT_FROM`, `RIM_LIGHT_TO` | 1, 4 | — | The band of the rim's fade, as multiples of the background's luminance |
 

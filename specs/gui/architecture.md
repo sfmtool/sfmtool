@@ -295,7 +295,8 @@ shader writes as linear and encodes it on write, and decodes a sample of an
   pipeline test checks each pair. Constants of 0 and 1 are the same in both
   spaces, so the selection's yellow and the hover's cyan are written as they
   are. A `wgpu::Color` clear value is linear too: the background's
-  (30, 30, 35) is cleared as `(0.013, 0.013, 0.017)`.
+  (30, 30, 35) is cleared as `(0.012983, 0.012983, 0.016807)`, and the EDL
+  pass's `BACKGROUND_COLOR` holds the same values.
 
 **The exception is the measurements' layer** (`MEASUREMENT_TARGET_FORMAT`,
 `Rgba8Unorm`), which egui composites over the scene as it composites its own
