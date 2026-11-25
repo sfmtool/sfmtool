@@ -135,8 +135,9 @@ Before rendering, each reconstruction's listed points are turned to their grown-
 the points in that reconstruction's column
 ([core/bench/refine-normals.md](../../core/bench/refine-normals.md) § "Python binding"). The
 run reads each point's patch frame and keypoints, so a `sift_files` reconstruction is converted
-to `embedded_patches` for it first (`SfmrReconstruction.to_embedded_patches` with its
-defaults). The strips render each turned point at its new normal; a point the run left
+to `embedded_patches` for it first (`SfmrReconstruction.to_embedded_patches` with
+`extent_value` set to the strips' half-extent of 2.5 feature sizes, the size their tiles are
+cut at, rather than the embedded-patch default of 7.5). The strips render each turned point at its new normal; a point the run left
 unchanged or refused keeps its stored normal, and so does every point of a reconstruction the
 run refuses as a whole, with a line naming the column and the refusal (`--strips: kept the
 reference normals as stored (…)`). The command then prints the run's mean agreement for each

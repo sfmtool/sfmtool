@@ -285,3 +285,58 @@ class TestInspectStripsRefinement:
             "(the reconstruction stores no keypoints)" in result.output
         )
         assert out.exists()
+
+
+class TestStripsConversionSize:
+    """The strips convert a ``sift_files`` reconstruction at their own working
+    size, a half-extent of 2.5 feature sizes (a full edge of 5), whatever the
+    embedded-patch default is."""
+
+    @staticmethod
+    def _half_extents(recon):
+        import numpy as np
+
+        cloud = recon.patches
+        return np.asarray([cloud[i].half_extent for i in range(len(cloud))])
+
+    def test_inspect_converts_at_the_strips_size(self, seoul_bull_workspace):
+        import numpy as np
+
+        from sfmtool.strips._inspect import _prepare_from_sift
+
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+        at_infinity = np.asarray(recon.point_is_at_infinity)
+        # No listed point, so the conversion is all that runs.
+        prepared, _ = _prepare_from_sift(recon, [], at_infinity)
+
+        expected = self._half_extents(recon.to_embedded_patches(extent_value=2.5))
+        np.testing.assert_array_equal(self._half_extents(prepared), expected)
+        default = self._half_extents(recon.to_embedded_patches())
+        assert not np.allclose(default, expected)
+
+    def test_compare_refine_converts_at_the_strips_size(
+        self, seoul_bull_workspace, monkeypatch
+    ):
+        import numpy as np
+
+        import sfmtool.bench as bench
+        from sfmtool.strips._solve import _SolveStrips
+
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+        engine = _SolveStrips(
+            recon, seoul_bull_workspace.parent, patch=32, extent_factor=2.5
+        )
+        # Stand-in for the normal step: record the value it is handed.
+        seen = {}
+
+        def record(value, images, **kwargs):
+            seen["recon"] = value
+            return value, {"points": [], "mean_agreement": float("nan")}
+
+        monkeypatch.setattr(bench, "refine_normals", record)
+        engine.refine([0])
+
+        expected = self._half_extents(recon.to_embedded_patches(extent_value=2.5))
+        np.testing.assert_array_equal(self._half_extents(seen["recon"]), expected)
+        default = self._half_extents(recon.to_embedded_patches())
+        assert not np.allclose(default, expected)
