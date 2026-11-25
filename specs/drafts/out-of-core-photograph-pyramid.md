@@ -384,7 +384,13 @@ two files:
   514 px regions of one of the user's 16320 x 12240 photographs (4:2:0, interval
   4 MCUs), among them all four corners and the centre, took 0.9 to 2.6 ms each,
   every pixel equal to `read_rgb`; `OriginalRegions::from_bytes`, the region
-  test and the index of its 195,075 intervals, took 10 to 12 ms.
+  test and the index of its 195,075 intervals, took 10 to 12 ms. Those
+  regions were one frame each, which `jpeg-decoder` decodes on three threads
+  of its own, and inside a kernel that keeps every core busy the same decode
+  took about 200 ms (open question 21); since then a region is decoded in
+  strips of frames no wider than 128 px, which it decodes on the calling
+  thread, about 13 ms a 514 px tile on one idle thread
+  ([core/camera/mipmaps.md § "A region of a region-readable original"](../core/camera/mipmaps.md#a-region-of-a-region-readable-original)).
 - **Every other original** is read from its `-mip0`, by the tile decode of
   a mip level file above, and never from the original.
 

@@ -482,6 +482,27 @@ is padded and upsampled as in the whole decode. Since the frame starts on a
 multiple of 8 px, the scalar part of each line then falls on the same pixels
 in both decodes. A grey original needs none of this, and takes the same path.
 
+**Strips no wider than 128 px.** `jpeg-decoder` 0.3.2 decodes a frame more
+than 128 px wide on one new OS thread per colour component, which the calling
+thread waits for (`select_worker` in its `decoder.rs`). A kernel keeps every
+core busy with its own threads, so those threads wait their turn to run: a
+514 px tile of a 16320 x 12240 original that decodes in about 3 ms on an idle
+machine took about 200 ms on average inside `sfm xform --refine-normals`. A
+region is therefore decoded as several frames, strips side by side, each at
+most 128 px wide (`DECODED_ON_THE_CALLING_THREAD`), which the decoder decodes
+on the calling thread. Each strip is a frame as above: it starts on an
+interval boundary, holds one MCU of margin on each side of the columns it
+gives unless it reaches the image's edge there, and stops at the one frame's
+right edge, so each of its pixels equals the whole decode's for the same
+reasons. Strips of an original whose interval is 64 px (4:2:0 with `R = 4`)
+give 64 px each from a 128 px frame, so a tile decodes about twice its pixels;
+one strip costs more than a share of the one wide frame, about 13 ms for a
+514 px tile on one idle thread, but a kernel's threads no longer wait on
+threads that cannot run. When the interval is too wide for 128 px frames to
+cover the columns with their margins (more than 64 px with MCUs 16 px wide,
+or 64 px with MCUs 8 px wide; rule 6 allows up to 1024 px), the region is one
+frame as wide as it needs, as before.
+
 `OriginalRegions::from_bytes` runs the region test, so it is made only for a
 region-readable original and its `Err` names the rule failed. A rectangle that
 is empty or not inside the image is an `ImageError::Parameter`, and intervals
@@ -550,7 +571,12 @@ MCUs that cross MCU rows and leave a short last interval, equal to the same
 pixels of `decode`; `decode` within one grey level of the decoder's own RGB;
 a damaged interval stale for the tiles that need it only; every region of
 synthetic originals of odd sizes at 4:2:0, 4:2:2, 4:4:0, 4:4:4 and grey equal
-to the same pixels of `read_rgb`; out-of-range rectangles refused; and every
+to the same pixels of `read_rgb`; a 514 px tile, inside the image and at its
+right edge, of originals with intervals of 48 and 64 px (4:2:0), 64 px
+(4:4:4) and 8 px (grey) decoded in several frames, none wider than 128 px and
+together at most about twice the tile's columns, equal to `read_rgb`, and a
+region of an original with 112 px intervals decoded in one frame; out-of-range
+rectangles refused; and every
 cut and many single-byte changes of both kinds of file an error, never a
 panic. [layout.rs](../../../crates/sfmtool-core/src/camera/mipmap/layout.rs) the
 levels by size, and
