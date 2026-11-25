@@ -1895,9 +1895,12 @@ mode.
   legible only from the image texture on its far plane; see the
   [GPU data layout](#gpu-data-layout-for-frustum-wireframes) open question for
   what an indicator would cost in the per-edge vertex format.
-- **Thumbnail loading is synchronous**, on the upload path. There is no
-  background decode thread for thumbnails, no LRU texture cache with a memory
-  budget, and a large reconstruction pays the decode cost at load time. The
+- **Thumbnail loading is synchronous**, on the upload path. There is no LRU
+  texture cache with a memory budget, and a large reconstruction pays the cost
+  of its rows at load time, in the open; only a row awaiting its photograph's
+  mipmap is read later, on the rayon pool
+  ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
+  loading"), and its cell written again. The
   background photograph is decoded off the GUI thread through the photograph
   cache ([Photograph background](#photograph-background)), but nothing loads
   the photographs of the cameras near the selected one ahead of time, and no
