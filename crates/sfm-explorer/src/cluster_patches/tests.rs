@@ -14,9 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
-use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::sampler::RegionPool;
-use sfmtool_core::camera::TiledPhotograph;
+use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions, TiledPhotograph};
 use sfmtool_core::features::cluster_match::{
     background_floor_clusters_from_neighbors, BackgroundFloorParams, NeighborTable,
 };
@@ -32,7 +31,8 @@ use sfmtool_core::progress::Progress;
 use super::{cluster_patches_path, CLUSTER_PATCHES_FILE_SUFFIX, INDEX_HASH_OPTION};
 use crate::index_files::IndexFileState;
 use crate::scene::ImageRef;
-use crate::sift_index::tests::{searchable, state_in};
+use crate::scene::ReconId;
+use crate::sift_index::tests::{searchable, searchable_with, state_in};
 use crate::state::AppState;
 
 /// Where the fixture's cluster-patches file goes.
@@ -131,30 +131,89 @@ fn a_build_writes_cluster_patches_that_read_current() {
     assert_eq!(data.metadata.cluster_count, Some(file.clusters as u32));
 }
 
+/// Write a photograph for every image of the node in place of the fixture's
+/// smooth ones, the size of its camera: a texture whose small patches pin a
+/// position, so the refinement measures the members rather than refusing
+/// them as unlocalizable, and its values depend on every level it reads.
+fn with_detailed_photographs(state: &AppState, id: ReconId) {
+    let recon = state.node(id).expect("loaded").recon();
+    for (index, image) in recon.image_set.images.iter().enumerate() {
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
+        let phase = index as f32;
+        let picture = image::RgbImage::from_fn(camera.width, camera.height, |x, y| {
+            let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+            let v = 127.0
+                + 45.0 * (0.11 * x + 0.06 * y + phase).sin()
+                + 20.0 * (0.17 * x + 0.13 * y + 2.9).sin()
+                + 15.0 * (0.83 * x + 0.47 * y + 0.2).sin()
+                + 12.0 * (-0.52 * x + 0.88 * y + 1.1).sin()
+                + 10.0 * (0.61 * x - 0.71 * y + 2.3).sin();
+            let v = v.clamp(0.0, 255.0) as u8;
+            image::Rgb([v, v / 2 + 64, 255 - v])
+        });
+        picture
+            .save(recon.workspace_dir.join(&image.name))
+            .expect("the photograph is written");
+    }
+}
+
 /// The file the build writes holds what `sfm match --cluster` over the index
-/// and then `sfm cluster-patches` write, array for array.
+/// and then `sfm cluster-patches` write, array for array, with the
+/// photographs in core.
+#[test]
+fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_the_file_holds_what_the_two_cli_steps_make(dir.path());
+}
+
+/// The same, with every photograph out of core: the build and
+/// `sfm cluster-patches` read the same stored levels, so they refine the same
+/// members to the same values.
+#[test]
+fn the_file_holds_what_the_two_cli_steps_make_with_the_photographs_out_of_core() {
+    let dir = tempfile::tempdir().unwrap();
+    // A side over 64 px puts a photograph out of core.
+    std::fs::write(
+        dir.path()
+            .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
+        r#"{"version": 2, "mipmap_options": {"out_of_core_long_side": 64,
+        "jpeg_quality": 95, "full_resolution_jpeg_quality": 95}}"#,
+    )
+    .unwrap();
+    assert_the_file_holds_what_the_two_cli_steps_make(dir.path());
+    let mipmaps = dir
+        .path()
+        .join(sfmtool_core::camera::mipmap::MIPMAP_DIR_NAME);
+    assert!(
+        std::fs::read_dir(&mipmaps).is_ok_and(|mut files| files.next().is_some()),
+        "the photographs were read out of core, from their mipmaps"
+    );
+}
+
+/// Build the node's index files in `dir`, and compare the cluster-patches file
+/// with what the two CLI steps make.
 ///
 /// The expectation is derived here the way the two CLI steps derive it, not by
 /// calling the build's own functions: the self-join and the clustering as the
 /// `background_floor_clusters_kdf` binding ran them, the members' detections
 /// read from the `.sift` files as `sfm match --cluster` reads them, the
-/// photographs as `read_image_rgb` decodes them with the binding's pyramid
-/// depth, and the whole refinement in one call with the options
-/// `sfm cluster-patches` passes, rather than in batches.
+/// photographs read through a photograph cache of their own from the paths the
+/// file names, as `ImagePyramidSet.read` reads them for `sfm cluster-patches`,
+/// and the whole refinement in one call with the options `sfm cluster-patches`
+/// passes, rather than in batches.
 ///
-/// The photographs are the one exception: the expected pixels come from
-/// `ImageU8::read_rgb`, the same call the build makes, so this test cannot
-/// catch a difference in decoding or channel order between the viewer and the
-/// command line. `read_image_rgb` is the binding over `ImageU8::read_rgb`, and
-/// that it returns RGB is tested on the Python side, in
-/// `tests/rust_bindings/fileio/test_read_image_rust_bindings.py`
+/// The photographs are read through the same core cache the build reads them
+/// through, so this test cannot catch a difference in decoding or channel
+/// order between the viewer and the command line. That `read_image_rgb`, the
+/// decode of an in-core photograph, returns RGB is tested on the Python side,
+/// in `tests/rust_bindings/fileio/test_read_image_rust_bindings.py`
 /// (`test_rgba_keeps_a_png_alpha` and
 /// `test_the_contents_not_the_extension_choose_the_decoder`, which compare
-/// every pixel of a PNG with known colours).
-#[test]
-fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
-    let dir = tempfile::tempdir().unwrap();
-    let (state, id, _) = searchable(dir.path());
+/// every pixel of a PNG with known colours), and that `ImagePyramidSet.read`
+/// gives the kernel the pixels of `read_image_rgb` in
+/// `tests/rust_bindings/patches/test_image_pyramid_set_read_rust_bindings.py`.
+fn assert_the_file_holds_what_the_two_cli_steps_make(dir: &Path) {
+    let (state, id, _) = searchable_with(dir, with_detailed_photographs);
     let file = state.cluster_patches(id).expect("built").path.clone();
     let built = sfmtool_matches_format::read_matches(&file).expect("a readable file");
     let recon = state.node(id).expect("loaded").recon();
@@ -232,16 +291,21 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
     assert_eq!(got.member_features, clusters.member_features);
     assert_eq!(built.feature_counts.to_vec(), counts);
 
-    // `sfm cluster-patches`: the photographs as `read_image_rgb` decodes them,
-    // the detections scattered to their rows, one refinement call.
-    let photographs: Vec<TiledPhotograph> = recon
+    // `sfm cluster-patches`: the photographs through a cache of its own, the
+    // detections scattered to their rows, one refinement call.
+    let paths: Vec<PathBuf> = recon
         .image_set
         .images
         .iter()
-        .map(|image| {
-            let src = ImageU8::read_rgb(&recon.workspace_dir.join(&image.name)).unwrap();
-            TiledPhotograph::from_image(src)
-        })
+        .map(|image| recon.workspace_dir.join(&image.name))
+        .collect();
+    let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+    let (found, _) = PhotographCache::new(PhotographCacheOptions::default())
+        .get_many(&paths, &Progress::none())
+        .unwrap();
+    let photographs: Vec<TiledPhotograph> = found
+        .into_iter()
+        .map(|photograph| Arc::unwrap_or_clone(photograph.expect("readable")))
         .collect();
     let mut positions: Vec<Array2<f32>> = counts
         .iter()
@@ -304,6 +368,13 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
     );
 
     let patches = built.cluster_patches.as_ref().expect("cluster patches");
+    // The comparison reads pixels: some member was measured against its
+    // reference.
+    assert!(
+        result.member_zncc.iter().any(|zncc| zncc.is_finite()),
+        "a member measured, among {:?}",
+        result.member_status
+    );
     assert_eq!(patches.reference_members.to_vec(), result.reference_members);
     let status: Vec<u8> = result.member_status.iter().map(|&s| s as u8).collect();
     assert_eq!(patches.member_status.to_vec(), status);

@@ -5,14 +5,16 @@
 //! the `PhotographCache` class, which a script or command holds so that its
 //! calls share one build count, through which it reads a photograph's layout
 //! (`PhotographLayout`) and the levels, tiles and regions every kernel
-//! samples, and makes the mipmaps of out-of-core photographs; and
+//! samples, and makes the mipmaps of out-of-core photographs;
 //! `check_mipmaps` and `prune_mipmaps`, which check the mipmaps of
 //! photographs and delete a mipmap directory's orphan files, as
-//! `sfm ws mipmaps --check` and `--prune` do.
+//! `sfm ws mipmaps --check` and `--prune` do; and [`get_photographs`], the
+//! read behind `ImagePyramidSet.read`.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use numpy::{IntoPyArray, PyArray3};
@@ -29,6 +31,7 @@ use sfmtool_core::camera::photograph_cache::{default_budget_bytes, default_build
 use sfmtool_core::camera::sampler::LevelRect;
 use sfmtool_core::camera::{
     GetError, PhotographCache, PhotographCacheOptions, PhotographLayout, TileError, TileKey,
+    TiledPhotograph,
 };
 use sfmtool_core::progress::{Cancelled, Event, Progress};
 
@@ -186,7 +189,7 @@ impl PyPhotographLayout {
 ///     ValueError: for a negative budget.
 #[pyclass(name = "PhotographCache", module = "sfmtool.photographs", frozen)]
 pub struct PyPhotographCache {
-    inner: PhotographCache,
+    pub(crate) inner: PhotographCache,
 }
 
 #[pymethods]
@@ -603,6 +606,44 @@ fn check_mipmaps_py(
     dict.set_item("in_core", report.in_core)?;
     dict.set_item("failed", pairs(py, report.failed)?)?;
     Ok(dict.into_any().unbind())
+}
+
+/// The photographs at `paths`, in order, read through `cache`'s `get_many`
+/// as the viewer reads them: each holds no pixel and reads its tiles through
+/// the cache, which decodes an in-core photograph again for a tile it has
+/// evicted, and an out-of-core photograph's mipmap is made first when it is
+/// missing or stale. `progress` is set to the mipmaps made; the GIL is
+/// released and Ctrl+C raises `KeyboardInterrupt`, as for [`run_watched`].
+///
+/// A path `get_many` could not answer is asked of `get`, which answers why
+/// from the failure the cache remembered, and raises as [`get_err`] says,
+/// naming the path.
+pub(crate) fn get_photographs(
+    py: Python<'_>,
+    cache: &PhotographCache,
+    paths: &[PathBuf],
+    progress: Option<&ProgressCounter>,
+) -> PyResult<Vec<TiledPhotograph>> {
+    let sink = mipmaps_into(progress);
+    let photographs = run_watched(py, &sink, |progress| {
+        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        let (found, _) = cache.get_many(&paths, progress)?;
+        let photographs = found
+            .into_iter()
+            .zip(&paths)
+            .map(|(photograph, path)| match photograph {
+                Some(photograph) => Ok(photograph),
+                None => cache.get(path, progress),
+            })
+            // A clone copies no pixel: it reads through the same cache.
+            .map(|photograph| photograph.map(Arc::unwrap_or_clone))
+            .collect::<Result<Vec<_>, _>>();
+        match photographs {
+            Err(GetError::Cancelled) => Err(Cancelled),
+            photographs => Ok(photographs),
+        }
+    })?;
+    photographs.map_err(get_err)
 }
 
 /// Delete the orphan files of the mipmap directories that hold the mipmaps

@@ -435,8 +435,12 @@ writing a file with both sections, the node's images in its order and the
 index's content hash, that reads current; **the file equalling, array for array
 and bit for bit, the two command-line steps re-derived independently from the
 same index and photographs** -- the self-join and clustering as the binding ran
-them, the detections read from the `.sift` files, the refinement in one call
-with the options `sfm cluster-patches` passes; each staleness cause with its
+them, the detections read from the `.sift` files, the photographs read through
+a cache of their own as `sfm cluster-patches` reads them, the refinement in one
+call with the options it passes -- with photographs whose patches pin a
+position, so members are measured, both in core and out of core (a workspace
+whose `mipmap_options` threshold is 64 px, the two reading the same stored
+levels); each staleness cause with its
 own sentence -- a stale index, another index open, no index open, a version
 that removes an image, a file over other images, a clusters file with no
 patches section; the look at an absent file being silent and remembered, and a
