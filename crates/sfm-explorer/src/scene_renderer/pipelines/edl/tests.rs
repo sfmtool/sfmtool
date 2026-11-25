@@ -7,7 +7,9 @@
 //! one by one and mirrored here in `f32`, the precision the shader computes in,
 //! and the mirror is checked at known colours.
 
-use super::super::super::gpu_types::{BG_COLOR, EDL_OPACITY, EDL_STRENGTH};
+use super::super::super::gpu_types::{
+    edl_rim_light, EdlUniforms, BG_COLOR, EDL_OPACITY, EDL_STRENGTH,
+};
 use super::super::tests::srgb_to_linear_reference;
 
 const SHADER: &str = include_str!("../../../shaders/edl.wgsl");
@@ -43,16 +45,26 @@ fn rim_light_weight(rgb: [f32; 3]) -> f32 {
     )
 }
 
-/// `edl_shade` in `edl.wgsl`, with the strength and opacity the viewer sets.
-/// `response` is (depth, empty).
+/// `edl_shade` in `edl.wgsl` over the plain background, with the strength
+/// and opacity the viewer sets. `response` is (depth, empty).
 fn edl_shade(premultiplied: [f32; 3], alpha: f32, response: [f32; 2]) -> [f32; 3] {
+    edl_shade_at(premultiplied, alpha, response, edl_rim_light(false))
+}
+
+/// `edl_shade` in `edl.wgsl` at a `rim_light` uniform.
+fn edl_shade_at(
+    premultiplied: [f32; 3],
+    alpha: f32,
+    response: [f32; 2],
+    rim_light: f32,
+) -> [f32; 3] {
     let shade = mix(
         1.0,
         (-(response[0] + response[1]) * EDL_STRENGTH).exp(),
         EDL_OPACITY,
     );
     let silhouette = 1.0 - mix(1.0, (-response[1] * EDL_STRENGTH).exp(), EDL_OPACITY);
-    let rim = rim_light_weight(premultiplied.map(|c| c / alpha)) * silhouette;
+    let rim = rim_light * rim_light_weight(premultiplied.map(|c| c / alpha)) * silhouette;
     [0, 1, 2].map(|k| premultiplied[k] * shade + RIM_LIGHT[k] * (rim * alpha))
 }
 
@@ -100,7 +112,7 @@ fn the_edl_shader_declares_the_rim_this_module_mirrors() {
         "return 1.0 - smoothstep(RIM_LIGHT_FROM * background, RIM_LIGHT_TO * background, luminance);",
         "let shade = mix(1.0, exp(-(response.x + response.y) * edl.strength), edl.opacity);",
         "let silhouette = 1.0 - mix(1.0, exp(-response.y * edl.strength), edl.opacity);",
-        "let rim = rim_light_weight(premultiplied / alpha) * silhouette;",
+        "let rim = edl.rim_light * rim_light_weight(premultiplied / alpha) * silhouette;",
         "return premultiplied * shade + RIM_LIGHT * (rim * alpha);",
         "response += edl_response(center_depth, inner_depth);",
         "response += edl_response(center_depth, outer_depth) * 0.5;",
@@ -235,4 +247,59 @@ fn a_dimmed_dark_points_rim_takes_its_alpha() {
             "{dimmed:?} against {full:?} at alpha {alpha}"
         );
     }
+}
+
+/// While the camera's photograph is behind the scene, the rim is off: the
+/// pass cannot read the photograph, and a dark point over it is shaded exactly
+/// as any point is, a crisp dark dot. Over the plain background it is on. The
+/// uniform is written from the same test that decides whether Pass 0 draws the
+/// photograph.
+#[test]
+fn the_rim_is_drawn_only_over_the_plain_background() {
+    assert_eq!(edl_rim_light(false), 1.0);
+    assert_eq!(edl_rim_light(true), 0.0);
+    let colour = linear([13, 12, 9]);
+    for alpha in [1.0, crate::filter_3d::DIM_ALPHA] {
+        let premultiplied = colour.map(|c| c * alpha);
+        for (depth, empty) in [(0.0, 1.0), (0.0, 0.5), (1.0, 0.5)] {
+            assert_eq!(
+                edl_shade_at(premultiplied, alpha, [depth, empty], edl_rim_light(true)),
+                darkened(premultiplied, depth + empty),
+                "alpha {alpha}, response ({depth}, {empty})"
+            );
+        }
+    }
+    let uniforms = include_str!("../../uniforms.rs");
+    let line = "rim_light: edl_rim_light(self.draws_background_photograph(in_camera_view)),";
+    assert!(
+        uniforms.lines().any(|l| l.trim() == line),
+        "uniforms.rs does not write `{line}`"
+    );
+    let render = include_str!("../../render.rs");
+    let line = "let has_bg_image = self.draws_background_photograph(in_camera_view);";
+    assert!(
+        render.lines().any(|l| l.trim() == line),
+        "render.rs does not decide Pass 0 by `{line}`"
+    );
+}
+
+/// `rim_light` follows `time` in both declarations of the EDL uniforms, so the
+/// shader reads it from the bytes the viewer writes it to, and the block stays
+/// the 64 bytes the buffer is made with.
+#[test]
+fn the_edl_uniforms_carry_the_rim_light_where_the_shader_reads_it() {
+    let fields: Vec<&str> = SHADER
+        .lines()
+        .skip_while(|l| l.trim() != "struct EdlUniforms {")
+        .skip(1)
+        .take_while(|l| l.trim() != "}")
+        .map(|l| l.trim().split(':').next().unwrap_or(""))
+        .collect();
+    assert_eq!(fields.last(), Some(&"rim_light"), "{fields:?}");
+    assert_eq!(fields[fields.len() - 2], "time", "{fields:?}");
+    // screen_size, four scalars, target_view_pos, five scalars and time end
+    // at byte 56, where rim_light sits; the block is padded to 64.
+    assert_eq!(std::mem::offset_of!(EdlUniforms, time), 52);
+    assert_eq!(std::mem::offset_of!(EdlUniforms, rim_light), 56);
+    assert_eq!(std::mem::size_of::<EdlUniforms>(), 64);
 }

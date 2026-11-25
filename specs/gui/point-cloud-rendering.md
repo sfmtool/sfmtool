@@ -368,7 +368,7 @@ point splat pass. For each point pixel:
    ```
 5. Shade the pixel's colour `c` (premultiplied by its alpha `a`):
    ```
-   shaded = c * shade + RIM_LIGHT * (rim_light_weight(c / a) * silhouette * a)
+   shaded = c * shade + RIM_LIGHT * (rim_light * rim_light_weight(c / a) * silhouette * a)
    ```
 
 `rim_light_weight` is 1 for a point whose luminance (BT.709 weights on its
@@ -380,6 +380,9 @@ hover's cyan and the brush's reds among them, is drawn as it is without the
 rim. A point of weight 1 at a silhouette with every neighbour empty mixes
 halfway from its colour toward `RIM_LIGHT`: the near-black point above reaches
 about (64, 64, 64) at the edge of a lone dot, and less further in.
+`rim_light` is 1 while the scene is drawn over the plain background and 0
+while the camera's photograph is behind it, which leaves `c * shade` for every
+point.
 
 These choices are deliberate:
 
@@ -401,13 +404,18 @@ These choices are deliberate:
 - **The rim takes the pixel's alpha.** A point the Track Table's filter dims
   keeps its `DIM_ALPHA` at the rim as it does inside, and the shade is computed
   before the supernova brightening, which adds to it as it does to any point.
-- **In camera view the background is still `BACKGROUND_COLOR`.** The EDL pass
-  writes onto the photograph it composites over and cannot read it, so it
-  cannot compare a point with the photograph behind it. A dark point over a
-  bright part of the photograph keeps a light rim; the rim lies within the
-  point's own pixels, so it softens the dot's edge without covering the
-  photograph, and over a dark part of the photograph or the pillarbox bars it
-  keeps the point visible.
+- **No rim is drawn while the camera's photograph is behind the scene.** The
+  rim is there to separate a dark point from the plain `BACKGROUND_COLOR`. In
+  a camera view whose photograph Pass 0 draws, what is behind a point is the
+  photograph, which the EDL pass writes onto and cannot read. A grey rim there
+  turns a crisp dark dot over a bright part of the photograph into one whose
+  edge blends into it, so the pass draws every point as it does without the
+  rim. The uniform `rim_light` carries this: `edl_rim_light` in `gpu_types.rs`
+  makes it 0 when `SceneRenderer::draws_background_photograph`, the same test
+  that decides whether Pass 0 runs, holds, and 1 otherwise. It is one value
+  for the whole frame, so a dark point over the plain letterbox or pillarbox
+  bars of such a view gets no rim either; a camera view without a photograph
+  to draw keeps the rim.
 
 ### Parameters
 
@@ -415,6 +423,7 @@ These choices are deliberate:
 |-----------|---------|------------|--------|
 | `strength` | 0.7 (`EDL_STRENGTH`) | — | Controls how dark the edges get |
 | `opacity` | 1.0 (`EDL_OPACITY`) | — | How much of the shade a point pixel takes |
+| `rim_light` | 1, or 0 over the photograph | — | Whether a dark point's silhouette takes the rim: `edl_rim_light` of whether Pass 0 drew the camera's photograph |
 | `radius` | 2.4 | "EDL width" slider, 0.5–8 px (viewport HUD, Advanced) | Sampling distance in pixels |
 | `point_size` | auto | — | Normalizes depth differences |
 | `BACKGROUND_COLOR` | (0.012983, 0.012983, 0.016807), linear | — | The background a point's luminance is compared with: `BG_COLOR`, sRGB (30, 30, 35) |

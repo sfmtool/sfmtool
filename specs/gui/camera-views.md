@@ -866,7 +866,8 @@ rendered.
   - Point pixels (`depth > 0`): apply EDL shading and supernova, then
     output `vec4(edl_shade(color.rgb, alpha, response) + supernova * alpha, alpha)`,
     where `edl_shade` is the premultiplied colour times the shade plus a dark
-    point's rim times its alpha
+    point's rim times its alpha, a rim the pass leaves out while this
+    photograph is drawn
     ([point-cloud-rendering.md](point-cloud-rendering.md#algorithm) §
     "Algorithm").
     The blend hardware adds `background × (1 − alpha)`, reproducing the

@@ -143,6 +143,7 @@ impl SceneRenderer {
         patch_opacity: f32,
         patch_alpha_cutoff: f32,
         pixels_per_point: f32,
+        in_camera_view: bool,
     ) {
         // Whether this frame records the hidden-outline pass, read from the same
         // selection and hover the patch uniforms below carry.
@@ -287,7 +288,8 @@ impl SceneRenderer {
                 aspect: aspect as f32,
                 target_radius,
                 time,
-                _pad: [0.0; 2],
+                rim_light: edl_rim_light(self.draws_background_photograph(in_camera_view)),
+                _pad: 0.0,
             };
 
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));

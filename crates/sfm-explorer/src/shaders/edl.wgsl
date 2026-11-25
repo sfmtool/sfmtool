@@ -18,6 +18,7 @@ struct EdlUniforms {
     aspect: f32,
     target_radius: f32,
     time: f32,
+    rim_light: f32,              // 1 over the plain background, 0 over the camera's photograph
 }
 
 @group(0) @binding(0) var color_tex: texture_2d<f32>;
@@ -95,11 +96,12 @@ fn rim_light_weight(rgb: vec3<f32>) -> f32 {
 // point is multiplied by the shade of its whole response. A dark point also
 // takes RIM_LIGHT by as much as its empty neighbours alone would darken it, so
 // its silhouette mixes toward the grey rather than toward black. A point of
-// weight 0 is shaded exactly as it is without the rim.
+// weight 0 is shaded exactly as it is without the rim, and so is every point
+// while edl.rim_light is 0: the rim is drawn only over the plain background.
 fn edl_shade(premultiplied: vec3<f32>, alpha: f32, response: vec2<f32>) -> vec3<f32> {
     let shade = mix(1.0, exp(-(response.x + response.y) * edl.strength), edl.opacity);
     let silhouette = 1.0 - mix(1.0, exp(-response.y * edl.strength), edl.opacity);
-    let rim = rim_light_weight(premultiplied / alpha) * silhouette;
+    let rim = edl.rim_light * rim_light_weight(premultiplied / alpha) * silhouette;
     return premultiplied * shade + RIM_LIGHT * (rim * alpha);
 }
 

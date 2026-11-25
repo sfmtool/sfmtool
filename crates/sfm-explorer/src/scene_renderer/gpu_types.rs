@@ -510,7 +510,21 @@ pub(super) struct EdlUniforms {
     pub(crate) aspect: f32,
     pub(crate) target_radius: f32,
     pub(crate) time: f32,
-    pub(crate) _pad: [f32; 2],
+    /// [`edl_rim_light`] of whether the camera's photograph is behind the scene.
+    pub(crate) rim_light: f32,
+    pub(crate) _pad: f32,
+}
+
+/// The EDL pass's `rim_light`: 1 when the scene is drawn over the plain
+/// [`BG_COLOR`], so a point darker than it takes a light rim, and 0 while Pass
+/// 0 has drawn the camera's photograph behind the scene. The pass cannot read
+/// the photograph, and a dark point over it is shaded as any point is.
+pub(super) const fn edl_rim_light(draws_background_photograph: bool) -> f32 {
+    if draws_background_photograph {
+        0.0
+    } else {
+        1.0
+    }
 }
 
 #[repr(C)]
