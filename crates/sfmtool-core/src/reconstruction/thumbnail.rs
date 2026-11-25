@@ -316,7 +316,8 @@ pub enum NotCurrentMipmap {
 /// photograph tile on a side; its row differs slightly from one made from
 /// level 0, and is for display only. When its mipmap is missing or stale,
 /// `not_current` says whether to make it first or to decode the original
-/// whole. SfM Explorer's open and `sfm web-export` both fill a missing
+/// whole. One whose mipmap cannot be made or read, or whose workspace file
+/// cannot be read, is decoded whole too. SfM Explorer's open and `sfm web-export` both fill a missing
 /// column with this, so the two show the same picture of a photograph whose
 /// mipmap is current.
 ///

@@ -50,7 +50,8 @@ export writes its thumbnails once, so for such a photograph whose mipmap is
 missing or stale it makes the mipmap first, through the photograph cache the
 patch bitmap render reads with, writing its files into the workspace, and then
 reads the row from it (`NotCurrentMipmap::Make`): the row SfM Explorer shows
-once that mipmap is made.
+once that mipmap is made. When the mipmap cannot be made or read, the row is
+the whole decode's.
 
 **Patch bitmaps come from the file** when it carries them. A file with patch
 frames and inline keypoints but no bitmaps has them rendered from its
