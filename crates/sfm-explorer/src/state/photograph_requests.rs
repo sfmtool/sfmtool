@@ -52,11 +52,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::GetError;
 use sfmtool_core::camera::{
     CoarsestLevel, PeekedLayout, PeekedTile, PhotographCache, PhotographReadError, PhotographTile,
     PyramidLayout, TileError, TileKey, TiledPhotograph, TryDecode,
 };
 use sfmtool_core::progress::Progress;
+use sfmtool_core::workspace::WorkspaceConfigError;
 
 use super::build_mipmaps::MipmapList;
 
@@ -80,6 +82,12 @@ pub(crate) enum DisplayLayout {
     Building(Option<Arc<CoarsestLevel>>),
     /// The file could not be read or decoded.
     Unreadable,
+    /// The photograph's workspace file cannot be read, or its
+    /// `mipmap_options` is invalid, so the cache refuses every photograph of
+    /// that workspace ([`GetError::Workspace`]); the error names the file
+    /// and the key. Image Detail says so; the other panels draw it as they
+    /// draw [`DisplayLayout::Unreadable`].
+    WorkspaceFileError(WorkspaceConfigError),
 }
 
 /// What a panel has for one photograph tile on this frame.
@@ -109,6 +117,11 @@ pub(crate) enum DisplayTileSet {
 /// "The photograph could not be read: " or a sentence like it.
 pub(crate) const UNREADABLE_PHOTOGRAPH: &str = "the file could not be read or decoded";
 
+/// What a panel says, with a spinner, in place of a picture of an
+/// out-of-core photograph whose mipmap *Build mipmaps* is making
+/// ([`DisplayLayout::Building`]).
+pub(crate) const BUILDING_MIPMAP_LABEL: &str = "Building mipmap…";
+
 /// What a panel's render from its photograph's tiles gave on this frame.
 pub(crate) enum PeekedRead<T> {
     /// The render ran on a photograph made of the tiles it needs.
@@ -116,7 +129,13 @@ pub(crate) enum PeekedRead<T> {
     /// The layout or some of the tiles are being read on a worker. A repaint
     /// follows.
     Loading,
-    /// The photograph could not be read or decoded.
+    /// An out-of-core photograph whose mipmap is missing or stale
+    /// ([`DisplayLayout::Building`]): none of its tiles is asked for, and
+    /// the picture draws a spinner with [`BUILDING_MIPMAP_LABEL`] until the
+    /// run of *Build mipmaps* that makes the mipmap ends, with a repaint.
+    Building,
+    /// The photograph could not be read or decoded, or its workspace file
+    /// refuses it.
     Unreadable,
 }
 
@@ -179,6 +198,72 @@ fn file_stamp(path: &Path) -> FileStamp {
         .map(|m| (m.len(), m.modified().ok()))
 }
 
+/// A photograph a read, a decode or a build found could not be read.
+struct Failure {
+    /// The file whose change makes the photograph worth asking for again:
+    /// the photograph's own, or the workspace file that refused it.
+    watched: PathBuf,
+    /// The stamp `watched` had then.
+    stamp: FileStamp,
+    /// The workspace file's error, when the photograph's workspace file
+    /// refused it ([`GetError::Workspace`]), which Image Detail says.
+    workspace: Option<WorkspaceConfigError>,
+}
+
+/// `path`'s refusal by its workspace file, when the layout the cache
+/// answers for it after a read is one: the file's error, and the stamp the
+/// workspace file had before a second read that found the refusal still
+/// there. Taking the stamp before that read, rather than after the first,
+/// means a file fixed while the first read ran is not kept as refused with
+/// the fixed file's stamp, which no later check would find changed. Reads
+/// the header again, so it runs off the GUI thread.
+fn confirmed_refusal(
+    cache: &PhotographCache,
+    path: &Path,
+) -> Option<(WorkspaceConfigError, FileStamp)> {
+    let PeekedLayout::Unreadable(GetError::Workspace(e)) = cache.layout(path) else {
+        return None;
+    };
+    let stamp = file_stamp(workspace_file(&e));
+    cache.request_layout(path);
+    match cache.layout(path) {
+        PeekedLayout::Unreadable(GetError::Workspace(e)) => Some((e, stamp)),
+        _ => None,
+    }
+}
+
+/// For a decode its workspace file refused, that refusal as a second read
+/// of the header confirms it ([`confirmed_refusal`]), or `None` when that
+/// read no longer finds it, as when the file was fixed while the decode
+/// ran. Reads the header only for such a refusal, so it runs off the GUI
+/// thread.
+fn decode_refusal<T>(
+    cache: &PhotographCache,
+    path: &Path,
+    answer: &Result<T, TileError>,
+) -> Option<(WorkspaceConfigError, FileStamp)> {
+    if !matches!(
+        answer,
+        Err(TileError::Unreadable {
+            why: GetError::Workspace(_),
+            ..
+        })
+    ) {
+        return None;
+    }
+    cache.request_layout(path);
+    confirmed_refusal(cache, path)
+}
+
+/// The workspace file `e` is an error of.
+fn workspace_file(e: &WorkspaceConfigError) -> &Path {
+    match e {
+        WorkspaceConfigError::Io { path, .. }
+        | WorkspaceConfigError::Json { path, .. }
+        | WorkspaceConfigError::MipmapOptions { path, .. } => path,
+    }
+}
+
 /// A task to run off the GUI thread.
 type Task = Box<dyn FnOnce() + Send>;
 
@@ -220,7 +305,7 @@ struct TileRequests {
     /// than a bound would decode them in turn and repaint for ever. The cache
     /// remembers no failure under a budget of 0, so this is then the only
     /// memory of one.
-    failures: HashMap<PathBuf, FileStamp>,
+    failures: HashMap<PathBuf, Failure>,
     /// The level the last level task answered and the background has not
     /// taken: one level, since one background is drawn.
     level: Option<AnsweredLevel>,
@@ -234,29 +319,90 @@ impl TileRequests {
             .map(|(_, answered)| answered)
     }
 
-    /// The stamp `path`'s file had when its decode failed, if it failed.
-    fn failed(&self, path: &Path) -> Option<FileStamp> {
-        self.failures.get(path).copied()
+    /// Whether `path` failed.
+    fn has_failed(&self, path: &Path) -> bool {
+        self.failures.contains_key(path)
+    }
+
+    /// The file `path`'s failure watches and the stamp it had then, and
+    /// whether the photograph's workspace file refused it, if it failed.
+    fn failed(&self, path: &Path) -> Option<(PathBuf, FileStamp, bool)> {
+        self.failures.get(path).map(|failure| {
+            (
+                failure.watched.clone(),
+                failure.stamp,
+                failure.workspace.is_some(),
+            )
+        })
+    }
+
+    /// Remember that `path` could not be read, in place of any tiles answered
+    /// for it, with the photograph's stamp now, so it is asked for again once
+    /// the photograph changes. Stats the file, so it runs off the GUI thread.
+    fn remember_failure(&mut self, path: &Path) {
+        let stamp = file_stamp(path);
+        self.remember(path, None, stamp);
+    }
+
+    /// Remember that `path`'s workspace file refuses it with `e`, the file's
+    /// stamp having been `stamp` before the read that found the refusal
+    /// ([`confirmed_refusal`]), so a file fixed during that read is found
+    /// changed by the next check.
+    fn remember_refusal(&mut self, path: &Path, e: WorkspaceConfigError, stamp: FileStamp) {
+        self.remember(path, Some(e), stamp);
+    }
+
+    /// Keep `path`'s failure, watching the workspace file `workspace` names
+    /// or else the photograph, whose stamp was `stamp`, in place of any
+    /// tiles answered for it.
+    fn remember(&mut self, path: &Path, workspace: Option<WorkspaceConfigError>, stamp: FileStamp) {
+        self.answered.retain(|(p, _)| p != path);
+        let watched = workspace
+            .as_ref()
+            .map_or(path, workspace_file)
+            .to_path_buf();
+        self.failures.insert(
+            path.to_path_buf(),
+            Failure {
+                watched,
+                stamp,
+                workspace,
+            },
+        );
     }
 
     /// Keep what a decode of `path` that failed with `e` tells later frames.
     /// A cancelled decode tells nothing, and the next frame asks again. An
     /// unreadable photograph is remembered with its file's stamp, in place of
-    /// any tiles answered for it. A photograph whose mipmap was found not
-    /// current (`Changed`) is `Building` in the cache from then on, so the
-    /// next frame asks for none of its tiles and queues it for *Build
-    /// mipmaps*; the tiles answered for it are dropped, since they may be of
-    /// the files that changed. A key or a level the photograph does not have
+    /// any tiles answered for it. One its workspace file refused is
+    /// remembered with that file's error and stamp when `refusal`, a second
+    /// read's ([`decode_refusal`]), still finds the refusal, and otherwise
+    /// not at all, so the next frame asks again. A photograph whose mipmap
+    /// was found not current (`Changed`) is `Building` in the cache from then
+    /// on, so the next frame asks for none of its tiles and queues it for
+    /// *Build mipmaps*; the tiles answered for it are dropped, since they may
+    /// be of the files that changed. A key or a level the photograph does not have
     /// comes from a layout read before the file changed size: the cache
     /// forgets the path, so the next frame reads the header again rather than
     /// ask for the same pixels on every frame.
-    fn failed_with(&mut self, cache: &PhotographCache, path: &Path, e: TileError) {
+    fn failed_with(
+        &mut self,
+        cache: &PhotographCache,
+        path: &Path,
+        e: TileError,
+        refusal: Option<(WorkspaceConfigError, FileStamp)>,
+    ) {
         match e {
             TileError::Cancelled => {}
-            TileError::Unreadable { .. } => {
-                self.answered.retain(|(p, _)| p != path);
-                self.failures.insert(path.to_path_buf(), file_stamp(path));
+            TileError::Unreadable {
+                why: GetError::Workspace(_),
+                ..
+            } => {
+                if let Some((e, stamp)) = refusal {
+                    self.remember_refusal(path, e, stamp);
+                }
             }
+            TileError::Unreadable { .. } => self.remember_failure(path),
             TileError::Changed { .. } => self.answered.retain(|(p, _)| p != path),
             TileError::OutOfRange { .. } => cache.forget(path),
         }
@@ -381,11 +527,20 @@ impl PhotographRequests {
     /// Keep `path`, whose mipmap *Build mipmaps* could not make, as a failed
     /// read is kept: answered as unreadable, with its file's stamp, until
     /// the file changes, so a cache that remembers no failure is not asked
-    /// to make it again on every frame.
-    pub(super) fn failed_to_build(&self, path: &Path) {
+    /// to make it again on every frame. A build its workspace file refused,
+    /// as when the file broke after the photograph was queued, is found so
+    /// by reading the header again, since `get_many` answers no error and a
+    /// cache of budget 0 keeps none, and is kept as the header read keeps
+    /// one ([`confirmed_refusal`]): a workspace file error, watching that
+    /// file. Runs on the task's thread.
+    pub(super) fn failed_to_build(&self, cache: &PhotographCache, path: &Path) {
+        cache.request_layout(path);
+        let refusal = confirmed_refusal(cache, path);
         let mut tiles = lock(&self.tiles);
-        tiles.answered.retain(|(p, _)| p != path);
-        tiles.failures.insert(path.to_path_buf(), file_stamp(path));
+        match refusal {
+            Some((e, stamp)) => tiles.remember_refusal(path, e, stamp),
+            None => tiles.remember_failure(path),
+        }
     }
 
     /// Tell the test's hook the chunk a run of *Build mipmaps* has taken.
@@ -410,17 +565,24 @@ impl PhotographRequests {
     }
 
     /// Start reading `path`'s header into `cache` unless a read of it is
-    /// already running, and repaint `ctx` when it ends.
+    /// already running, and repaint `ctx` when it ends. A photograph its
+    /// workspace file refuses is remembered as a failure watching that file
+    /// ([`TileRequests::remember_refusal`]), since the cache answers its
+    /// layout so, without a stat, until the path is forgotten.
     fn request_layout(&self, cache: &Arc<PhotographCache>, path: &Path, ctx: &egui::Context) {
         if !lock(&self.layouts_in_flight).insert(path.to_path_buf()) {
             return;
         }
         let cache = Arc::clone(cache);
         let in_flight = Arc::clone(&self.layouts_in_flight);
+        let tiles = Arc::clone(&self.tiles);
         let path = path.to_path_buf();
         let ctx = ctx.clone();
         (self.spawn)(Box::new(move || {
             cache.request_layout(&path);
+            if let Some((e, stamp)) = confirmed_refusal(&cache, &path) {
+                lock(&tiles).remember_refusal(&path, e, stamp);
+            }
             lock(&in_flight).remove(&path);
             ctx.request_repaint();
         }));
@@ -446,6 +608,7 @@ impl PhotographRequests {
         (self.spawn)(Box::new(move || {
             let answer = cache.try_decode_tiles(&path, &keys, &Progress::none());
             let busy = matches!(answer, Ok(TryDecode::Busy));
+            let refusal = decode_refusal(&cache, &path, &answer);
             {
                 // One lock for the answer and the end of the flight, so a
                 // frame that finds the path no longer in flight finds its
@@ -458,7 +621,7 @@ impl PhotographRequests {
                     }
                     // Nothing was decoded, and the next frame asks again.
                     Ok(TryDecode::Busy) => {}
-                    Err(e) => tiles.failed_with(&cache, &path, e),
+                    Err(e) => tiles.failed_with(&cache, &path, e, refusal),
                 }
                 tiles.in_flight.remove(&path);
             }
@@ -495,6 +658,7 @@ impl PhotographRequests {
         (self.spawn)(Box::new(move || {
             let answer = read_level(&cache, &path, &layout, level);
             let busy = matches!(answer, Ok(None));
+            let refusal = decode_refusal(&cache, &path, &answer);
             {
                 // One lock for the answer and the end of the flight, so a
                 // frame that finds the path no longer in flight finds its
@@ -510,7 +674,7 @@ impl PhotographRequests {
                     }
                     // Nothing was decoded, and the next frame asks again.
                     Ok(None) => {}
-                    Err(e) => tiles.failed_with(&cache, &path, e),
+                    Err(e) => tiles.failed_with(&cache, &path, e, refusal),
                 }
                 tiles.in_flight.remove(&path);
             }
@@ -522,30 +686,38 @@ impl PhotographRequests {
         }));
     }
 
-    /// Answer whether `path`'s decode failed, and if it did, start one check
-    /// on the rayon pool of whether the file has changed since, which drops
-    /// the failure and repaints when it has, so a file that is fixed loads
-    /// again. The check stats the file, off this thread.
-    fn failed(&self, path: &Path, ctx: &egui::Context) -> bool {
-        let stamp = {
+    /// Answer whether `source`'s photograph failed, and if it did, start one
+    /// check on the rayon pool of whether the file its failure watches has
+    /// changed since, which drops the failure and repaints when it has, so a
+    /// file that is fixed loads again: the photograph's own, or the
+    /// workspace file that refused it, in which case the cache forgets the
+    /// path too, since it answers the refusal without a stat until then. The
+    /// check stats the file, off this thread.
+    fn failed(&self, source: PhotographSource<'_>, ctx: &egui::Context) -> bool {
+        let path = source.path;
+        let (watched, stamp, workspace) = {
             let mut tiles = lock(&self.tiles);
-            let Some(stamp) = tiles.failed(path) else {
+            let Some(failed) = tiles.failed(path) else {
                 return false;
             };
             if !tiles.in_flight.insert(path.to_path_buf()) {
                 return true;
             }
-            stamp
+            failed
         };
         let tiles = Arc::clone(&self.tiles);
+        let cache = Arc::clone(source.cache);
         let path = path.to_path_buf();
         let ctx = ctx.clone();
         (self.spawn)(Box::new(move || {
-            let changed = file_stamp(&path) != stamp;
+            let changed = file_stamp(&watched) != stamp;
             {
                 let mut tiles = lock(&tiles);
                 if changed {
                     tiles.forget_failure(&path);
+                    if workspace {
+                        cache.forget(&path);
+                    }
                 }
                 tiles.in_flight.remove(&path);
             }
@@ -556,13 +728,22 @@ impl PhotographRequests {
         true
     }
 
-    /// [`Self::failed`] with `ctx`; with none, only whether `path`'s decode
-    /// failed, starting no check of the file.
-    fn failed_asking(&self, path: &Path, ctx: Option<&egui::Context>) -> bool {
+    /// [`Self::failed`] with `ctx`; with none, only whether `source`'s
+    /// photograph failed, starting no check of the file.
+    fn failed_asking(&self, source: PhotographSource<'_>, ctx: Option<&egui::Context>) -> bool {
         match ctx {
-            Some(ctx) => self.failed(path, ctx),
-            None => lock(&self.tiles).failed(path).is_some(),
+            Some(ctx) => self.failed(source, ctx),
+            None => lock(&self.tiles).has_failed(source.path),
         }
+    }
+
+    /// The workspace file's error that a failed decode of `path` was
+    /// refused with, if it was.
+    fn workspace_refusal(&self, path: &Path) -> Option<WorkspaceConfigError> {
+        lock(&self.tiles)
+            .failures
+            .get(path)
+            .and_then(|failure| failure.workspace.clone())
     }
 
     /// How many answered tiles are kept, of every photograph.
@@ -627,7 +808,9 @@ impl TaskQueue {
 ///
 /// A photograph whose last decode task failed is answered as unreadable,
 /// which is what a cache of budget 0, which remembers no failure, would
-/// otherwise never say, until its file changes.
+/// otherwise never say, until its file changes. One its workspace file
+/// refuses, found so by the header read or by a decode, is
+/// [`DisplayLayout::WorkspaceFileError`] with the file's error.
 ///
 /// An out-of-core photograph whose mipmap is not current is
 /// [`DisplayLayout::Building`], and is added to the front of *Build
@@ -641,8 +824,11 @@ pub(crate) fn display_layout(source: PhotographSource<'_>, ctx: &egui::Context) 
 /// starts a header read, nor checks whether a file that failed has changed,
 /// nor queues a photograph for *Build mipmaps*.
 fn layout_of(source: PhotographSource<'_>, ctx: Option<&egui::Context>) -> DisplayLayout {
-    if source.requests.failed_asking(source.path, ctx) {
-        return DisplayLayout::Unreadable;
+    if source.requests.failed_asking(source, ctx) {
+        return match source.requests.workspace_refusal(source.path) {
+            Some(e) => DisplayLayout::WorkspaceFileError(e),
+            None => DisplayLayout::Unreadable,
+        };
     }
     match source.cache.layout(source.path) {
         PeekedLayout::Known(layout) => DisplayLayout::Known(layout),
@@ -652,6 +838,7 @@ fn layout_of(source: PhotographSource<'_>, ctx: Option<&egui::Context>) -> Displ
             }
             DisplayLayout::Building(coarsest)
         }
+        PeekedLayout::Unreadable(GetError::Workspace(e)) => DisplayLayout::WorkspaceFileError(e),
         PeekedLayout::Unreadable(_) => DisplayLayout::Unreadable,
         PeekedLayout::NotKnown => {
             if let Some(ctx) = ctx {
@@ -680,7 +867,7 @@ pub(crate) fn display_tiles(
     keys: &[TileKey],
     ctx: &egui::Context,
 ) -> Vec<DisplayTile> {
-    if source.requests.failed(source.path, ctx) {
+    if source.requests.failed(source, ctx) {
         return vec![DisplayTile::Unreadable; keys.len()];
     }
     let taken: Vec<Option<Arc<PhotographTile>>> = {
@@ -726,7 +913,7 @@ pub(crate) fn display_tiles(
 /// this thread, and once every key is answered it starts nothing. The
 /// photograph's kept tiles it does not ask for are dropped.
 pub(crate) fn prefetch_tiles(source: PhotographSource<'_>, keys: &[TileKey], ctx: &egui::Context) {
-    if source.requests.failed(source.path, ctx) {
+    if source.requests.failed(source, ctx) {
         return;
     }
     let missing: Vec<TileKey> = {
@@ -765,7 +952,7 @@ fn display_tile_set(
     keys: &[TileKey],
     ctx: Option<&egui::Context>,
 ) -> DisplayTileSet {
-    if source.requests.failed_asking(source.path, ctx) {
+    if source.requests.failed_asking(source, ctx) {
         return DisplayTileSet::Unreadable;
     }
     let missing = {
@@ -850,11 +1037,13 @@ fn read_tiles<T>(
 ) -> PeekedRead<T> {
     let layout = match layout_of(source, ctx) {
         DisplayLayout::Known(layout) => layout,
-        // A picture of a photograph waiting for its mipmap is drawn as
-        // loading; the run of *Build mipmaps* that makes it ends with a
+        DisplayLayout::Loading => return PeekedRead::Loading,
+        // The run of *Build mipmaps* that makes its mipmap ends with a
         // repaint.
-        DisplayLayout::Loading | DisplayLayout::Building(_) => return PeekedRead::Loading,
-        DisplayLayout::Unreadable => return PeekedRead::Unreadable,
+        DisplayLayout::Building(_) => return PeekedRead::Building,
+        DisplayLayout::Unreadable | DisplayLayout::WorkspaceFileError(_) => {
+            return PeekedRead::Unreadable
+        }
     };
     let Some(coarsest) = layout.levels().checked_sub(1) else {
         return PeekedRead::Unreadable;
@@ -1004,7 +1193,7 @@ pub(crate) fn display_level(
     level: usize,
     ctx: &egui::Context,
 ) -> DisplayLevel {
-    if source.requests.failed(source.path, ctx) {
+    if source.requests.failed(source, ctx) {
         return DisplayLevel::Unreadable;
     }
     let kept = lock(&source.requests.tiles).level.take();

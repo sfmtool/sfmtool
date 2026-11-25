@@ -1886,7 +1886,17 @@ the viewer"). The GUI thread never decodes, at any budget, and a row whose
 tiles are not all there yet keeps no tile or crop, rather than a remembered
 empty one, and draws the empty cell, its loading state, so they appear on the
 frame after the read's repaint. A hover view whose tiles are not all there yet
-says *Loading the photograph…* in its place. A picture learns the tiles it needs from a
+says *Loading the photograph…* in its place. A row whose photograph is an
+out-of-core one waiting for its mipmap (`PeekedRead::Building`) keeps nothing
+either, and its tile and crop cells draw a spinner with *Building mipmap…*
+under it where the cell has room for it, and on the cell's hover
+(`TrackBody::building`, `patch_pictures::paint_building_mipmap`), as does
+a hover view in that state; no photograph tile is asked for, and the read
+queues the photograph for *Build mipmaps*
+([background-tasks.md](background-tasks.md) § "Build mipmaps"), whose run
+that makes the mipmap ends with a repaint. The spinner asks for the frames it
+turns in, so the panel repaints every frame only while it draws one. A
+picture learns the tiles it needs from a
 render on the coarsest level's first tile alone, which is refused naming
 them, so a photograph the cache holds is drawn on the frame that asks for it
 and one it does not hold on the frame after its tiles land. The pictures of
@@ -2562,7 +2572,13 @@ texels, so their geometry is checked without reading pixels off the screen.
     *unreadable* once its header read has run; and the hover views of a row
     whose photograph the cache has dropped since its tile and crop were drawn
     say *Loading the photograph…*, ask for its layout once, and are drawn
-    once it is back. Each of these three takes about 0.2 s. In `tests.rs`,
+    once it is back. Each of these three takes about 0.2 s. Rows whose
+    out-of-core photographs wait for their mipmaps, under a budget smaller
+    than a photograph and one of 0, draw a spinner with *Building mipmap…*
+    in their tile and crop cells and on the cell's hover, ask for no
+    photograph tile and queue each photograph once, and once *Build
+    mipmaps* has made the mipmaps draw no spinner and read their pictures
+    with a few reads (0.1 s). In `tests.rs`,
     rows that say *unreadable* once their photograph's header read found no
     file, the read stepped by hand, draw their tiles and crops on the frame
     after the photograph lands (0.15 s). The crops

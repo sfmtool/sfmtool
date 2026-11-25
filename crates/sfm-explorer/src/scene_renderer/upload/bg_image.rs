@@ -265,7 +265,9 @@ impl SceneRenderer {
                 DisplayLayout::Loading | DisplayLayout::Building(None) => {
                     self.keep_bg_image_while_loading(image)
                 }
-                DisplayLayout::Unreadable => self.clear_bg_image(),
+                DisplayLayout::Unreadable | DisplayLayout::WorkspaceFileError(_) => {
+                    self.clear_bg_image()
+                }
             }
         }
         self.update_bg_mesh(device, recon);

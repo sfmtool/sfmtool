@@ -149,7 +149,7 @@ impl From<TileError> for PhotographReadError {
             TileError::Changed { path } => Self::Changed { path },
             TileError::Unreadable { path, why } => Self::Unreadable {
                 path: Some(path),
-                why,
+                why: why.to_string(),
             },
             TileError::OutOfRange { path, why } => Self::OutOfRange {
                 path: Some(path),

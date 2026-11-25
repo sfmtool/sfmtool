@@ -286,6 +286,39 @@ fn collect_text_rects(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<Paint
     }
 }
 
+/// The rectangle each spinner a frame already run painted spans, in paint
+/// order: egui paints a spinner as one open path stroked 3 points wide,
+/// which no other shape a panel paints is.
+pub(crate) fn output_spinner_rects(output: &egui::FullOutput) -> Vec<egui::Rect> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Path(path) if !path.closed && path.stroke.width == 3.0 => {
+                out.push(egui::Rect::from_points(&path.points));
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut rects = Vec::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, &mut rects);
+    }
+    rects
+}
+
+/// Whether a frame already run asked for the next frame at once, as a
+/// spinner does on every frame it is drawn in and a task's end does once.
+pub(crate) fn repaints_at_once(output: &egui::FullOutput) -> bool {
+    output
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .is_some_and(|viewport| viewport.repaint_delay.is_zero())
+}
+
 fn collect_texts(shape: &egui::Shape, out: &mut Vec<String>) {
     match shape {
         egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),

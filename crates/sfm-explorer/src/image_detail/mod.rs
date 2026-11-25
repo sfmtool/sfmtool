@@ -44,7 +44,7 @@ use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::edits::PointGesture;
 use crate::state::{
     CachedSiftFeatures, DisplayLayout, FeatureDisplaySettings, IntrinsicsDisplaySettings,
-    OverlayMode, PhotographSource,
+    OverlayMode, PhotographSource, BUILDING_MIPMAP_LABEL,
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::spatial::PointCloud2;
@@ -60,9 +60,10 @@ pub(crate) const DECODING_LABEL: &str = "Loading image…";
 /// What the panel says in place of a photograph that could not be read.
 pub(crate) const UNREADABLE_LABEL: &str = "Failed to load image";
 
-/// What the panel says, under a spinner, in place of an out-of-core
-/// photograph whose mipmap *Build mipmaps* is making.
-pub(crate) const BUILDING_MIPMAP_LABEL: &str = "Building mipmap…";
+/// What the panel says in place of a photograph its workspace file refuses
+/// (the file cannot be read, or its `mipmap_options` is invalid), above the
+/// file's error, which names the file and the key.
+pub(crate) const WORKSPACE_FILE_ERROR_LABEL: &str = "Workspace file error:";
 
 /// A spinner over [`BUILDING_MIPMAP_LABEL`], centred in what is left of the
 /// panel. The spinner asks for the frames it turns in, so the panel repaints
@@ -75,6 +76,24 @@ fn show_building_mipmap(ui: &mut egui::Ui) {
         ui.add_space(((height - content) / 2.0).max(0.0));
         ui.spinner();
         ui.label(BUILDING_MIPMAP_LABEL);
+    });
+}
+
+/// [`WORKSPACE_FILE_ERROR_LABEL`] over `error`, the workspace file's error
+/// that names the file and the key, centred in what is left of the panel
+/// and wrapped to its width, in place of a photograph the workspace file
+/// refuses. Nothing repaints: the panel draws it again when another frame
+/// comes.
+fn show_workspace_file_error(
+    ui: &mut egui::Ui,
+    error: &sfmtool_core::workspace::WorkspaceConfigError,
+) {
+    let height = ui.available_height();
+    ui.vertical_centered(|ui| {
+        let line = ui.spacing().interact_size.y;
+        ui.add_space(((height - 3.0 * line) / 2.0).max(0.0));
+        ui.label(egui::RichText::new(WORKSPACE_FILE_ERROR_LABEL).strong());
+        ui.label(error.to_string());
     });
 }
 
@@ -1033,11 +1052,20 @@ impl ImageDetail {
         // size: every coordinate below, the overlays' included, is in level-0
         // pixels whichever level the tiles are drawn from.
         let Some(size) = layout_size else {
+            if let Some(DisplayLayout::WorkspaceFileError(e)) = &layout {
+                show_workspace_file_error(ui, e);
+                return response;
+            }
             ui.centered_and_justified(|ui| match layout {
                 Some(DisplayLayout::Building(_) | DisplayLayout::Loading) => {
                     ui.label(DECODING_LABEL);
                 }
-                Some(DisplayLayout::Known(_) | DisplayLayout::Unreadable) | None => {
+                Some(
+                    DisplayLayout::Known(_)
+                    | DisplayLayout::Unreadable
+                    | DisplayLayout::WorkspaceFileError(_),
+                )
+                | None => {
                     ui.label(UNREADABLE_LABEL);
                 }
             });

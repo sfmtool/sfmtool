@@ -54,8 +54,10 @@ pub enum PeekedLayout {
     Building {
         coarsest: Option<Arc<CoarsestLevel>>,
     },
-    /// The photograph cannot be read; the message names the file and why.
-    Unreadable(String),
+    /// The photograph cannot be read, or its workspace file refuses it
+    /// ([`GetError::Workspace`]); the error's message names the file and
+    /// why.
+    Unreadable(GetError),
     /// Not read yet: [`PhotographCache::request_layout`] reads it.
     NotKnown,
 }
@@ -146,10 +148,11 @@ pub enum TileError {
     /// [`PhotographCache::get_many`] makes its mipmap; a tile read never
     /// makes one.
     Changed { path: PathBuf },
-    /// The photograph does not exist, cannot be read or decoded, or has a
-    /// side over [`MAX_JPEG_SIDE`](crate::camera::mipmap::MAX_JPEG_SIDE);
-    /// `why` is the [`GetError`]'s message.
-    Unreadable { path: PathBuf, why: String },
+    /// The photograph does not exist, cannot be read or decoded, has a side
+    /// over [`MAX_JPEG_SIDE`](crate::camera::mipmap::MAX_JPEG_SIDE), or is
+    /// refused by its workspace file ([`GetError::Workspace`]); `why` says
+    /// which, and its message names the file.
+    Unreadable { path: PathBuf, why: GetError },
     /// A level, tile or rectangle the photograph does not have, or an empty
     /// rectangle, was asked for.
     OutOfRange { path: PathBuf, why: String },
@@ -202,9 +205,9 @@ enum Claim<'s, 'r> {
 fn unreadable(path: &Path, e: GetError) -> TileError {
     match e {
         GetError::Cancelled => TileError::Cancelled,
-        e => TileError::Unreadable {
+        why => TileError::Unreadable {
             path: path.to_path_buf(),
-            why: e.to_string(),
+            why,
         },
     }
 }
@@ -236,7 +239,7 @@ fn read_failed(path: &Path, e: PhotographReadError) -> TileError {
         },
         e => TileError::Unreadable {
             path,
-            why: e.to_string(),
+            why: GetError::Unreadable(e.to_string()),
         },
     }
 }
@@ -318,7 +321,7 @@ impl PhotographCache {
         if let Some(slot) = self.mapped(path) {
             let data = slot.lock();
             match (&data.made, &data.tier) {
-                (Some(Err(e)), _) => return PeekedLayout::Unreadable(e.to_string()),
+                (Some(Err(e)), _) => return PeekedLayout::Unreadable(e.clone()),
                 (_, Tier::NotCurrent) => {
                     return PeekedLayout::Building {
                         coarsest: data.coarsest.clone(),
@@ -352,7 +355,7 @@ impl PhotographCache {
     pub fn request_layout(&self, path: &Path) {
         let setting = self.setting_for(path);
         let layout = match header(path, &setting) {
-            Err(e) => PeekedLayout::Unreadable(e.to_string()),
+            Err(e) => PeekedLayout::Unreadable(e),
             Ok((width, height)) => {
                 let in_core = || PeekedLayout::Known(Arc::new(self.layout_for(width, height)));
                 if !is_out_of_core(&setting, width, height) {
@@ -369,7 +372,7 @@ impl PhotographCache {
                     match self.tier_of(path, &slot) {
                         Tier::Files(files) => PeekedLayout::Known(Arc::clone(&files.layout)),
                         Tier::NotCurrent => match &slot.lock().made {
-                            Some(Err(e)) => PeekedLayout::Unreadable(e.to_string()),
+                            Some(Err(e)) => PeekedLayout::Unreadable(e.clone()),
                             _ => PeekedLayout::Building { coarsest: None },
                         },
                         Tier::Unchecked | Tier::InCore => in_core(),

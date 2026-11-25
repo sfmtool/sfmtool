@@ -173,7 +173,7 @@ pub(crate) fn run_chunk(
         Ok((answers, _)) => {
             for (path, answer) in chunk.iter().zip(answers) {
                 if answer.is_none() {
-                    requests.failed_to_build(path);
+                    requests.failed_to_build(cache, path);
                 }
                 lock(list).answered(path);
             }

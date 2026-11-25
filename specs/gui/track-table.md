@@ -462,6 +462,17 @@ cuts a row's crop with,
   - an empty frame while the photograph tiles it needs are loading or its
     reference is being picked, or while the scroll has not yet stopped over
     it (below);
+  - the empty frame with a spinner in it while the photograph is an
+    out-of-core one waiting for its mipmap (`CellPicture::Building`), with
+    *Building mipmap…* under the spinner where the cell has room for it
+    (`patch_pictures::paint_building_mipmap`) and on the cell's hover. No
+    photograph tile is asked for and nothing is kept, so the cell asks again
+    on every frame it is drawn; once the rows have stopped, the ask queues
+    the photograph for *Build mipmaps*
+    ([background-tasks.md](background-tasks.md) § "Build mipmaps"), whose
+    run that makes the mipmap ends with a repaint, and while they scroll it
+    queues nothing. The spinner asks for the frames it turns in, so the
+    panel repaints every frame only while it draws one;
   - *unreadable*, when the photograph cannot be read or decoded, or the
     crop's read of it fails. It is the one reason not kept: the cell asks
     again on every frame it is drawn, so it draws its crop once the
@@ -488,7 +499,9 @@ cuts a row's crop with,
   the first time the pointer rests on the cell, from the photograph tiles it
   needs, and kept while the pointer stays there
   (`PictureTextures::crop_context`); while those tiles are loading the hover
-  says *Loading the photograph…*, as Track View's do. Over a cell with no
+  says *Loading the photograph…*, as Track View's do, and while the
+  photograph waits for its mipmap it shows a spinner with *Building
+  mipmap…*. Over a cell with no
   crop the hover says why, in a sentence, and a hover view whose read fails
   says why it failed.
 
@@ -1093,6 +1106,12 @@ camera and one at infinity:
   photograph is back, and that of a crop whose photograph can no longer be
   read says why; a cell that says *unreadable* after its photograph's header
   read found no file draws its crop on the frame after the photograph lands;
+- the crops of points whose reference photograph is an out-of-core one
+  waiting for its mipmap, under a budget smaller than a photograph and one
+  of 0, draw a spinner with *Building mipmap…* in their frames, which the
+  cell's hover says too, ask for no photograph tile and queue the
+  photograph once, and draw no spinner once *Build mipmaps* has made the
+  mipmap (0.06 s);
 - a crop and its hover view drawn by whole frames, through the panel's region
   pool and through a pool that holds nothing so every read takes the
   photograph's tiles, equal the crop and hover view the whole pyramid gives,

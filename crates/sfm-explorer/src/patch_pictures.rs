@@ -15,6 +15,8 @@
 
 use sfmtool_core::camera::sampler::{RegionPool, REGION_POOL_BYTES_PER_THREAD};
 
+use crate::state::BUILDING_MIPMAP_LABEL;
+
 pub(crate) mod crop;
 pub(crate) mod marks;
 
@@ -80,6 +82,66 @@ pub(crate) const HOVER_LOADING: &str = "Loading the photograph…";
 
 /// The hover text where a point stores no patch: an all-zero bitmap row.
 pub(crate) const NO_STORED_PATCH_HOVER: &str = "The point has no stored patch";
+
+/// Paint, in the picture cell `rect`, the state of a picture whose
+/// photograph's mipmap *Build mipmaps* is making
+/// ([`crate::state::PeekedRead::Building`]): a spinner, with
+/// [`BUILDING_MIPMAP_LABEL`] under it, wrapped to the cell's width, when the
+/// two fit in the cell, and the spinner alone when they do not, which the
+/// caller's hover then says. What Track View's tiles and crops, the Track
+/// Table's crops and Measurement View's endpoint crops draw in place of
+/// their pictures meanwhile.
+///
+/// Painted shapes, which take no pointer, so the cell's own hover and
+/// clicks are the caller's. The spinner asks for the frames it turns in,
+/// so the panel repaints only while it draws one, and the run of *Build
+/// mipmaps* that makes the mipmap ends with a repaint that draws the
+/// picture.
+pub(crate) fn paint_building_mipmap(ui: &egui::Ui, rect: egui::Rect) {
+    let visuals = ui.visuals();
+    let label = ui.painter().layout(
+        BUILDING_MIPMAP_LABEL.to_string(),
+        egui::TextStyle::Small.resolve(ui.style()),
+        visuals.weak_text_color(),
+        rect.width(),
+    );
+    let spinner = ui
+        .spacing()
+        .interact_size
+        .y
+        .min(rect.width())
+        .min(rect.height());
+    let gap = 2.0;
+    let content = spinner + gap + label.size().y;
+    let fits = content <= rect.height() && label.size().x <= rect.width();
+    let top = if fits {
+        rect.center().y - content / 2.0
+    } else {
+        rect.center().y - spinner / 2.0
+    };
+    egui::Spinner::new().paint_at(
+        ui,
+        egui::Rect::from_center_size(
+            egui::pos2(rect.center().x, top + spinner / 2.0),
+            egui::vec2(spinner, spinner),
+        ),
+    );
+    if fits {
+        let at = egui::pos2(rect.center().x - label.size().x / 2.0, top + spinner + gap);
+        ui.painter().galley(at, label, visuals.weak_text_color());
+    }
+}
+
+/// A hover view's place while its photograph's mipmap is being made: a
+/// spinner beside [`BUILDING_MIPMAP_LABEL`], for the hovers of the cells
+/// [`paint_building_mipmap`] paints. The spinner asks for the frames it
+/// turns in while the hover is shown.
+pub(crate) fn show_building_mipmap(ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        ui.spinner();
+        ui.label(BUILDING_MIPMAP_LABEL);
+    });
+}
 
 /// A patch bitmap, `(rows, columns, channels)`, as an opaque RGBA image, or
 /// `None` when it is all zero, which is how a point with no stored patch is

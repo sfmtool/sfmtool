@@ -54,8 +54,8 @@ use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::state::{AppState, PeekedRead, PhotographSource};
 use crate::table_sort::{paint_sort_triangle, SortRule, TableSort, SORT_TRIANGLE_HALF_WIDTH};
 use pictures::{
-    hover_size, paint_picture, patch_image, Absent, CellPicture, Made, PictureColumn, PictureKey,
-    PictureTextures, DEFAULT_PICTURE_SIZE, PICTURE_PAD, PICTURE_SIZES,
+    hover_size, paint_picture, patch_image, Absent, CellPicture, Made, NotCut, PictureColumn,
+    PictureKey, PictureTextures, DEFAULT_PICTURE_SIZE, PICTURE_PAD, PICTURE_SIZES,
 };
 
 /// The wire names of the panel's picture columns, which `find_points`
@@ -2039,6 +2039,10 @@ impl RowsView<'_> {
                 self.still_needed.borrow_mut().insert(key, needs);
                 Made::NotYet
             }
+            // Queued for *Build mipmaps* when the rows have stopped, as the
+            // tiles would have been asked for; drawn with a spinner until the
+            // run that makes the mipmap ends, with a repaint.
+            PeekedRead::Building => Made::Building,
             PeekedRead::Read(Ok(Some(picture))) => Made::Crop {
                 picture: Box::new(picture),
                 outline: Box::new(outline),
@@ -2093,14 +2097,15 @@ impl RowsView<'_> {
                     settled,
                     self.regions.pool(),
                 ) {
-                    None => {
+                    Err(NotCut::Loading) => {
                         ui.label(crate::patch_pictures::HOVER_LOADING);
                     }
-                    Some(Ok(Some(drawn))) => drawn.show(ui),
-                    Some(Ok(None)) => {
+                    Err(NotCut::Building) => crate::patch_pictures::show_building_mipmap(ui),
+                    Ok(Ok(Some(drawn))) => drawn.show(ui),
+                    Ok(Ok(None)) => {
                         ui.label("Nothing around this crop could be rendered.");
                     }
-                    Some(Err(why)) => {
+                    Ok(Err(why)) => {
                         ui.set_max_width(320.0);
                         ui.label(format!(
                             "The photograph of the point's reference observation could not be \
@@ -2112,6 +2117,14 @@ impl RowsView<'_> {
             (PictureColumn::Crop, CellPicture::Absent(absent)) => {
                 ui.set_max_width(320.0);
                 ui.label(crop_absent_hover(absent));
+            }
+            (PictureColumn::Crop, CellPicture::Building) => {
+                ui.set_max_width(320.0);
+                crate::patch_pictures::show_building_mipmap(ui);
+                ui.label(
+                    "The photograph of the point's reference observation is waiting for \
+                     its mipmap, which the Build mipmaps task is making.",
+                );
             }
             (PictureColumn::Crop, CellPicture::Waiting) => {
                 ui.set_max_width(320.0);

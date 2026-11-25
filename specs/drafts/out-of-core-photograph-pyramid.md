@@ -684,7 +684,7 @@ or render keeps it.
 pub enum PeekedLayout {
     Known(Arc<PyramidLayout>), // header read, and for out of core files current: tiles may be asked for
     Building { coarsest: Option<Arc<CoarsestLevel>> }, // mipmap missing, stale or being made; the coarsest once published
-    Unreadable(String),         // the original or the workspace file cannot be read; the message says which
+    Unreadable(GetError),       // the original or the workspace file cannot be read; the error says which
     NotKnown,                   // not checked yet
 }
 pub enum PeekedTile { Ready(Arc<PhotographTile>), Building, Unreadable, NotReady }
@@ -1344,7 +1344,7 @@ pub struct PhotographTile {
 }
 
 // `PeekedLayout` and `PeekedTile` as in § "The caches in memory".
-pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: String },
+pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: GetError },
     /// A level, tile or rectangle the photograph does not have.
     OutOfRange { path: PathBuf, why: String },
     /// The caller's `Progress` was cancelled during a decode; never remembered.
@@ -1615,7 +1615,7 @@ still hands out whole pyramids: a moved reader wraps the pyramid it gets in a
 that have not both work. Step 13 makes the cache hand out tiled photographs
 only, once every reader takes them, in thirteen pull requests: the slot and the
 build budget first, then the cache's tile requests and the panels, then the
-tiles. Steps 14 to 16 build the out-of-core tier, step 14 in five pull
+tiles. Steps 14 to 16 build the out-of-core tier, step 14 in seven pull
 requests, without turning it on anywhere but in tests: until step 17, neither
 `sfm ws init` nor any other command writes `mipmap_options`, so no workspace
 has the object unless its owner writes it by hand, and every photograph stays
@@ -3533,7 +3533,8 @@ in core. Step 17 turns the tier on.
           `a_file_a_read_found_missing_is_made_again_each_time` (two writes
           within one tick of the file system's clock sharing a modification
           time) is closed by giving each rewrite a time of its own.
-        - **14e2b, the other panels and a workspace file error.** Track
+        - **14e2b, the other panels and a workspace file error.**
+          **Built**, so step 14e and step 14 are complete. Track
           View's pictures, the Track Table's crop cells and hover, and
           Measurement View's endpoint crops drawing the spinner with
           *Building mipmap…* in place of their loading state
@@ -3549,6 +3550,77 @@ in core. Step 17 turns the tier on.
           message naming the key; and none of these asks for a tile or
           repaints more than the reads need, at a budget of 0 and at one
           smaller than the photograph.
+          **As built** ([state/photograph_requests.rs](../../crates/sfm-explorer/src/state/photograph_requests.rs),
+          [patch_pictures.rs](../../crates/sfm-explorer/src/patch_pictures.rs)):
+          a render through `read_peeked` or `read_peeked_without_asking` is
+          `PeekedRead::Building` while the layout is `Building`; only the
+          read that asks queues the photograph, so the Track Table's rows
+          queue nothing while they scroll and do once they stop. The three
+          panels share one painter, `patch_pictures::paint_building_mipmap`,
+          which paints the spinner in the cell and *Building mipmap…* under
+          it, wrapped to the cell's width, where the two fit, and the
+          spinner alone where they do not (the Track Table's 16 pt
+          pictures); each cell's hover says the label too, beside a
+          spinner (`patch_pictures::show_building_mipmap`), as does a hover
+          view whose photograph waits. Nothing is kept for a waiting
+          picture: Track View notes its rows waiting on each frame
+          (`TrackBody::building`), the Track Table's cell is
+          `CellPicture::Building` from `Made::Building` and its hover
+          `NotCut::Building`, and Measurement View's crop is
+          `Crop::Building`, asked for again on every frame like an
+          unreadable one and dropped on the frame its tiles start to load,
+          so the cell then says *loading…* rather than keep the spinner.
+          The spinner asks for the frames it turns in, so a panel repaints
+          every frame only while it draws one, which the run of *Build
+          mipmaps* ends. For the workspace refusal the viewer has the
+          variant, `DisplayLayout::WorkspaceFileError` with the
+          `WorkspaceConfigError`, which Image Detail draws as *Workspace
+          file error:* over the error, wrapped to the panel; the other
+          panels and the 3D background treat it as `Unreadable`. To tell a
+          workspace's refusal from an unreadable photograph without reading
+          the message, the cache's `PeekedLayout::Unreadable` and
+          `TileError::Unreadable`'s `why` carry the `GetError` in place of
+          its message, two signature changes the plan did not name; their
+          messages are unchanged. A refusal is kept as a failure, from the
+          header read's task, from a decode's, or from a build of *Build
+          mipmaps* the file refused because it broke after the photograph
+          was queued (`failed_to_build` reads the header again, since
+          `get_many` answers `None` with no error and a cache of budget 0
+          keeps none, so no signature changes), watching the workspace
+          file's stamp rather than the photograph's. The header read, the
+          decode and the build take that stamp before a second read that
+          finds the refusal still there (`confirmed_refusal`), so a file
+          fixed while the first read ran is not kept with the fixed file's
+          stamp, which no check would find changed (an audit finding); a
+          decode whose second read no longer finds the refusal keeps no
+          failure, and the next frame asks again. Without watching
+          that file, fixing
+          the file would leave every photograph the viewer had found
+          refused answered as refused for the session, since `layout`
+          answers a refusal without a stat. When the check of a later look
+          finds the file changed it drops the failure, has the cache
+          `forget` the path and repaints, and the next frame reads the
+          photograph's header again. Tests, each under a budget smaller
+          than a photograph and one of 0: the requests answering a render
+          `Building`, queued once by an asking read and not by a looking
+          one, and the workspace refusal found by a header read and by a
+          decode, decoded no more, repainted for no more, and read again
+          once the file is fixed, and one queued whose workspace file
+          breaks before its build runs answered the same way and read,
+          queued and made once the file is fixed
+          (photograph_requests/tests.rs); Image
+          Detail's *Workspace file error:* with the message naming the file
+          and the key, repainting nothing; and Track View's tile and crop
+          cells, the Track Table's crops and Measurement View's endpoint
+          crops drawing the spinner and the label, the first two on hover
+          too, asking for no tile, queueing each photograph once, and
+          reading their pictures with a few reads once *Build mipmaps* has
+          made the mipmaps, Measurement View's then asking for no repaint.
+          Track View, unlike Image Detail and Measurement View, asks for a
+          repaint on every headless frame of its tests whatever its
+          photographs' state, since its header turns a spinner while the
+          track is evaluated and no evaluation ends in those tests, so its
+          test bounds the reads and not the repaints.
 15. **Makers**: `sfm sift` and `build_sift_file`, the rest of the viewer's
     *Build mipmaps* quiet task, whose job, shared list, `QuietRank` place
     and giving way 14e builds (the list filled when a reconstruction opens,

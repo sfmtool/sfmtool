@@ -4612,10 +4612,12 @@ fn large_out_of_core_photo() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 /// What one headless frame drew: the strings, and the texture and screen
-/// rectangle of each textured mesh.
+/// rectangle of each textured mesh, and whether it asked for the next frame
+/// at once.
 struct Drawn {
     texts: Vec<String>,
     meshes: Vec<(egui::TextureId, egui::Rect)>,
+    repaint: bool,
 }
 
 /// Every textured mesh in `shape`, with its texture and the rectangle its
@@ -4680,6 +4682,7 @@ fn drawn_frame(
     let drawn = Drawn {
         texts: crate::test_support::output_texts(&output),
         meshes,
+        repaint: crate::test_support::repaints_at_once(&output),
     };
     (drawn, response.expect("the frame ran"))
 }
@@ -5028,5 +5031,74 @@ fn new_measurement_from_here_follows_the_bench_entries() {
             texts.iter().any(|t| t == NEW_MEASUREMENT_HERE_LABEL),
             "{texts:?}"
         );
+    }
+}
+
+/// A photograph of a workspace whose `mipmap_options` is invalid: once its
+/// header is read, the panel says *Workspace file error:* over the
+/// workspace file's error, which names the file and the key, in place of
+/// "Failed to load image", and then starts only a check of the workspace
+/// file, decodes nothing and repaints nothing, with a budget smaller than
+/// the photograph and with one of 0.
+#[test]
+fn a_photograph_its_workspace_file_refuses_says_workspace_file_error_and_why() {
+    for budget in [20_000, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path()
+                .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
+            r#"{"version": 2, "mipmap_options": {"out_of_core_long_side": 64,
+            "jpeg_quality": 0, "full_resolution_jpeg_quality": 95}}"#,
+        )
+        .unwrap();
+        let path = dir.path().join("refused.png");
+        image::RgbImage::from_pixel(300, 200, image::Rgb([90, 90, 90]))
+            .save(&path)
+            .unwrap();
+        let node = demo_node("/runs/refused.sfmr");
+        let cache = std::sync::Arc::new(sfmtool_core::camera::PhotographCache::new(
+            sfmtool_core::camera::PhotographCacheOptions {
+                budget_bytes: budget,
+                ..Default::default()
+            },
+        ));
+        let (requests, queue) = crate::state::PhotographRequests::queued();
+        let source = crate::state::PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        };
+        let ctx = egui::Context::default();
+        let mut detail = ImageDetail::new();
+
+        drawn_frame(&mut detail, &ctx, &node, source);
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the header read");
+        let mut repaints = Vec::new();
+        for frame in 0..4 {
+            let (drawn, _) = drawn_frame(&mut detail, &ctx, &node, source);
+            let texts = &drawn.texts;
+            assert!(
+                texts.iter().any(|t| t == super::WORKSPACE_FILE_ERROR_LABEL),
+                "{budget}, frame {frame}: {texts:?}"
+            );
+            assert!(
+                texts.iter().any(|t| {
+                    t.contains(sfmtool_core::workspace::WORKSPACE_FILE_NAME)
+                        && t.contains("mipmap_options.jpeg_quality")
+                }),
+                "{budget}, frame {frame}: {texts:?}"
+            );
+            assert!(
+                !texts.iter().any(|t| t == super::UNREADABLE_LABEL),
+                "{budget}, frame {frame}: {texts:?}"
+            );
+            // A check of the workspace file, which finds it unchanged.
+            assert!(queue.run_off_this_thread() <= 1, "{budget}, frame {frame}");
+            repaints.push(drawn.repaint);
+        }
+        // egui may draw once more after the read's repaint; then no frame
+        // asks for another.
+        assert_eq!(&repaints[2..], [false, false], "{budget}: {repaints:?}");
+        assert_eq!(cache.stats().decodes, 0, "{budget}");
     }
 }

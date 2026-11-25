@@ -394,7 +394,12 @@ specifies with the rest of the task (its step 15).
   could not make is kept as a failed decode of the panels' reads is, with
   the file's length and modification time, so a cache of budget 0, which
   remembers no failure, is not asked to make it again on every frame; it is
-  queued again once its file changes. A run ends with a repaint, as every
+  queued again once its file changes. One whose workspace file refused the
+  build, as when the file broke after the photograph was queued, is kept
+  as the panels' reads keep such a refusal, a workspace file error watching
+  that file, and is read and queued again once it changes
+  ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md)
+  § "In the viewer"). A run ends with a repaint, as every
   task's end does, which draws what it made. It also wakes the viewer once
   for each build of its chunk that publishes its photograph's coarsest
   level (`COARSEST_PUBLISHED`), so Image Detail and the 3D background draw

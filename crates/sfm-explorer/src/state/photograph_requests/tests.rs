@@ -1151,12 +1151,14 @@ fn look_at(
             }
         }
         DisplayLayout::Loading | DisplayLayout::Building(_) => {}
-        DisplayLayout::Unreadable => panic!("{what}: layout unreadable"),
+        DisplayLayout::Unreadable | DisplayLayout::WorkspaceFileError(_) => {
+            panic!("{what}: layout unreadable")
+        }
     }
     if rendered.is_none() {
         match read_peeked(source, needs, ctx, |src| read_rect(src, &pool, right)) {
             PeekedRead::Read(read) => *rendered = Some(read.unwrap()),
-            PeekedRead::Loading => {}
+            PeekedRead::Loading | PeekedRead::Building => {}
             PeekedRead::Unreadable => panic!("{what}: render unreadable"),
         }
     }
@@ -1299,7 +1301,7 @@ fn twenty_panels_add_twenty_photographs_to_the_one_list_each_once_at_the_front()
         let (requests, queue) = PhotographRequests::queued();
         let ctx = egui::Context::default();
         let mut tasks = Vec::new();
-        for _ in 0..3 {
+        for look in 0..3 {
             for path in &paths {
                 let source = PhotographSource {
                     cache: &cache,
@@ -1308,7 +1310,12 @@ fn twenty_panels_add_twenty_photographs_to_the_one_list_each_once_at_the_front()
                 };
                 let _ = display_layout(source, &ctx);
                 let read = read_peeked(source, &mut Vec::new(), &ctx, |_| Ok(()));
-                assert!(matches!(read, PeekedRead::Loading));
+                // Loading until the header read has run, then Building.
+                if look == 0 {
+                    assert!(matches!(read, PeekedRead::Loading));
+                } else {
+                    assert!(matches!(read, PeekedRead::Building));
+                }
             }
             tasks.push(queue.run_off_this_thread());
         }
@@ -1387,4 +1394,254 @@ fn a_photograph_build_mipmaps_cannot_make_is_unreadable_until_its_file_changes()
         display_layout(source, &ctx),
         DisplayLayout::Known(_)
     ));
+}
+
+/// A render of an out-of-core photograph whose mipmap is missing is
+/// `Building` once its header is read, with a budget smaller than the
+/// photograph and with one of 0: it asks for no tile, and is queued for
+/// *Build mipmaps* by a read that asks, once, and not by one that only
+/// looks, as the Track Table's rows do while they scroll. Once the run has
+/// made the mipmap the render runs.
+#[test]
+fn a_render_of_a_photograph_without_a_mipmap_is_building_and_asks_for_no_tile() {
+    use super::super::build_mipmaps::run_chunk;
+    for budget in [20_000, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = out_of_core_photo(dir.path());
+        let cache = tile_cache(budget, 1 << 30);
+        let (requests, queue) = PhotographRequests::queued();
+        let source = PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        };
+        let ctx = egui::Context::default();
+        let mut needs = Vec::new();
+        let read = |needs: &mut Vec<TileKey>, ask: bool| {
+            let render = |_: &TiledPhotograph| Ok(());
+            if ask {
+                read_peeked(source, needs, &ctx, render)
+            } else {
+                read_peeked_without_asking(source, needs, render)
+            }
+        };
+        assert!(matches!(read(&mut needs, true), PeekedRead::Loading));
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the header read");
+
+        for look in 0..3 {
+            assert!(
+                matches!(read(&mut needs, false), PeekedRead::Building),
+                "{budget}, look {look}"
+            );
+        }
+        assert!(requests.mipmaps_waiting().is_empty(), "{budget}: queued");
+        for look in 0..3 {
+            assert!(
+                matches!(read(&mut needs, true), PeekedRead::Building),
+                "{budget}, look {look}"
+            );
+            assert_eq!(queue.len(), 0, "{budget}, look {look}: a tile asked for");
+        }
+        assert_eq!(requests.mipmaps_waiting(), std::slice::from_ref(&path));
+
+        run_chunk(&cache, &requests, &Progress::none(), None);
+        let mut rendered = false;
+        for _ in 0..4 {
+            match read(&mut needs, true) {
+                PeekedRead::Read(answer) => {
+                    answer.unwrap();
+                    rendered = true;
+                    break;
+                }
+                PeekedRead::Loading => {
+                    queue.run_off_this_thread();
+                }
+                PeekedRead::Building | PeekedRead::Unreadable => panic!("{budget}"),
+            }
+        }
+        assert!(rendered, "{budget}: rendered once the mipmap was made");
+    }
+}
+
+/// A `mipmap_options` whose `jpeg_quality` is out of range.
+const INVALID_MIPMAP_OPTIONS: &str = r#"{"version": 2, "mipmap_options": {
+    "out_of_core_long_side": 64, "jpeg_quality": 0, "full_resolution_jpeg_quality": 95}}"#;
+
+/// Whether `e`, a workspace file's error, names the key at fault.
+fn names_jpeg_quality(e: &WorkspaceConfigError) -> bool {
+    e.to_string().contains("mipmap_options.jpeg_quality")
+}
+
+/// A photograph of a workspace whose `mipmap_options` is invalid is a
+/// workspace file error, with the file's error naming the key, whether the
+/// header read finds it or a decode of a photograph whose layout was read
+/// before the file broke does, with a budget smaller than the photograph
+/// and with one of 0. A render of it is unreadable, and once it is found
+/// the looks start only a check of the workspace file, decode nothing and
+/// ask for no repaint. Once the workspace file is fixed the check finds it
+/// changed and the photograph is read again.
+#[test]
+fn a_photograph_its_workspace_file_refuses_is_a_workspace_file_error() {
+    for budget in [20_000, 0] {
+        for found_by in ["the header read", "a decode"] {
+            let what = format!("{found_by}, budget {budget}");
+            let dir = tempfile::tempdir().unwrap();
+            let path = out_of_core_photo(dir.path());
+            let workspace = dir
+                .path()
+                .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME);
+            if found_by == "the header read" {
+                std::fs::write(&workspace, INVALID_MIPMAP_OPTIONS).unwrap();
+            } else {
+                // In core, so its tiles are decoded from the photograph.
+                std::fs::write(&workspace, r#"{"version": 2}"#).unwrap();
+            }
+            let cache = tile_cache(budget, 1 << 30);
+            let (requests, queue) = PhotographRequests::queued();
+            let source = PhotographSource {
+                cache: &cache,
+                requests: &requests,
+                path: &path,
+            };
+            let ctx = egui::Context::default();
+            assert!(matches!(
+                display_layout(source, &ctx),
+                DisplayLayout::Loading
+            ));
+            assert_eq!(queue.run_off_this_thread(), 1, "{what}: the header read");
+            if found_by == "a decode" {
+                let DisplayLayout::Known(layout) = display_layout(source, &ctx) else {
+                    panic!("{what}: the layout is read");
+                };
+                std::fs::write(&workspace, INVALID_MIPMAP_OPTIONS).unwrap();
+                let keys = one_tile_a_level(&layout);
+                let _ = display_tiles(source, &keys[keys.len() - 1..], &ctx);
+                assert_eq!(queue.run_off_this_thread(), 1, "{what}: the decode");
+            }
+            for _ in 0..3 {
+                end_frame(&ctx);
+            }
+            let repaints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = Arc::clone(&repaints);
+            ctx.set_request_repaint_callback(move |_| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            });
+            let decodes = cache.stats().decodes;
+            for look in 0..5 {
+                match display_layout(source, &ctx) {
+                    DisplayLayout::WorkspaceFileError(e) => {
+                        assert!(names_jpeg_quality(&e), "{what}, look {look}: {e}");
+                    }
+                    other => panic!("{what}, look {look}: {other:?}"),
+                }
+                let read = read_peeked(source, &mut Vec::new(), &ctx, |_| Ok(()));
+                assert!(
+                    matches!(read, PeekedRead::Unreadable),
+                    "{what}, look {look}"
+                );
+                // A check of the workspace file, which finds it unchanged.
+                assert!(queue.run_off_this_thread() <= 1, "{what}, look {look}");
+                end_frame(&ctx);
+            }
+            assert_eq!(cache.stats().decodes, decodes, "{what}: decoded again");
+            assert_eq!(
+                repaints.load(std::sync::atomic::Ordering::Relaxed),
+                0,
+                "{what}: a repaint asked for"
+            );
+            assert!(requests.mipmaps_waiting().is_empty(), "{what}: queued");
+
+            // Fixed, with a threshold that leaves the photograph in core: the
+            // next look's check finds the file changed and asks for a
+            // repaint, and the photograph's layout is read again.
+            std::fs::write(
+                &workspace,
+                r#"{"version": 2, "mipmap_options": {"out_of_core_long_side": 4096,
+                "jpeg_quality": 95, "full_resolution_jpeg_quality": 95}}"#,
+            )
+            .unwrap();
+            let _ = display_layout(source, &ctx);
+            assert_eq!(queue.run_off_this_thread(), 1, "{what}: the check");
+            assert_eq!(
+                repaints.load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "{what}: the check's repaint"
+            );
+            assert!(matches!(
+                display_layout(source, &ctx),
+                DisplayLayout::Loading
+            ));
+            assert_eq!(queue.run_off_this_thread(), 1, "{what}: the header read");
+            assert!(
+                matches!(display_layout(source, &ctx), DisplayLayout::Known(_)),
+                "{what}: read once the file is fixed"
+            );
+        }
+    }
+}
+
+/// A photograph queued for *Build mipmaps* whose workspace file breaks
+/// before its build runs: the build is refused, and the panels then answer
+/// it as a workspace file error naming the key, as when the header read
+/// finds the refusal, not as an unreadable photograph; once the file is
+/// fixed the next look's check finds it changed and the photograph is read
+/// again and queued again. With a budget smaller than the photograph and
+/// with one of 0, which keeps no record of the refusal.
+#[test]
+fn a_workspace_file_broken_before_a_queued_build_is_a_workspace_file_error() {
+    use super::super::build_mipmaps::run_chunk;
+    for budget in [20_000, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = out_of_core_photo(dir.path());
+        let workspace = dir
+            .path()
+            .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME);
+        let valid = std::fs::read(&workspace).unwrap();
+        let cache = tile_cache(budget, 1 << 30);
+        let (requests, queue) = PhotographRequests::queued();
+        let source = PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        };
+        let ctx = egui::Context::default();
+        let _ = display_layout(source, &ctx);
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the header read");
+        assert!(matches!(
+            display_layout(source, &ctx),
+            DisplayLayout::Building(_)
+        ));
+        assert_eq!(requests.mipmaps_waiting(), std::slice::from_ref(&path));
+
+        std::fs::write(&workspace, INVALID_MIPMAP_OPTIONS).unwrap();
+        run_chunk(&cache, &requests, &Progress::none(), None);
+        assert_eq!(cache.stats().mipmaps_made, 0, "{budget}");
+        for look in 0..3 {
+            match display_layout(source, &ctx) {
+                DisplayLayout::WorkspaceFileError(e) => {
+                    assert!(names_jpeg_quality(&e), "{budget}, look {look}: {e}");
+                }
+                other => panic!("{budget}, look {look}: {other:?}"),
+            }
+            // A check of the workspace file, which finds it unchanged.
+            assert!(queue.run_off_this_thread() <= 1, "{budget}, look {look}");
+        }
+        assert!(requests.mipmaps_waiting().is_empty(), "{budget}: queued");
+
+        std::fs::write(&workspace, &valid).unwrap();
+        let _ = display_layout(source, &ctx);
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the check");
+        assert!(matches!(
+            display_layout(source, &ctx),
+            DisplayLayout::Loading
+        ));
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the header read");
+        assert!(
+            matches!(display_layout(source, &ctx), DisplayLayout::Building(_)),
+            "{budget}: read again once the file is fixed"
+        );
+        assert_eq!(requests.mipmaps_waiting(), std::slice::from_ref(&path));
+        run_chunk(&cache, &requests, &Progress::none(), None);
+        assert_eq!(cache.stats().mipmaps_made, 1, "{budget}");
+    }
 }

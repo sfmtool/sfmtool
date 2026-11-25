@@ -256,3 +256,106 @@ fn an_unreadable_crop_is_drawn_once_its_photograph_arrives() {
         .all(|pictures| matches!(pictures.crop, Crop::Ready { .. })));
     assert_eq!(queue.len(), 0, "nothing more asked for");
 }
+
+/// The measurement fixture as [`on_disk`] makes it, but with its workspace
+/// file's `mipmap_options` putting its photographs of images 0 and 1, 300 x
+/// 200 PNGs with no mipmap, out of core; and those photographs' paths.
+fn out_of_core_on_disk(
+    dir: &std::path::Path,
+    budget_bytes: u64,
+) -> (AppState, TaskQueue, Vec<std::path::PathBuf>) {
+    use crate::state::build_mipmaps::tests::out_of_core_photographs_of;
+    let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
+    let paths = out_of_core_photographs_of(&mut recon, dir, &[0, 1]);
+    let measurements = recon.image_set.measurements.distance.as_mut().unwrap();
+    measurements.endpoints_xy[[TWO_PHOTOGRAPHS, 1, 0]] = B_PIXEL[0];
+    measurements.endpoints_xy[[TWO_PHOTOGRAPHS, 1, 1]] = B_PIXEL[1];
+    let mut state = AppState::new();
+    state.photographs = Arc::new(PhotographCache::new(PhotographCacheOptions {
+        budget_bytes,
+        build_budget_bytes: 1 << 30,
+        tile_size: 32,
+    }));
+    let (requests, queue) = PhotographRequests::queued();
+    state.photograph_requests = requests;
+    let id = state.append_node(crate::scene::SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
+    state.select_measurement(MeasurementRef::distance(id, TWO_PHOTOGRAPHS));
+    (state, queue, paths)
+}
+
+/// The two endpoints' crops, whose photographs wait for their mipmaps once
+/// their headers are read, each draw a spinner with *Building mipmap…*,
+/// ask for no photograph tile and queue their photograph once for *Build
+/// mipmaps*; nothing is kept for them meanwhile. Once *Build mipmaps* has
+/// made the mipmaps the spinners are gone and the crops are cut, with a
+/// few reads, after which the frames ask for none and repaint no more.
+/// With a budget smaller than a photograph and with one of 0.
+#[test]
+fn endpoint_crops_whose_photographs_wait_for_their_mipmaps_draw_a_spinner() {
+    use crate::state::build_mipmaps::tests::run_until_empty;
+    use crate::state::BUILDING_MIPMAP_LABEL;
+    for budget in [20_000, 0] {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, queue, mut paths) = out_of_core_on_disk(dir.path(), budget);
+        let mut panel = MeasurementView::new();
+        let ctx = egui::Context::default();
+        let run = |panel: &mut MeasurementView| {
+            let mut output = ctx.run_ui(input(Vec::new()), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    panel.show(ui, &state);
+                });
+            });
+            output.textures_delta.clear();
+            output
+        };
+        run(&mut panel);
+        assert_eq!(queue.run_off_this_thread(), 2, "{budget}: the header reads");
+        for frame in 0..3 {
+            let output = run(&mut panel);
+            let texts = crate::test_support::output_texts(&output);
+            let said = texts.iter().filter(|t| *t == BUILDING_MIPMAP_LABEL).count();
+            assert_eq!(said, 2, "{budget}, frame {frame}: {texts:?}");
+            let spinners = crate::test_support::output_spinner_rects(&output);
+            assert_eq!(spinners.len(), 2, "{budget}, frame {frame}");
+            assert!(crate::test_support::repaints_at_once(&output), "{budget}");
+            assert_eq!(queue.len(), 0, "{budget}, frame {frame}: a tile asked for");
+            assert!(
+                panel
+                    .pictures
+                    .values()
+                    .all(|p| matches!(p.crop, Crop::Building)),
+                "{budget}, frame {frame}"
+            );
+        }
+        let mut waiting = state.photograph_requests.mipmaps_waiting();
+        waiting.sort();
+        paths.sort();
+        assert_eq!(waiting, paths, "{budget}: each queued once");
+
+        run_until_empty(&state.photographs, &state.photograph_requests);
+        let mut reads = 0;
+        let mut quiet = false;
+        for _ in 0..8 {
+            let output = run(&mut panel);
+            assert!(crate::test_support::output_spinner_rects(&output).is_empty());
+            if queue.len() == 0 && !crate::test_support::repaints_at_once(&output) {
+                quiet = true;
+                break;
+            }
+            reads += queue.run_off_this_thread();
+        }
+        assert!(
+            quiet,
+            "{budget}: the frames kept asking for reads or repaints"
+        );
+        assert!(
+            panel.pictures.values().all(|p| !p.crop.asks_again()),
+            "{budget}: every crop kept"
+        );
+        // A layout read and the tiles the pictures need, for each photograph.
+        assert!(reads <= 6, "{budget}: {reads} reads");
+    }
+}

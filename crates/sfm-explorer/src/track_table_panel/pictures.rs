@@ -180,6 +180,21 @@ pub(super) enum CellPicture {
     /// picked is drawn so, and so are the rows of a version the node has left,
     /// until the new version's rows arrive.
     Waiting,
+    /// The crop's photograph is waiting for its mipmap
+    /// ([`PeekedRead::Building`]): a spinner, with
+    /// [`crate::state::BUILDING_MIPMAP_LABEL`] where the cell has room for
+    /// it. Nothing is kept, as for [`CellPicture::Waiting`].
+    Building,
+}
+
+/// Why a crop's hover view is not cut on this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotCut {
+    /// The photograph tiles it needs are loading, or are asked for once the
+    /// rows stop.
+    Loading,
+    /// Its photograph is waiting for its mipmap ([`PeekedRead::Building`]).
+    Building,
 }
 
 /// What making a cell's picture gave.
@@ -199,6 +214,9 @@ pub(super) enum Made {
     /// picked. Nothing is kept, and the cell is asked again on the next frame
     /// that draws it.
     NotYet,
+    /// Not yet: the crop's photograph is waiting for its mipmap
+    /// ([`PeekedRead::Building`]). Nothing is kept, as for [`Made::NotYet`].
+    Building,
 }
 
 /// One cached cell.
@@ -286,7 +304,9 @@ impl PictureTextures {
     /// The cell `key`'s picture. When none is held and `make` is given, the
     /// picture is made with it, uploaded and kept, or the reason there is
     /// none kept; a [`Made::NotYet`] keeps nothing and the cell is
-    /// [`CellPicture::Waiting`]. With no `make`, as for the rows of a version
+    /// [`CellPicture::Waiting`], and a [`Made::Building`] keeps nothing and
+    /// the cell is [`CellPicture::Building`]. With no `make`, as for the rows
+    /// of a version
     /// the node has left, nothing is made and the cell is
     /// [`CellPicture::Waiting`].
     ///
@@ -317,6 +337,7 @@ impl PictureTextures {
                 let name = format!("track_table_{}_{}", key.column.wire_name(), key.point);
                 let held = match make() {
                     Made::NotYet => return CellPicture::Waiting,
+                    Made::Building => return CellPicture::Building,
                     Made::Absent(absent) => Held::Absent(absent),
                     Made::Image(image) => {
                         Held::Texture(ctx.load_texture(name, image, egui::TextureOptions::NEAREST))
@@ -383,11 +404,12 @@ impl PictureTextures {
     /// The hover view of the crop held for `key`, cut around the same outline
     /// from the photograph tiles it needs of its image's photograph in
     /// `recon`, read through `pool`, and kept while the pointer rests on that
-    /// cell; one whose read failed is cut again on every call. `None` while
-    /// those tiles are loading: they are asked for when `ask` is set
-    /// ([`crate::state::read_peeked`]) and only looked for otherwise.
-    /// `Ok(None)` when no crop is held for `key` or its hover view cut
-    /// nothing, and why when the read of the photograph failed.
+    /// cell; one whose read failed is cut again on every call. [`NotCut`]
+    /// while those tiles are loading, which are asked for when `ask` is set
+    /// ([`crate::state::read_peeked`]) and only looked for otherwise, and
+    /// while the photograph waits for its mipmap. `Ok(None)` when no crop is
+    /// held for `key` or its hover view cut nothing, and why when the read
+    /// of the photograph failed.
     pub(super) fn crop_context(
         &mut self,
         ctx: &egui::Context,
@@ -396,7 +418,7 @@ impl PictureTextures {
         recon: &SfmrReconstruction,
         ask: bool,
         pool: &RegionPool,
-    ) -> Option<Result<Option<&DrawnCrop>, &str>> {
+    ) -> Result<Result<Option<&DrawnCrop>, &str>, NotCut> {
         // A hover view whose read failed is not kept, as an unreadable cell
         // is not.
         if !matches!(&self.hover, Some((held, Ok(_))) if *held == key) {
@@ -430,8 +452,9 @@ impl PictureTextures {
                     match read {
                         PeekedRead::Loading => {
                             self.hover_needs = Some((key, needs));
-                            return None;
+                            return Err(NotCut::Loading);
                         }
+                        PeekedRead::Building => return Err(NotCut::Building),
                         PeekedRead::Unreadable => {
                             Err(crate::state::UNREADABLE_PHOTOGRAPH.to_string())
                         }
@@ -459,9 +482,9 @@ impl PictureTextures {
             self.hover = Some((key, drawn));
         }
         match self.hover.as_ref() {
-            Some((_, Ok(drawn))) => Some(Ok(drawn.as_ref())),
-            Some((_, Err(why))) => Some(Err(why)),
-            None => Some(Ok(None)),
+            Some((_, Ok(drawn))) => Ok(Ok(drawn.as_ref())),
+            Some((_, Err(why))) => Ok(Err(why)),
+            None => Ok(Ok(None)),
         }
     }
 
@@ -501,7 +524,8 @@ impl PictureTextures {
 
 /// Paint one picture cell in `cell`: the picture, `size` points square and
 /// centred, dimmed when `dimmed`, with a crop's outline over it when `crop`
-/// is the crop it is; the reason where the point has none; or an empty frame.
+/// is the crop it is; the reason where the point has none; or an empty frame,
+/// with a spinner in it while the crop's photograph waits for its mipmap.
 pub(super) fn paint_picture(
     ui: &egui::Ui,
     cell: egui::Rect,
@@ -550,6 +574,15 @@ pub(super) fn paint_picture(
                 visuals.widgets.noninteractive.bg_stroke,
                 egui::StrokeKind::Inside,
             );
+        }
+        CellPicture::Building => {
+            painter.rect_stroke(
+                rect,
+                2.0,
+                visuals.widgets.noninteractive.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+            crate::patch_pictures::paint_building_mipmap(ui, rect);
         }
     }
 }

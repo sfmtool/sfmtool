@@ -402,7 +402,7 @@ impl PictureKey {
 
 /// Why an endpoint has no crop when its photograph cannot be read. The one
 /// reason not kept: a crop absent for it is cut again on every frame
-/// ([`Crop::is_unreadable`]), so it is drawn once the photograph can be
+/// ([`Crop::asks_again`]), so it is drawn once the photograph can be
 /// read, whatever made it readable.
 const UNREADABLE_CROP: &str = "The photograph could not be read";
 
@@ -417,13 +417,21 @@ enum Crop {
     },
     /// Why there is no crop.
     Absent(&'static str),
+    /// Not cut yet: the photograph is waiting for its mipmap
+    /// ([`PeekedRead::Building`]). The cell draws a spinner with
+    /// [`crate::state::BUILDING_MIPMAP_LABEL`], and the crop is asked for
+    /// again on every frame, so it is cut on the first frame after the run of
+    /// *Build mipmaps* that makes the mipmap.
+    Building,
 }
 
 impl Crop {
-    /// Whether there is no crop because the photograph cannot be read, which
-    /// the panel asks again rather than keep.
-    fn is_unreadable(&self) -> bool {
-        matches!(self, Crop::Absent(why) if *why == UNREADABLE_CROP)
+    /// Whether the panel asks for the crop again on the next frame rather
+    /// than keep it: there is no crop because the photograph cannot be read,
+    /// or not yet because its mipmap is being made.
+    fn asks_again(&self) -> bool {
+        matches!(self, Crop::Building)
+            || matches!(self, Crop::Absent(why) if *why == UNREADABLE_CROP)
     }
 }
 
@@ -1213,7 +1221,7 @@ impl MeasurementView {
             observation: view.observation,
             pixel: view.pixel.map(f64::to_bits),
         };
-        if self.offer_crops.get(&key).is_none_or(Crop::is_unreadable) {
+        if self.offer_crops.get(&key).is_none_or(Crop::asks_again) {
             let name = format!(
                 "measurement_offer_{:?}_{}_{}_{:.3}_{:.3}",
                 node.id, view.point, view.observation, view.pixel[0], view.pixel[1]
@@ -1232,6 +1240,9 @@ impl MeasurementView {
             ) {
                 self.offer_needs.remove(&key);
                 self.offer_crops.insert(key, crop);
+            } else if matches!(self.offer_crops.get(&key), Some(Crop::Building)) {
+                // Its mipmap is made and its tiles are loading.
+                self.offer_crops.remove(&key);
             }
         }
         let recon = node.recon();
@@ -1347,7 +1358,7 @@ impl MeasurementView {
         if self
             .pictures
             .get(&key)
-            .is_some_and(|pictures| !pictures.crop.is_unreadable())
+            .is_some_and(|pictures| !pictures.crop.asks_again())
         {
             return;
         }
@@ -1372,12 +1383,22 @@ impl MeasurementView {
             &self.regions,
             self.picture_needs.entry(key).or_default(),
         ) else {
+            // A crop whose mipmap is made and whose tiles are loading is
+            // drawn loading, not with the spinner it waited under.
+            if self
+                .pictures
+                .get(&key)
+                .is_some_and(|pictures| matches!(pictures.crop, Crop::Building))
+            {
+                self.pictures.remove(&key);
+            }
             return;
         };
         self.picture_needs.remove(&key);
         if let Some(held) = self.pictures.get_mut(&key) {
-            // A crop asked again because its photograph could not be read:
-            // the patch is the one already uploaded.
+            // A crop asked again because its photograph could not be read or
+            // was waiting for its mipmap: the patch is the one already
+            // uploaded.
             held.crop = crop;
             return;
         }
@@ -2090,6 +2111,13 @@ fn show_crop(
                 ui.label(caption);
             })
         }
+        Some(Crop::Building) => {
+            crate::patch_pictures::paint_building_mipmap(ui, rect);
+            response.on_hover_text(format!(
+                "{full_name}\n{}",
+                crate::state::BUILDING_MIPMAP_LABEL
+            ))
+        }
         Some(Crop::Absent(why)) => {
             painter.text(
                 rect.center(),
@@ -2501,6 +2529,7 @@ fn endpoint_crop(
     };
     let [cell, context] = match crate::state::read_peeked(source, needs, ctx, render) {
         PeekedRead::Loading => return None,
+        PeekedRead::Building => return Some(Crop::Building),
         PeekedRead::Read(Ok(pictures)) => pictures,
         PeekedRead::Read(Err(_)) | PeekedRead::Unreadable => {
             return Some(Crop::Absent(UNREADABLE_CROP))

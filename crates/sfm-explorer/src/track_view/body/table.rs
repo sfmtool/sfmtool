@@ -1804,6 +1804,7 @@ impl TrackBody {
                 ui.painter()
                     .rect_filled(tile_rect, 2.0, ui.visuals().faint_bg_color);
                 self.paint_read_failure(ui, tile_rect, observation, "track_view_tile");
+                self.paint_building_mipmap(ui, tile_rect, observation, "track_view_tile");
             }
         }
         // Hovering the tile shows it in context: the same picture over a wider
@@ -1820,15 +1821,21 @@ impl TrackBody {
                 ui.label(egui::RichText::new(&name).strong());
                 match self.ensure_context(ui.ctx(), recon, track, observation, state) {
                     Some(drawn) => drawn.show(ui),
+                    // Asked about in the arm, not in a guard, which would
+                    // borrow the panel while the answer does.
                     None => {
-                        ui.label(match self.read_failure(observation) {
-                            Some(why) => read_failure_text(why),
-                            // Not drawn yet: its photograph tiles are loading.
-                            None if !self.contexts.contains_key(&observation) => {
-                                HOVER_LOADING.to_string()
-                            }
-                            None => "Nothing around this patch could be rendered.".to_string(),
-                        });
+                        if self.building_mipmap(observation) {
+                            crate::patch_pictures::show_building_mipmap(ui);
+                        } else {
+                            ui.label(match self.read_failure(observation) {
+                                Some(why) => read_failure_text(why),
+                                // Not drawn yet: its photograph tiles are loading.
+                                None if !self.contexts.contains_key(&observation) => {
+                                    HOVER_LOADING.to_string()
+                                }
+                                None => "Nothing around this patch could be rendered.".to_string(),
+                            });
+                        }
                     }
                 }
             });
@@ -1851,6 +1858,7 @@ impl TrackBody {
             }
             None => {
                 self.paint_read_failure(ui, crop_rect, observation, "track_view_crop");
+                self.paint_building_mipmap(ui, crop_rect, observation, "track_view_crop");
                 false
             }
         };
@@ -1873,15 +1881,21 @@ impl TrackBody {
                 ui.label(egui::RichText::new(&name).strong());
                 match self.ensure_crop_context(ui.ctx(), recon, track, observation, state) {
                     Some(drawn) => drawn.show(ui),
+                    // Asked about in the arm, not in a guard, which would
+                    // borrow the panel while the answer does.
                     None => {
-                        ui.label(match self.read_failure(observation) {
-                            Some(why) => read_failure_text(why),
-                            // Not drawn yet: its photograph tiles are loading.
-                            None if !self.crop_contexts.contains_key(&observation) => {
-                                HOVER_LOADING.to_string()
-                            }
-                            None => "Nothing around this crop could be rendered.".to_string(),
-                        });
+                        if self.building_mipmap(observation) {
+                            crate::patch_pictures::show_building_mipmap(ui);
+                        } else {
+                            ui.label(match self.read_failure(observation) {
+                                Some(why) => read_failure_text(why),
+                                // Not drawn yet: its photograph tiles are loading.
+                                None if !self.crop_contexts.contains_key(&observation) => {
+                                    HOVER_LOADING.to_string()
+                                }
+                                None => "Nothing around this crop could be rendered.".to_string(),
+                            });
+                        }
                     }
                 }
                 if let Some(caption) = &crop_caption {
@@ -2199,6 +2213,7 @@ pub(super) const SELF_SIMILARITY_ELLIPSE_CAPTION: &str = "Where a match could la
 pub(super) const READ_FAILURE_CELL: &str = "unreadable";
 
 pub(super) use crate::patch_pictures::HOVER_LOADING;
+use crate::state::BUILDING_MIPMAP_LABEL;
 
 /// The hover text of a tile or crop cell whose photograph read failed: `why`.
 pub(super) fn read_failure_text(why: &str) -> String {
@@ -2206,6 +2221,21 @@ pub(super) fn read_failure_text(why: &str) -> String {
 }
 
 impl TrackBody {
+    /// Over the empty tile or crop cell `rect` of `observation`'s row, while
+    /// its photograph's mipmap is being made ([`TrackBody::building`]): the
+    /// spinner, with [`BUILDING_MIPMAP_LABEL`] under it where the two fit
+    /// ([`crate::patch_pictures::paint_building_mipmap`]), and the label on
+    /// hover. Nothing otherwise. `id` tells the hover from the other cell's.
+    fn paint_building_mipmap(&self, ui: &egui::Ui, rect: egui::Rect, observation: usize, id: &str) {
+        if !self.building.contains(&observation) {
+            return;
+        }
+        crate::patch_pictures::paint_building_mipmap(ui, rect);
+        let id = ui.id().with((id, "building", observation));
+        ui.interact(rect, id, egui::Sense::hover())
+            .on_hover_text(BUILDING_MIPMAP_LABEL);
+    }
+
     /// Over the empty tile or crop cell `rect` of `observation`'s row, the
     /// cell's error state when the read of its photograph failed: the word
     /// [`READ_FAILURE_CELL`] in the cell, and why on hover. Nothing when it
