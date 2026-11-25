@@ -4062,7 +4062,7 @@ in core. Step 17 turns the tier on.
       (`ValueError`); and a cache `read` makes for itself lives as long as
       the set, since the set's photographs read through it. In core the
       command writes the same file as before, byte for byte. The measured
-      cost, and the decision it needs, are open question 21.
+      cost, and the decision on it, are open question 21.
       Tests: in
       [test_image_pyramid_set_read_rust_bindings.py](../../tests/rust_bindings/patches/test_image_pyramid_set_read_rust_bindings.py),
       a list of paths read in order and refined as the arrays of
@@ -4133,7 +4133,9 @@ in core. Step 17 turns the tier on.
       once.
 17. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
-    viewer's one-line notice for a workspace without it, and the workspace
+    viewer's one-line notice for a workspace without it, `sfm cluster-patches`'
+    line recommending the object (open question 21) naming `sfm ws mipmaps
+    --enable` in place of the object to add by hand, and the workspace
     spec gains the object. Tests: a new workspace has the object with 4096,
     95 and 95; `--enable` writes the object and refuses a file that has one;
     a workspace without the object writes nothing (the checked-in `test-data`
@@ -4164,8 +4166,8 @@ or `read_rgb` pixel by pixel.
 
 ## Open questions
 
-The user has decided every question below but 21, which needs a decision;
-the section records the decisions.
+The user has decided every question below; the section records the
+decisions.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
@@ -4406,7 +4408,7 @@ the section records the decisions.
     cache=None, progress=None)`, as § "Python bindings" gives it, and step
     16b builds it.
 21. **`sfm cluster-patches` with in-core photographs past the cache's
-    budget.** *Needs a decision.* Found while building 16b. Until step 17
+    budget.** Found while building 16b. Until step 17
     turns the tier on, a workspace has no `mipmap_options` and every
     photograph is in core, so the cache keeps whole decodes' tiles, and a
     tile it has evicted is read by decoding the whole photograph again. The
@@ -4458,3 +4460,10 @@ the section records the decisions.
       (`mipmap_options` in the workspace file now; step 17 makes `sfm ws
       init` write it): with it the same run reads tiles of the mip level
       files and decodes no photograph whole, at any budget.
+
+    *Decided by the user:* (c). 16b ships as built, relying on the tier.
+    When the command's cache decodes photographs whole more times than the
+    in-core photographs it read, the command prints a line after its
+    `Photographs:` line recommending a `mipmap_options` object in the
+    workspace's `.sfm-workspace.json`, naming the file and giving the object
+    to add by hand; step 17 changes it to name `sfm ws mipmaps --enable`.

@@ -491,6 +491,8 @@ def test_cluster_patches_through_the_photograph_cache_writes_the_file_the_arrays
     through_cache = runner.invoke(main, [*args, str(tmp_path / "cache.matches")])
     assert through_cache.exit_code == 0, through_cache.output
     assert "Photographs: 17 whole decodes, 0 mipmaps made" in through_cache.output
+    # Each photograph decoded once: no recommendation of the tier.
+    assert "mipmap_options" not in through_cache.output
 
     class _Arrays:
         """The photographs as the command read them before: whole arrays."""
@@ -540,5 +542,39 @@ def test_cluster_patches_reads_out_of_core_photographs_from_their_mipmaps(
 
     assert result.exit_code == 0, result.output
     assert "Photographs: 0 whole decodes, 17 mipmaps made" in result.output
+    assert "The cache decoded" not in result.output
     data = read_matches(out)
     assert (data["member_status"] == STATUS_KEPT).any()
+
+
+def test_cluster_patches_recommends_mipmaps_when_it_decodes_photographs_again(
+    seoul_bull_workspace: Path, monkeypatch
+):
+    """A cache budget smaller than the photographs' tiles decodes them whole
+    again, and the command then recommends `mipmap_options`, naming the
+    workspace file."""
+    workspace_dir = seoul_bull_workspace.parent
+    # 4 MB holds about half of the tiles of the 17 270 x 480 photographs.
+    monkeypatch.setenv("SFM_EXPLORER_PHOTOGRAPH_CACHE_MB", "4")
+    out = workspace_dir / "small-budget.matches"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "cluster-patches",
+            "-i",
+            str(_clusters_of(seoul_bull_workspace)),
+            "--resolution",
+            "16",
+            "-o",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    decodes = int(re.search(r"Photographs: (\d+) whole decodes", result.output)[1])
+    assert decodes > 17
+    hint = f"The cache decoded 17 photographs whole {decodes} times"
+    assert hint in result.output
+    assert str(workspace_dir / ".sfm-workspace.json") in result.output
+    assert '"mipmap_options": {"out_of_core_long_side": 4096' in result.output

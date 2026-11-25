@@ -125,7 +125,16 @@ consumer reads the cells.
    those of `sfmtool.fileio.read_image_rgb`, RGB, as the kernel takes them.
    After the refinement the command prints the cache's count of whole decodes
    and of mipmaps made, and its budget, which
-   `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` sets.
+   `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` sets:
+   `Photographs: 8 whole decodes, 0 mipmaps made, cache budget 15.9 GiB`.
+   When the whole decodes are more than the in-core photographs it read, the
+   cache evicted a photograph's tiles while the refinement still read it and
+   decoded it again, which can make the command several times slower; it
+   then prints a line saying how many photographs were decoded how many
+   times, and recommending a `mipmap_options` object in the workspace's
+   `.sfm-workspace.json`, naming the file and giving the object with the
+   values `sfm ws init` is to write (4096, 95 and 95), so the photographs
+   are read from their mipmaps a tile at a time.
    Present the seed geometry from step 2 in images-section order, and call
    `sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member self-similarity gate,
