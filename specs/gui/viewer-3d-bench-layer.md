@@ -420,7 +420,7 @@ changes, which is what it keys its instances on:
 |---|---|---|
 | Track rays | `Scene` | when its key changes: the selected point and the version that holds it (`app::selected_point_source`), whether that point is live and its node visible (`app::track_ray_source`), and the node's display transform |
 | Bench figure | `Scene` | when the figure changes: the figure itself is the key (`viewer_3d::bench_track::Figure`), handed to the upload every frame and compared with the figure last written, its centre disc's buffer included |
-| Measurements | `MeasurementLayer` | when its key changes: each drawn node's document serial, display transform and tint, the selected measurement and endpoint, the focused item's `Arc`, *Show all measurements*, and the visible nodes (`measurement_marks::MeasurementLayerKey`) |
+| Measurements | `MeasurementLayer` | when the 3D view's layer is built again, which is when the layer's key changes: each drawn node's document serial, display transform and tint, the selected measurement and endpoint, the focused item (its node, label, `Arc` and whether its bench takes edits), *Show all measurements*, and the visible nodes (`measurement_marks::MeasurementLayerKey`, held with the layer in a `MeasurementLayerCache`) |
 
 The measurements' key and the track rays' cover everything their instances are
 built from, so orbiting, zooming and resizing the panel build nothing and write

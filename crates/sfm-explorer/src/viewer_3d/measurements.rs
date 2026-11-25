@@ -161,14 +161,19 @@ pub(crate) fn encoded_rgba(color: Color32) -> [u8; 4] {
 
 impl Viewer3D {
     /// Build the measurements' instances from [`Self::measurements`] for
-    /// `app.rs` to write, when [`Self::measurement_key`] differs from the key
-    /// they were last built on; otherwise do nothing.
+    /// `app.rs` to write, when its layer is not the one they were last built
+    /// from; otherwise do nothing.
     pub(super) fn build_measurement_instances(&mut self) {
-        if self.measurement_built.as_ref() == Some(&self.measurement_key) {
+        let layer = self.measurements.layer();
+        if self
+            .measurement_built
+            .as_ref()
+            .is_some_and(|built| std::sync::Arc::ptr_eq(built, layer))
+        {
             return;
         }
-        self.measurement_upload = Some(instances(&self.measurements));
-        self.measurement_built = Some(self.measurement_key.clone());
+        self.measurement_upload = Some(instances(layer));
+        self.measurement_built = Some(std::sync::Arc::clone(layer));
         #[cfg(test)]
         {
             self.measurement_builds += 1;
@@ -192,7 +197,7 @@ impl Viewer3D {
     /// the eye draws no mark, and a line with one end behind it is clipped at
     /// the near plane.
     pub(crate) fn measurement_screen(&self, painter: &egui::Painter, rect: Rect) -> Screen {
-        let layer = &self.measurements;
+        let layer = self.measurements.layer();
         let mut screen = Screen::default();
         for (index, drawn) in layer.drawn.iter().enumerate() {
             let finite: Vec<_> = drawn
@@ -244,7 +249,7 @@ impl Viewer3D {
         painter: &egui::Painter,
         rect: Rect,
     ) -> Option<Indicator> {
-        let layer = &self.measurements;
+        let layer = self.measurements.layer();
         let selected = layer.selected()?;
         if screen
             .of(layer, &selected.id)
@@ -290,7 +295,7 @@ impl Viewer3D {
         let screen = self.measurement_screen(painter, rect);
         let followed =
             measurement_marks::follow(&mut self.measurement_press, ui, response, |pos| {
-                screen.hit(&self.measurements, pos)
+                screen.hit(self.measurements.layer(), pos)
             });
         if let Some((press, double)) = &followed.released {
             if !press.cancelled && !press.moved {
@@ -298,6 +303,7 @@ impl Viewer3D {
                     Target::Indicator => {
                         let points = self
                             .measurements
+                            .layer()
                             .selected()
                             .map(|d| d.world_points())
                             .unwrap_or_default();
@@ -330,11 +336,11 @@ impl Viewer3D {
         rect: Rect,
     ) {
         let screen = self.measurement_screen(painter, rect);
-        screen.draw_indicator(painter, &self.measurements);
+        screen.draw_indicator(painter, self.measurements.layer());
         let text = self
             .measurement_hover
             .as_ref()
-            .and_then(|target| measurement_marks::hover_text(&self.measurements, target));
+            .and_then(|target| measurement_marks::hover_text(self.measurements.layer(), target));
         if let (Some(text), Some(pos)) = (text, response.hover_pos()) {
             measurement_marks::draw_hover_text(painter, pos, text, rect);
         }

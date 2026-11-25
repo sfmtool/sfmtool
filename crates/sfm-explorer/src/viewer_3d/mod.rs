@@ -407,12 +407,10 @@ pub(crate) struct Viewer3D {
     /// point menu reads the texel under the pointer against
     /// ([`Self::texel_under_pointer`]).
     pub(crate) surfel_scale: Option<f64>,
-    /// The measurements this view draws, set by the dock each frame with the
-    /// HUD's *Show all measurements* ([`crate::measurement_marks`]).
-    pub(crate) measurements: crate::measurement_marks::MeasurementLayer,
-    /// What [`Self::measurements`] was built from, set by the dock beside it:
-    /// the key the instances the scene pass draws them with are built on.
-    pub(crate) measurement_key: crate::measurement_marks::MeasurementLayerKey,
+    /// The measurements this view draws, brought up to date by the dock each
+    /// frame with the HUD's *Show all measurements* and built again only when
+    /// what they are built from changes ([`crate::measurement_marks`]).
+    pub(crate) measurements: crate::measurement_marks::MeasurementLayerCache,
     /// A press a measurement's mark, line or the off-screen indicator holds,
     /// from the press until the button comes up. Held here for the reason
     /// [`Self::bench_drag`] is.
@@ -422,12 +420,12 @@ pub(crate) struct Viewer3D {
     /// What a click on a measurement asked of the app, drained by `dock.rs`
     /// after the frame for the reason [`Self::bench_gesture`] is.
     pub(crate) measurement_gesture: Option<crate::measurement_marks::MeasurementGesture>,
-    /// The key the measurements' instances in the scene pass were last built
-    /// on, or `None` when none have been built or they were cleared.
-    measurement_built: Option<crate::measurement_marks::MeasurementLayerKey>,
+    /// The layer the measurements' instances in the scene pass were last
+    /// built from, or `None` when none have been built or they were cleared.
+    measurement_built: Option<std::sync::Arc<crate::measurement_marks::MeasurementLayer>>,
     /// The measurements' rings, dots and lines as the scene pass draws them,
-    /// built from [`Self::measurements`] when [`Self::measurement_key`]
-    /// changes and taken by `app.rs`, which writes them into the overlay
+    /// built from [`Self::measurements`] when it builds a new layer and taken
+    /// by `app.rs`, which writes them into the overlay
     /// ribbon store; `None` while what the store holds is current. Nothing in
     /// them depends on the camera, so orbiting, zooming and resizing build
     /// and write nothing.
@@ -614,7 +612,6 @@ impl Viewer3D {
             measurement_start: Default::default(),
             surfel_scale: Some(1.0),
             measurements: Default::default(),
-            measurement_key: Default::default(),
             measurement_press: None,
             measurement_hover: None,
             measurement_gesture: None,

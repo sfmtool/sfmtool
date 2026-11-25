@@ -45,7 +45,9 @@ fn frame(
     photograph: &HeldPhotograph,
     events: Vec<egui::Event>,
 ) -> Frame {
-    detail.measurements = state.measurement_layer(state.feature_display.show_all_measurements);
+    detail
+        .measurements
+        .update(state, state.feature_display.show_all_measurements);
     let node = &state.scene[0];
     let mut intrinsics = IntrinsicsDisplaySettings::default();
     let features = FeatureDisplaySettings::default();
@@ -194,7 +196,7 @@ fn marks_are_at_the_endpoint_pixels_in_the_image_shown() {
     let photograph = pyramid();
     let (detail, ctx) = settled(&state, &photograph);
     let screen = screen(&detail, &ctx, &state);
-    let layer = &detail.measurements;
+    let layer = detail.measurements.layer();
     let of = |index: usize| {
         screen
             .of(layer, &DrawnId::Stored(MeasurementRef::distance(id, index)))
@@ -249,7 +251,7 @@ fn a_mark_owns_its_press_and_answers_a_click_and_a_double_click() {
         vec![egui::Event::PointerMoved(a)],
     );
     let hovered = frame(&mut detail, &ctx, &state, &photograph, Vec::new());
-    let hover = detail.measurements.drawn[0].hover.clone();
+    let hover = detail.measurements.layer().drawn[0].hover.clone();
     assert!(
         hovered.texts.contains(&hover),
         "{hover:?} not in {:?}",
@@ -415,7 +417,7 @@ fn a_view_only_bench_draws_no_handles() {
         .unwrap();
     let photograph = pyramid();
     let (mut detail, ctx) = settled(&state, &photograph);
-    assert!(detail.measurements.drawn.iter().all(|d| !d.handles));
+    assert!(detail.measurements.layer().drawn.iter().all(|d| !d.handles));
     let a = at_pixel(&state, &detail, 0, EndpointSide::A);
     let pan = detail.pan;
     frame(
@@ -580,7 +582,7 @@ fn a_measurement_with_mismatched_columns_and_a_nan_pixel_draws() {
     );
     let nan_row = DrawnId::Stored(MeasurementRef::distance(id, 0));
     let nan = screen
-        .of(&detail.measurements, &nan_row)
+        .of(detail.measurements.layer(), &nan_row)
         .expect("its other endpoint is in the image");
     let sides: Vec<EndpointSide> = nan.marks.iter().map(|m| m.side).collect();
     assert_eq!(sides, vec![EndpointSide::B], "A's pixel is not a number");

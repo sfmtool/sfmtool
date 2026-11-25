@@ -256,15 +256,11 @@ impl TabContext<'_> {
         // node draws dots (`NodeDisplay::of`).
         self.viewer_3d.surfel_scale = (self.state.patch_opacity > 0.0)
             .then(|| 2f64.powf(f64::from(self.state.patch_size_log2)));
-        // The measurements it draws, with its own Show all measurements, and
-        // what they were built from, which the instances it draws them with
-        // are keyed on.
-        self.viewer_3d.measurement_key = self
-            .state
-            .measurement_layer_key(self.state.show_all_measurements);
-        self.viewer_3d.measurements = self
-            .state
-            .measurement_layer(self.state.show_all_measurements);
+        // The measurements it draws, with its own Show all measurements,
+        // built again only when what they are built from has changed.
+        self.viewer_3d
+            .measurements
+            .update(self.state, self.state.show_all_measurements);
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
@@ -732,10 +728,11 @@ impl TabContext<'_> {
             let endpoint_target = self.state.endpoint_target();
             let endpoint_refusal = endpoint_target.as_ref().map(|target| target.refusal_on(id));
             let bench_view_only = self.state.bench_view_only_refusal(id);
-            // The measurements it draws, with its own Show all measurements.
-            self.image_detail.measurements = self
-                .state
-                .measurement_layer(self.state.feature_display.show_all_measurements);
+            // The measurements it draws, with its own Show all measurements,
+            // built again only when what they are built from has changed.
+            self.image_detail
+                .measurements
+                .update(self.state, self.state.feature_display.show_all_measurements);
             // Why *Create Track Here* and *Find Nearby Tracks* are greyed on the
             // image shown, if they are.
             let create_track_refusal = selected_image

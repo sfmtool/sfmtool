@@ -331,3 +331,158 @@ fn the_hover_text_sits_right_of_the_pointer_and_moves_left_at_the_right_edge() {
     assert_eq!(text.top(), pointer.y + 14.0, "{text:?}");
     assert!(bounds.contains_rect(text.expand(4.0)), "{text:?}");
 }
+
+/// A frame whose key is the last one's builds no layer: the cache keeps the
+/// same `Arc`, over a thousand frames, with every measurement drawn and the
+/// focused item among them.
+#[test]
+fn an_unchanged_key_builds_the_layer_once() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let mut cache = MeasurementLayerCache::default();
+    cache.update(&state, true);
+    let built = Arc::clone(cache.layer());
+    assert_eq!(built.drawn.len(), 6, "five stored and the item");
+    for _ in 0..1000 {
+        cache.update(&state, true);
+    }
+    assert_eq!(cache.builds, 1);
+    assert!(Arc::ptr_eq(&built, cache.layer()), "the same layer");
+}
+
+/// What the changes in [`each_input_of_the_key_builds_the_layer_again`]
+/// carry from one to the next.
+struct Changing {
+    id: ReconId,
+    show_all: bool,
+    /// The held task's gate, which its job waits on until it is dropped.
+    gate: Option<std::sync::mpsc::Sender<()>>,
+    task: Option<u64>,
+    other: Option<ReconId>,
+}
+
+/// One change in [`each_input_of_the_key_builds_the_layer_again`].
+type Change = fn(&mut AppState, &mut Changing);
+
+/// Each thing the layer is built from builds it again when it changes, once,
+/// and the layer then is the one `measurement_layer` builds: a table over the
+/// key's fields, each change made on top of the ones before it.
+#[test]
+fn each_input_of_the_key_builds_the_layer_again() {
+    use crate::background::{Finished, Operation};
+
+    let (mut state, id) = measured_state(Some("m"));
+    let mut at = Changing {
+        id,
+        show_all: true,
+        gate: None,
+        task: None,
+        other: None,
+    };
+    let mut cache = MeasurementLayerCache::default();
+    cache.update(&state, at.show_all);
+    assert_eq!(cache.builds, 1);
+    let changes: [(&str, Change); 15] = [
+        ("show all", |_, at| at.show_all = false),
+        ("the selected measurement", |state, at| {
+            state.select_measurement(MeasurementRef::distance(at.id, 2))
+        }),
+        ("the selected endpoint", |state, at| {
+            state.select_endpoint(MeasurementRef::distance(at.id, 2), EndpointSide::B)
+        }),
+        ("the focused item", |state, at| {
+            state
+                .put_measurement_on_bench(MeasurementRef::distance(at.id, 0))
+                .unwrap();
+        }),
+        ("a step on the item", |state, at| {
+            let label = state.focused_measurement_label(at.id).unwrap().to_string();
+            state
+                .set_bench_measurement_label(at.id, &label, "door")
+                .unwrap();
+        }),
+        ("the item's label on the bench", |state, at| {
+            let label = state.focused_measurement_label(at.id).unwrap().to_string();
+            state.rename_bench_item(at.id, &label, "renamed").unwrap();
+        }),
+        ("a task starting on the node", |state, at| {
+            let (open, wait) = std::sync::mpsc::channel::<()>();
+            let job: crate::background::Job = Box::new(move |_| {
+                let _ = wait.recv();
+                Finished::Failed("nothing".to_string())
+            });
+            at.task = Some(
+                state
+                    .start_background_task(Operation::BENCH_FIT, at.id, job)
+                    .unwrap(),
+            );
+            at.gate = Some(open);
+        }),
+        ("the task finishing", |state, at| {
+            drop(at.gate.take());
+            state.finish_background_task(at.task.take().unwrap());
+        }),
+        ("the document", |state, at| {
+            state
+                .delete_measurement(MeasurementRef::distance(at.id, 4))
+                .unwrap();
+        }),
+        ("the display transform", |state, _| {
+            state.scene[0].history.transform_mut().scale = 2.0
+        }),
+        ("the tint", |state, _| {
+            state.scene[0].tint = crate::scene::NodeTint::Tint(&crate::scene::TINT_PALETTE[1]);
+        }),
+        ("a node added", |state, at| {
+            at.other = Some(state.append_node(crate::scene::SceneNode::demo(
+                sfmtool_core::SfmrReconstruction::demo(4),
+            )));
+        }),
+        ("solo on the other node", |state, at| {
+            state.set_solo(at.other)
+        }),
+        ("solo off", |state, _| state.set_solo(None)),
+        ("the node's eye", |state, _| state.scene[0].visible = false),
+    ];
+    for (name, change) in changes {
+        let builds = cache.builds;
+        change(&mut state, &mut at);
+        cache.update(&state, at.show_all);
+        cache.update(&state, at.show_all);
+        assert_eq!(cache.builds, builds + 1, "{name} builds the layer once");
+        assert_eq!(
+            **cache.layer(),
+            state.measurement_layer(at.show_all),
+            "after {name}"
+        );
+        // What the changes drew differently, where only the cache shows it.
+        let item = cache.layer().drawn.iter().find(|d| d.role == Role::Item);
+        match name {
+            "the item's label on the bench" => assert_eq!(item.unwrap().title, "renamed"),
+            "a task starting on the node" => assert!(!item.unwrap().handles),
+            "the task finishing" => assert!(item.unwrap().handles),
+            _ => {}
+        }
+    }
+}
+
+/// The 3D view and Image Detail keep a layer each, built with their own
+/// *Show all measurements*: frames that bring both up to date, in the order
+/// the dock does, build each once.
+#[test]
+fn the_two_views_keep_a_layer_each() {
+    let (mut state, id) = measured_state(Some("m"));
+    state.select_measurement(MeasurementRef::distance(id, 2));
+    let mut viewer = crate::viewer_3d::Viewer3D::new();
+    let mut detail = crate::image_detail::ImageDetail::new();
+    for _ in 0..3 {
+        viewer.measurements.update(&state, false);
+        detail.measurements.update(&state, true);
+    }
+    assert_eq!(viewer.measurements.builds, 1);
+    assert_eq!(detail.measurements.builds, 1);
+    assert_eq!(viewer.measurements.layer().drawn.len(), 1);
+    assert_eq!(detail.measurements.layer().drawn.len(), 5);
+}

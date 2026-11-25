@@ -8,7 +8,8 @@
 //! The two views share everything here but where a mark lands. The 3D view
 //! projects an endpoint's resolved position through its camera and Image
 //! Detail puts it at the endpoint's pixel; each builds a [`Screen`] of panel
-//! positions from the [`MeasurementLayer`] the dock hands it, and from there
+//! positions from the [`MeasurementLayer`] its [`MeasurementLayerCache`] holds,
+//! which is built again only when what it is drawn from changes, and from there
 //! the hit test, the hover text and the press are this module's, so a mark
 //! means the same thing in both views (G8). Image Detail paints the marks and
 //! lines with [`Screen::draw`]; the 3D view draws the same marks and lines, at
@@ -167,21 +168,42 @@ impl MeasurementLayer {
     }
 }
 
-/// Everything [`AppState::measurement_layer`] builds the 3D view's
-/// measurements from that can change their rings, dots and lines: what the
-/// 3D view keys the instances it builds from a layer on, so it builds them
-/// again only when this changes and never for a camera move.
+/// Everything [`AppState::measurement_layer`] builds a layer from: what a
+/// [`MeasurementLayerCache`] keys the layer on, so a view builds it again only
+/// when this changes and never for a camera move or a frame with nothing new.
 ///
 /// The focused item is compared by its `Arc`, which a step on it replaces,
-/// as [`crate::scene::SceneNode::item_reading`] compares it.
+/// as [`crate::scene::SceneNode::item_reading`] compares it, and by its node
+/// and label, which a rename of the item changes without replacing the `Arc`.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MeasurementLayerKey {
     show_all: bool,
     selected: Option<MeasurementRef>,
     selected_endpoint: Option<EndpointSide>,
-    item: Option<Arc<sfmtool_core::bench::EditableMeasurement>>,
+    item: Option<ItemKey>,
     /// Every visible node and the focused item's, in scene order.
     nodes: Vec<NodeKey>,
+}
+
+/// What [`MeasurementLayerKey`] holds of the focused measurement item.
+#[derive(Debug, Clone)]
+struct ItemKey {
+    node: ReconId,
+    /// Its label on the bench: the drawn item's id, title and hover text.
+    label: String,
+    item: Arc<sfmtool_core::bench::EditableMeasurement>,
+    /// Whether its node's bench takes edits now, which a task starting or
+    /// finishing on the node changes: whether its marks are handles.
+    editable: bool,
+}
+
+impl PartialEq for ItemKey {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.item, &other.item)
+            && self.node == other.node
+            && self.label == other.label
+            && self.editable == other.editable
+    }
 }
 
 /// What [`MeasurementLayerKey`] holds of one node.
@@ -190,7 +212,8 @@ struct NodeKey {
     id: ReconId,
     visible: bool,
     /// The version's document serial, which the stored measurements, their
-    /// readings and the item's reading follow.
+    /// readings, the reconstruction's `world_space_unit` and the item's
+    /// reading follow.
     document: crate::document::VersionSerial,
     /// The display transform as its quaternion, translation and scale.
     transform: [f64; 8],
@@ -200,36 +223,73 @@ struct NodeKey {
 
 impl PartialEq for MeasurementLayerKey {
     fn eq(&self, other: &Self) -> bool {
-        let item = match (&self.item, &other.item) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        };
-        item && self.show_all == other.show_all
+        self.show_all == other.show_all
             && self.selected == other.selected
             && self.selected_endpoint == other.selected_endpoint
+            && self.item == other.item
             && self.nodes == other.nodes
     }
 }
 
+/// A view's measurement layer and the key it was built on, so the layer is
+/// built only on a frame whose key differs from the last one's.
+///
+/// The 3D view and Image Detail each hold one, since each draws with its own
+/// *Show all measurements*. The layer is shared as an `Arc`, a new one for
+/// each build, so what is built from it (the 3D view's instances) can tell a
+/// rebuilt layer from the one it was built from by comparing pointers.
+#[derive(Debug, Default)]
+pub(crate) struct MeasurementLayerCache {
+    key: Option<MeasurementLayerKey>,
+    layer: Arc<MeasurementLayer>,
+    /// How many times the layer has been built, for the tests that an
+    /// unchanged key builds nothing.
+    #[cfg(test)]
+    pub(crate) builds: usize,
+}
+
+impl MeasurementLayerCache {
+    /// Build the layer from `state` with *Show all measurements* `show_all`,
+    /// when [`AppState::measurement_layer_key`] differs from the key it was
+    /// last built on; otherwise keep it.
+    pub(crate) fn update(&mut self, state: &AppState, show_all: bool) {
+        let key = state.measurement_layer_key(show_all);
+        if self.key.as_ref() == Some(&key) {
+            return;
+        }
+        self.layer = Arc::new(state.measurement_layer(show_all));
+        self.key = Some(key);
+        #[cfg(test)]
+        {
+            self.builds += 1;
+        }
+    }
+
+    /// The layer as last built.
+    pub(crate) fn layer(&self) -> &Arc<MeasurementLayer> {
+        &self.layer
+    }
+}
+
 impl AppState {
-    /// What [`Self::measurement_layer`] builds the 3D view's layer from, with
-    /// *Show all measurements* `show_all`, as far as it changes how the
-    /// measurements are drawn ([`MeasurementLayerKey`]).
+    /// What [`Self::measurement_layer`] builds its layer from, with *Show all
+    /// measurements* `show_all` ([`MeasurementLayerKey`]).
     pub(crate) fn measurement_layer_key(&self, show_all: bool) -> MeasurementLayerKey {
         let item = self.focused_item().and_then(|focused| {
             let label = self.focused_measurement_label(focused.node)?;
-            Some((
-                focused.node,
-                Arc::clone(self.bench_measurement(focused.node, label)?),
-            ))
+            Some(ItemKey {
+                node: focused.node,
+                label: label.to_string(),
+                item: Arc::clone(self.bench_measurement(focused.node, label)?),
+                editable: self.bench_edit_refusal(focused.node).is_none(),
+            })
         });
         let nodes = self
             .scene
             .iter()
             .filter_map(|node| {
                 let visible = crate::scene::is_visible(node, self.solo);
-                if !visible && item.as_ref().is_none_or(|(id, _)| *id != node.id) {
+                if !visible && item.as_ref().is_none_or(|item| item.node != node.id) {
                     return None;
                 }
                 let transform = node.transform();
@@ -248,7 +308,7 @@ impl AppState {
             show_all,
             selected: self.selected_measurement,
             selected_endpoint: self.selected_endpoint,
-            item: item.map(|(_, item)| item),
+            item,
             nodes,
         }
     }

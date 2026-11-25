@@ -199,6 +199,15 @@ pub(crate) struct MeasurementLayer { pub(crate) drawn: Vec<DrawnMeasurement> }
 impl AppState {
     /// With that view's Show all measurements.
     pub(crate) fn measurement_layer(&self, show_all: bool) -> MeasurementLayer;
+    /// Everything that layer is built from.
+    pub(crate) fn measurement_layer_key(&self, show_all: bool) -> MeasurementLayerKey;
+}
+/// A view's layer and the key it was built on.
+pub(crate) struct MeasurementLayerCache { .. }
+impl MeasurementLayerCache {
+    /// Build the layer again only when the key differs from the last one.
+    pub(crate) fn update(&mut self, state: &AppState, show_all: bool);
+    pub(crate) fn layer(&self) -> &Arc<MeasurementLayer>;
 }
 /// What a click, a double-click or a handle drag asks of the app.
 pub(crate) enum MeasurementGesture {
@@ -209,10 +218,27 @@ pub(crate) enum MeasurementGesture {
 }
 ```
 
-The dock builds each view's layer every frame and hands it to the view
-(`Viewer3D::measurements`, `ImageDetail::measurements`), as it hands the 3D
-view its bench figure, because the views are handed `&mut` into the state
-further down the same call. A view reports a gesture back and the dock applies
+Each view holds a `MeasurementLayerCache` (`Viewer3D::measurements`,
+`ImageDetail::measurements`), and the dock brings it up to date every frame
+with that view's *Show all measurements*, as it hands the 3D view its bench
+figure, because the views are handed `&mut` into the state further down the
+same call. The cache builds the layer again only when the layer's key
+(`MeasurementLayerKey`) differs from the one it was last built on, so a frame
+in which nothing it is drawn from has changed resolves no endpoint and formats
+no hover text. The key holds *Show all measurements*, the selected measurement
+and endpoint, the focused measurement item (its node, its label on the bench,
+its `Arc`, which a step on it replaces, and whether its bench takes edits now,
+which says whether its marks are handles), and each visible node and the
+focused item's node: its visibility, its version's document serial (which the
+stored rows, their readings, the item's reading and the reconstruction's
+`world_space_unit` follow), its display transform and its tint. The label is
+there because a rename keeps the item's `Arc`; the bench's editability because
+a task starting or finishing on the node changes it with nothing else. The
+camera is not in the key: the layer holds world positions and pixels, and
+each view places them on screen every frame. The layer is view-independent
+but for *Show all measurements*, so each view keeps its own cache rather than
+the two sharing one that would build again whenever their options differ.
+A view reports a gesture back and the dock applies
 it (`TabContext::apply_measurement_gesture`), through the same calls an
 endpoint block's click and double-click make, so a mark and a block cannot
 disagree (G8):
@@ -1029,11 +1055,10 @@ end clipped at the near plane has no ring and is not inset. Within the region ev
 comes first, then every stroke (each measurement's line and then its rings),
 then every dot, each in the layer's order, so one measurement's halo never
 crosses another's stroke. Nothing in an instance depends on the camera, so the
-instances are built only when what they are drawn from changes: the 3D view
-keys them on each drawn node's document serial, display transform and tint,
-the selected measurement and endpoint, the focused item's `Arc`, *Show all
-measurements*, and the visible nodes (`measurement_marks::MeasurementLayerKey`),
-and writes them into the measurements' region only then. Orbiting, zooming and
+instances are built only when the layer is: the 3D view builds them when its
+`MeasurementLayerCache` holds a layer other than the one they were built from
+(by `Arc` pointer), which happens only when the layer's key changes, and writes
+them into the measurements' region only then. Orbiting, zooming and
 resizing the panel build and write nothing, even with *Show all measurements*
 on over a thousand measurements. The layer is a texture of its own, cleared to transparent
 every frame, that holds egui's premultiplied colours as egui's own textures
