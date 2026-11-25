@@ -1347,7 +1347,9 @@ refine_cluster_patches(
 ```
 
 `images` is one `HxW` or `HxWxC` uint8 array per image, in the images-section
-order the cluster arrays index; `positions` and `affine_shapes` are parallel
+order the cluster arrays index, or an `ImagePyramidSet` of them, such as
+`ImagePyramidSet.read` reads from the photographs' files through a photograph
+cache ([patch-cloud.md](patch-cloud.md#cameraviews)); `positions` and `affine_shapes` are parallel
 lists of `(N, 2)` and `(N, 2, 2)` float32 arrays; the three cluster arrays are
 uint32. `window` is `"gaussian_disk"` (default), `"gaussian"` or `"uniform"`, and
 `window_sigma=None` resolves to `0.5`. The four cascade-tuning knobs
@@ -1358,14 +1360,15 @@ swept once, so moving them changes results rather than only cost.
 Argument names match the Rust ones. Parallel-list lengths, per-image array
 shapes, CSR self-consistency and the `member_images` range raise `ValueError`
 before the GIL is released; out-of-range `member_features` and degenerate shapes
-are data, not errors, and reach the caller as `not_evaluated`. Each image is
+are data, not errors, and reach the caller as `not_evaluated`. Each array is
 made a tiled photograph by `TiledPhotograph::from_image`, through
 `patches::views::build_photographs_from_image_list`, which holds every tile of
-its full-depth pyramid; the
+its full-depth pyramid, and a set's photographs are used as they are; the
 kernel runs under `py.detach` with a region pool made for the call, and a
-photograph read that fails, which arrays in memory never do, raises
-`RuntimeError` saying it is a photograph in memory and carrying the read's
-message.
+photograph read that fails raises `RuntimeError` carrying the read's message:
+for an array, which never fails, it says it is a photograph in memory, and for
+a photograph a set reads through a cache, it names the file, such as one that
+changed after the set was read.
 
 The returned dict is member-parallel: `reference_members` `(C,)` uint32
 (`0xFFFFFFFF` = unrefinable), `member_status` `(M,)` uint8,
