@@ -331,16 +331,14 @@ pub(crate) fn column_awaiting(
             }
         },
     );
-    Arc::new(DisplayThumbnails {
-        rows_by_name: super::names_to_rows(recon),
-        column: Arc::new(column),
-        awaiting: awaiting
+    Arc::new(DisplayThumbnails::new(
+        super::names_to_rows(recon),
+        Arc::new(column),
+        awaiting
             .iter()
             .map(|&i| (recon.workspace_dir.join(&images[i].name), i))
             .collect(),
-        filled: Default::default(),
-        fills: 0,
-    })
+    ))
 }
 
 /// A flat `rgb` row, as a fill brings back.
@@ -376,6 +374,12 @@ fn filling_rows_in_replaces_only_the_rows_that_await_them() {
     assert_eq!(once.awaiting().collect::<Vec<_>>(), [path(5).as_path()]);
     assert_eq!(once.fills(), 1);
     assert!(once.same_build(&built));
+    // The fill copied nothing: the names, the awaiting rows and the filled
+    // rows are shared, and the column before it still draws row 2 as it was.
+    assert!(Arc::ptr_eq(&once.shared, &built.shared));
+    assert!(is_flat(built.row(&name(2)).unwrap(), [PLACEHOLDER_GREY; 3]));
+    assert!(built.awaits(&path(2)));
+    assert!(!built.filled_after(0, &name(2)));
     assert_eq!(
         once.row(&name(3)).unwrap().as_ptr(),
         built.row(&name(3)).unwrap().as_ptr()

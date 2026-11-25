@@ -3817,8 +3817,13 @@ in core. Step 17 turns the tier on.
         reaches a save. The frustum atlas keeps its texture and writes only
         the cells filled since it was written
         (`SceneRenderer::thumbnails_changed`, then `upload_thumbnails`), and
-        the Image Browser drops those rows' textures and its barcode, which
-        load again. Two cases the plan did not name: the fill reads with
+        the Image Browser drops those rows' textures, which load again, and
+        writes those images' barcode columns again (`patch_barcode`, one
+        `set_partial` a column) rather than building the whole barcode, which
+        reads every row's pixels. A fill copies nothing of the column: the
+        names, the awaiting rows and the filled rows are shared behind an
+        `Arc`, each filled row set once, and a value sees only the fills up
+        to its own number. Two cases the plan did not name: the fill reads with
         `NotCurrentMipmap::DecodeOriginal`, so a photograph the task answers
         whose mipmap is still not current (a failed build, or levels that
         could not be written and were not kept under a budget of 0) is
@@ -3843,8 +3848,9 @@ in core. Step 17 turns the tier on.
         rows and shares the rest (`display_thumbnails::tests`); the atlas
         writes only the filled cells into the same texture
         (`scene_renderer::upload::tests`); and the Image Browser loads only
-        the filled row's texture again, with its pixels, and rebuilds its
-        barcode (`image_browser::tests`).
+        the filled row's texture again, with its pixels, and writes only
+        that image's barcode column, the barcode then equal to one built
+        whole (`image_browser::tests`).
     - **15d, the Python makers and `sfm sift`.** The `sfmtool.photographs`
       submodule with the `PhotographCache` class, only its constructor,
       `build_mipmaps` and `stats` (open question 17), wired as § "Python

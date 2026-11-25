@@ -250,7 +250,7 @@ fn the_upcoming_image_is_the_one_animation_shows_next() {
 
 /// Rows of the node's display column filled in after the open, once their
 /// photographs' mipmaps are made: the strip loads their textures again from
-/// the filled rows, and the barcode after them, and keeps every other
+/// the filled rows and writes their barcode columns again, and keeps every other
 /// texture.
 #[test]
 fn rows_filled_in_after_the_open_are_loaded_again() {
@@ -329,15 +329,34 @@ fn rows_filled_in_after_the_open_are_loaded_again() {
         .expect("the filled row's texture is uploaded");
     let egui::ImageData::Color(image) = &delta.image;
     assert_eq!(image.pixels[0].to_array(), [1, 2, 3, 255]);
-    let rebuilt = browser
+    // The barcode keeps its texture, and only image 2's column is written,
+    // to what a build of the whole barcode over the filled column gives.
+    let kept = browser
         .minibar
         .color_barcode
         .as_ref()
         .map(egui::TextureHandle::id);
-    assert!(
-        rebuilt.is_some() && rebuilt != barcode,
-        "the barcode is built again"
-    );
+    assert_eq!(kept, barcode, "the barcode is not built again");
+    let writes: Vec<&egui::epaint::ImageDelta> = output
+        .iter()
+        .filter(|entry| Some(*entry.0) == barcode)
+        .flat_map(|entry| entry.1.iter())
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].pos, Some([2, 0]));
+    assert_eq!(writes[0].image.size(), [1, 8]);
+    let mut whole = ImageBrowser::new();
+    run(&mut whole, &filled);
+    run(&mut whole, &filled);
+    assert!(whole.minibar.color_barcode.is_some());
+    assert_eq!(browser.minibar.barcode_pixels, whole.minibar.barcode_pixels);
+    let egui::ImageData::Color(column) = &writes[0].image;
+    let n = recon.image_set.images.len();
+    let expected: Vec<egui::Color32> = (0..8)
+        .map(|band| whole.minibar.barcode_pixels[band * n + 2])
+        .collect();
+    assert_eq!(column.pixels, expected);
+    assert_eq!(expected[0].to_array(), [1, 2, 3, 255]);
 
     let output = run(&mut browser, &filled);
     assert_eq!(ids(&browser), after);

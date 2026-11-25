@@ -468,7 +468,10 @@ grey placeholder until that task answers the photograph. Each frame,
 ([thumbnail_fills.rs](../../crates/sfm-explorer/src/state/thumbnail_fills.rs)) takes
 the photographs the task has answered, made or not, starts one read on the rayon pool
 for each whose row a node awaits, and gives each such node a new display column with
-the landed rows filled in (`DisplayThumbnails::with_rows`), sharing every other row.
+the landed rows filled in (`DisplayThumbnails::with_rows`), sharing every other row. The new column copies nothing: its rows,
+names, awaiting rows and filled rows are shared with the old one behind an `Arc`, each
+filled row is written once into the shared store, and each value sees only the fills up
+to its own count, so the old value still draws what it drew.
 The read is `photograph_thumbnail_row` with `NotCurrentMipmap::DecodeOriginal`: from the
 coarsest mip level file when the mipmap is current, and from a whole decode of the
 original when it is still not (its build failed, or its levels could not be written and,
@@ -498,8 +501,9 @@ the photograph. The Image Browser and the frustum atlas each read the column onc
 keep what they read, and each compares the column's count of fills
 (`DisplayThumbnails::fills`) with the one it read, so a fill makes them read again only
 the rows filled since (`DisplayThumbnails::filled_after`): the Image Browser drops those
-rows' textures and its barcode, which load again from the filled rows, and the atlas
-writes those cells into the texture it has ([camera-views.md](camera-views.md)
+rows' textures, which load again from the filled rows, and writes those images' columns
+of its barcode again (§ "Navigation minibar"), and the atlas writes those cells into the
+texture it has ([camera-views.md](camera-views.md)
 § "Thumbnail loading").
 
 - Cache: `HashMap<usize, egui::TextureHandle>` in `ImageBrowser`. An image with no picture
@@ -1781,6 +1785,9 @@ struct NavigationMinibar {
     /// Each column has 8 pixels representing the average color of each
     /// vertical eighth of the thumbnail.
     color_barcode: Option<egui::TextureHandle>,
+    /// The barcode's pixels, 8 rows of one pixel per image, kept so that a
+    /// fill writes again only the columns of the rows it filled.
+    barcode_pixels: Vec<egui::Color32>,
     /// Number of images when the barcode was last built (for invalidation).
     cached_image_count: usize,
 }
@@ -1790,9 +1797,13 @@ struct NavigationMinibar {
   image, the 128×128 thumbnail is divided into 8 horizontal bands (16 rows
   each), and the average color of each band becomes one pixel in the column.
 - The barcode texture is invalidated and rebuilt when the reconstruction
-  changes (same trigger as `ImageBrowser::thumbnail_cache` invalidation), and
-  when rows awaiting their mipmaps are filled in, once their textures have
-  loaded again (§ "Thumbnail loading").
+  changes (same trigger as `ImageBrowser::thumbnail_cache` invalidation).
+- When rows awaiting their mipmaps are filled in (§ "Thumbnail loading"),
+  `ImageBrowser::patch_barcode` computes the columns of those images alone,
+  from their filled rows, writes them into the kept pixels and updates the
+  texture with one `TextureHandle::set_partial` a column, so the barcode is
+  what a build of the whole of it would give while a fill reads only the rows
+  it filled.
 - egui stretches the texture to fill the bar rect, so rendering cost is
   independent of image count.
 
@@ -1808,7 +1819,8 @@ struct NavigationMinibar {
 ### Performance
 
 - The barcode is a single texture upload, built once all thumbnails are
-  loaded. No per-frame cost scales with image count.
+  loaded, and a fill afterwards uploads only its images' columns. No
+  per-frame cost scales with image count.
 - Navigation hit-testing is a simple `rect.contains(pointer_pos)` check.
 - Position-to-index mapping is O(1): `index = (x / width) * num_images`.
 
