@@ -130,7 +130,8 @@ reconstruction's point count is an error.
 - **`sift_files`** — first converted to `embedded_patches` (the minimal
   `--to-embedded-patches` bridge: mean-viewing patch frames, keypoints copied
   from `.sift`, at the strips' own size of 5 feature sizes edge to edge rather
-  than the embedded-patch default of 15), then **only the listed finite points** are turned to their
+  than the embedded-patch default of 15), then **only the listed finite
+  points** are turned to their
   grown-plane normals by `sfmtool.bench.refine_normals(recon, images,
   point_indexes=...)`
   ([core/bench/refine-normals.md](../../core/bench/refine-normals.md) §

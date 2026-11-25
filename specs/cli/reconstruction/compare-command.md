@@ -137,8 +137,8 @@ the points in that reconstruction's column
 run reads each point's patch frame and keypoints, so a `sift_files` reconstruction is converted
 to `embedded_patches` for it first (`SfmrReconstruction.to_embedded_patches` with
 `extent_value` set to the strips' half-extent of 2.5 feature sizes, the size their tiles are
-cut at, rather than the embedded-patch default of 7.5). The strips render each turned point at its new normal; a point the run left
-unchanged or refused keeps its stored normal, and so does every point of a reconstruction the
+cut at, rather than the embedded-patch default of 7.5). The strips render each turned point
+at its new normal; a point the run left unchanged or refused keeps its stored normal, and so does every point of a reconstruction the
 run refuses as a whole, with a line naming the column and the refusal (`--strips: kept the
 reference normals as stored (…)`). The command then prints the run's mean agreement for each
 reconstruction, the mean robust grid ZNCC of the turned points at their new planes, `n/a` when
