@@ -57,7 +57,8 @@ class ToEmbeddedPatchesTransform:
         k_neighbors: int = 12,
         extent: str = "feature_size",
         # Full patch size (whole edge length); halved to the library half-extent.
-        extent_value: float = 5.0,
+        # Kept equal to twice the binding's default so the two layers agree.
+        extent_value: float = 15.0,
         feature_reduce: str = "median",
         pixel_reduce: str = "min",
     ):

@@ -63,13 +63,13 @@ use super::{AppState, NOT_LOADED};
 const CONVERSION_NORMAL: PatchNormal = PatchNormal::MeanViewing;
 
 /// The half-extent policy that conversion sizes each patch by, and the CLI's
-/// own default: `2.5 ×` the median projected keypoint scale across the point's
-/// views, so the full patch edge is five times the feature. `PatchExtent`'s
+/// own default: `7.5 ×` the median projected keypoint scale across the point's
+/// views, so the full patch edge is 15 times the feature. `PatchExtent`'s
 /// `Default` *is* that pair, and it is spelled out here rather than taken from
 /// `Default` so the two layers are one written-down number rather than two that
 /// happen to agree.
 const CONVERSION_EXTENT: PatchExtent = PatchExtent::FeatureSize {
-    factor: 2.5,
+    factor: 7.5,
     across: ViewReduce::Median,
 };
 

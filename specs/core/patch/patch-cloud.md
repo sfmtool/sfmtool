@@ -436,11 +436,14 @@ pub enum PatchExtent {
     FeatureSize { factor: f64, across: ViewReduce },
 }
 
-// PatchExtent::default() == FeatureSize { factor: 2.5, across: Median }, and the
-// Python binding's `extent` defaults to "feature_size" / `extent_value` to 2.5.
-// `factor` is a HALF-extent multiplier, so the full patch edge is 5x the
-// projected feature size; the CLI's `--extent-value` states that full size and
-// halves it before the call.
+// PatchExtent::default() == FeatureSize { factor: 7.5, across: Median }, the
+// embedded-patch size every sift_files -> embedded_patches conversion uses by
+// default. `factor` is a HALF-extent multiplier, so the full patch edge is 15x
+// the projected feature size; the CLI's `extent_value` states that full size and
+// halves it before the call. The `PatchCloud.from_reconstruction` and
+// `from_tracks` bindings, which build a working cloud rather than an embedded
+// one, default `extent` to "feature_size" and `extent_value` to 2.5 (a full
+// edge of 5 feature sizes).
 
 /// How to reduce a per-view quantity across a point's observing views.
 pub enum ViewReduce { Min, Max, Median, Mean }

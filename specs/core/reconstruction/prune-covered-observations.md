@@ -124,13 +124,15 @@ actually holds.
 ### Why the fraction defaults to a half
 
 A patch frame carries the extent it was **embedded** at, and that is several
-feature sizes across. A reconstruction embedded at patch size 11 gives each
-point a frame spanning 11 feature sizes edge to edge, so the projected radius is
-5.5 of them. The half-extent a keypoint's *support* is stated at is 2.5 feature
-sizes -- `PatchExtent`'s default sizing policy, and the number the surfel
-occupies. On such a file the faithful footprint is therefore
-`2.5 / 5.5 = 0.4545` of the projected radius, and the default rounds that up a
-little.
+feature sizes across. A reconstruction embedded at the default patch size of 15
+gives each point a frame spanning 15 feature sizes edge to edge, so the
+projected radius is 7.5 of them; one embedded at patch size 11 has a projected
+radius of 5.5. The half-extent a keypoint's *support* is stated at is 2.5
+feature sizes. The faithful footprint is therefore `2.5 / 7.5 = 0.333` of the
+projected radius on a file embedded at 15, and `2.5 / 5.5 = 0.4545` on one
+embedded at 11. The default of a half is the second rounded up a little, so on
+a file embedded at the default size it asks containment over a disk 1.5 times
+the support's.
 
 The units hazard this dodges is real and was measured: reading containment at
 `2.5 x` the projected radius, which is what a caller carrying the multiplier
@@ -140,9 +142,9 @@ times too wide and pairs features hundreds of pixels apart.
 The embedding size is deliberately **not** read back out of the value's
 metadata. A file carries no trustworthy statement of what it was embedded at,
 and a guess at one would retire evidence on a number nobody measured. So the
-fraction is a stated option with a default that is right to within about ten
-percent on the common case, and a caller that knows its file states the exact
-value.
+fraction is a stated option, with a default that is right to within about ten
+percent on a file embedded at 11 and half again too wide on one embedded at 15,
+and a caller that knows its file states the exact value.
 
 ### Why the fine-radius floor defaults to a pixel
 

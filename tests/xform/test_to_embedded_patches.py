@@ -153,6 +153,28 @@ def test_apply_halves_full_cli_extent_to_library_half_extent(
     np.testing.assert_allclose(half, full_size / 2.0, rtol=1e-6)
 
 
+def test_default_size_is_a_full_edge_of_fifteen_feature_sizes(
+    seoul_bull_workspace: Path,
+):
+    """The binding and the ``--to-embedded-patches`` op both default to a full
+    patch edge of 15 feature sizes: a half-extent of 7.5 for the binding, a full
+    ``extent_value`` of 15 for the op."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+
+    def halves(out):
+        cloud = out.patches
+        return np.asarray([cloud[i].half_extent for i in range(len(cloud))])
+
+    expected = halves(recon.to_embedded_patches(extent_value=7.5))
+    np.testing.assert_array_equal(halves(recon.to_embedded_patches()), expected)
+    np.testing.assert_array_equal(
+        halves(ToEmbeddedPatchesTransform().apply(recon)), expected
+    )
+    # A size of 5 would give a third of each half-extent.
+    smaller = halves(recon.to_embedded_patches(extent_value=2.5))
+    np.testing.assert_allclose(smaller * 3.0, expected, rtol=1e-6)
+
+
 def test_apply_maps_pixel_size_to_library_policy(seoul_bull_workspace: Path):
     """The CLI ``pixel_size`` policy must reach the library (whose policy is
     named ``pixel_radius``); a broken mapping would raise ``unknown extent

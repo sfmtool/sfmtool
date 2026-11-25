@@ -707,10 +707,11 @@ impl PyEditedReconstruction {
     ///
     /// Args:
     ///     footprint_fraction: The fraction of an observation's projected
-    ///         radius its footprint is (default 0.5). A patch embedded at
-    ///         patch size 11 spans 5.5 feature sizes, and a keypoint's support
-    ///         is stated at 2.5 of them, so the faithful value on such a file
-    ///         is ``2.5 / 5.5 = 0.4545``.
+    ///         radius its footprint is (default 0.5). A keypoint's support is
+    ///         stated at a half-extent of 2.5 feature sizes, so the faithful
+    ///         value is ``2.5 / 7.5 = 0.333`` on a file embedded at the
+    ///         default patch size of 15 (a half-extent of 7.5 feature sizes)
+    ///         and ``2.5 / 5.5 = 0.4545`` on one embedded at 11.
     ///     ratio: How many times finer the covering observation has to be
     ///         (default 2.0, one octave).
     ///     min_fine_radius_px: A covering observation whose projected radius is

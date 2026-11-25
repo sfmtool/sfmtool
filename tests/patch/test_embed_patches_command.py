@@ -12,6 +12,7 @@ end-to-end cost reasonable. See ``specs/cli/reconstruction/embed-patches-command
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from unittest.mock import patch as mock_patch
 
@@ -300,6 +301,23 @@ def test_embed_patches_cli_subpixel_and_rounds_forward(
     assert result.exit_code == 0, result.output
     assert captured["subpixel"] is False
     assert captured["rounds"] == 3
+
+
+def test_embed_patches_default_patch_size_is_fifteen(
+    monkeypatch, seoul_bull_workspace, tmp_path
+):
+    """With no ``--patch-size`` the command passes a full edge of 15 feature
+    sizes, and ``embed_patches`` itself defaults to the same size."""
+    assert inspect.signature(ep.embed_patches).parameters["patch_size"].default == 15.0
+
+    captured: dict = {}
+    _stub_embed_patches(monkeypatch, captured)
+    out = tmp_path / "out.sfmr"
+    args = ["embed-patches", str(seoul_bull_workspace), str(out)]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert captured["patch_size"] == 15.0
 
 
 @pytest.mark.parametrize(

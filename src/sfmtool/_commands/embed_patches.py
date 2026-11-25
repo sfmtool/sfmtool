@@ -86,7 +86,7 @@ from ._sfmr_path import check_sfmr_path
 @click.option(
     "--patch-size",
     type=float,
-    default=11.0,
+    default=15.0,
     show_default=True,
     help=(
         "Full edge length of each point's patch, in multiples of the SIFT "
