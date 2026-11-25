@@ -130,11 +130,18 @@ is a mip level file's or a temporary file's, judged an orphan. The search
 never enters a link: a symbolic link, or on Windows a junction, met in a
 mipmap directory, or a mipmap directory that is one, is listed and left as it
 is, and neither it nor what it leads to is deleted. Just before each delete
-the file is checked again: it must still be a regular file and not a link,
+the file is checked again: the mipmap directory must still be a directory
+and not a link, the file must still be a regular file and not a link,
 and its directory, with every link resolved, must be inside the mipmap
 directory, likewise resolved. A path that leads out of its workspace through
 `..` is refused with a warning. No directory is deleted, not even one the
 prune empties; deleting the mipmap directory by hand is always safe.
+
+A prune that runs while a build in another process (the viewer's *Build
+mipmaps*, `sfm sift`, another `sfm ws mipmaps`) makes the same photograph's
+mipmap can judge a file stale just before the build renames a current one
+over it, and then delete the current file. Nothing but a mip level file is
+lost that way, and the next reader of the photograph makes it again.
 
 ## Output
 
@@ -169,9 +176,12 @@ Orphan files --prune would delete: 4
   .sfm-mipmaps/images/IMG_0003.JPG-mip1-q95.jpg: its photograph images/IMG_0003.JPG no longer exists
 ```
 
-A stale mipmap's files are orphans too, since no photograph reads them; a
-prune deletes them and the next build makes the mipmap again, as it would
-make it over them.
+The files of a stale mipmap that fail a test on their own are orphans too,
+since no photograph reads them; a prune deletes them and the next build makes
+the mipmap again, as it would make it over them. A mipmap can be stale with
+every file current on its own, when its files disagree on whether the
+original is region-readable (test 5); a prune then deletes none of them, and
+the next build makes it again.
 
 It exits with status 1 when a mipmap is missing or stale or a file is an
 orphan, and 0 when every mipmap is current and nothing is an orphan, so a
@@ -247,7 +257,8 @@ for (path, why) in &report.orphans {
 them. Both take a `&Progress`, since a workspace of hundreds of photographs
 takes seconds to check: `check_mipmaps` counts photographs as `images` on
 the rayon pool, `prune_mipmaps` counts the files it judges as `files`, and
-each is asked between items whether to stop. Neither panics on a path:
+each is asked between items, and a prune also before each directory its
+search for nested workspaces lists, whether to stop. Neither panics on a path:
 every file that cannot be read is in the report's `failed`. The tile size is
 an argument because the number of stored levels depends on it; the bindings
 pass `PHOTOGRAPH_TILE_SIZE`, and the Rust tests a smaller one. A prune's
@@ -275,7 +286,8 @@ object searches nothing; a nested workspace's files; a junction (Windows) or
 symbolic link (elsewhere) in a mipmap directory, or a mipmap directory that is
 one, is not entered and what it leads to stays; a symbolic link to a file is
 not deleted (Unix); the last check before a delete refuses a file whose
-directory is outside the mipmap directory; and the names read as mip level or
+directory is outside the mipmap directory, or a file in a mipmap directory
+that is a link; a cancelled prune deletes nothing; and the names read as mip level or
 temporary files.
 [test_mipmap_check_prune_rust_bindings.py](../../../tests/rust_bindings/photographs/test_mipmap_check_prune_rust_bindings.py)
 checks the bindings' reports and counters, and

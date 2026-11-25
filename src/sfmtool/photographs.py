@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The photograph cache: `PhotographCache`, which makes the mipmaps of
-out-of-core photographs.
+out-of-core photographs; and `check_mipmaps` and `prune_mipmaps`, which check
+those mipmaps and delete a mipmap directory's orphan files.
 
 This module is the public home of the `sfmtool._sfmtool.photographs` bindings.
 """

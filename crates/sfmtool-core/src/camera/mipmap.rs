@@ -16,8 +16,9 @@
 //! on disk are current, and [`MipLevelFile`] reads one, whole or a tile at a
 //! time. [`check_mipmaps`] checks the mipmaps of many photographs, writing
 //! nothing, and [`prune_mipmaps`] deletes the orphan files of a mipmap
-//! directory, as `sfm ws mipmaps --check` and `--prune` do. [`region_layout`] is the region test, which decides whether an
-//! original needs a `-mip0`, and [`OriginalRegions`] reads a rectangle of an
+//! directory, as `sfm ws mipmaps --check` and `--prune` do.
+//! [`region_layout`] is the region test, which decides whether an original
+//! needs a `-mip0`, and [`OriginalRegions`] reads a rectangle of an
 //! original that passes it. The design is in the spec
 //! `specs/core/camera/mipmaps.md`.
 

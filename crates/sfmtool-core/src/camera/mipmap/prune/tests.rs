@@ -268,6 +268,20 @@ fn a_workspace_without_the_object_loses_every_mip_level_file() {
     assert!(photograph.is_file());
 }
 
+/// A cancelled prune answers `Cancelled` and deletes nothing.
+#[test]
+fn a_cancelled_prune_answers_cancelled_and_deletes_nothing() {
+    let ws = TestWorkspace::new(None);
+    let stray = ws.write(".sfm-mipmaps/gone.png-mip1-q95.jpg", b"");
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let progress = Progress::none().cancelled_by(&cancel);
+    assert!(matches!(
+        prune_mipmaps(&[ws.root().as_path()], &options(false), &progress),
+        Err(Cancelled)
+    ));
+    assert!(stray.is_file());
+}
+
 /// A path searches only the part of the mipmap directory that mirrors it:
 /// a directory everything under its mirror, a photograph's path, existing or
 /// not, only that photograph's files.
@@ -456,7 +470,8 @@ fn a_link_to_a_file_is_not_deleted() {
 }
 
 /// The last check before a delete refuses a file whose directory on disk is
-/// not inside the mipmap directory, as a path through a link is.
+/// not inside the mipmap directory, as a path through a link is, and a file
+/// in a mipmap directory that is a link.
 #[test]
 fn a_delete_refuses_a_file_outside_the_mipmap_directory() {
     let ws = TestWorkspace::new(None);
@@ -468,6 +483,11 @@ fn a_delete_refuses_a_file_outside_the_mipmap_directory() {
     link_dir(elsewhere.path(), &link);
     assert!(delete(&mipmaps, &link.join("x.png-mip1-q95.jpg")).is_err());
     assert!(delete(&mipmaps, &target).is_err());
+    // A mipmap directory that has become a link since it was searched.
+    let other = TestWorkspace::new(None);
+    let linked_dir = other.root().join(MIPMAP_DIR_NAME);
+    link_dir(elsewhere.path(), &linked_dir);
+    assert!(delete(&linked_dir, &linked_dir.join("x.png-mip1-q95.jpg")).is_err());
     assert!(target.is_file());
     let own = ws.write(".sfm-mipmaps/a.png-mip1-q95.jpg", b"");
     delete(&mipmaps, &own).unwrap();

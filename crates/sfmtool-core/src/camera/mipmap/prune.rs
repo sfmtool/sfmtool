@@ -129,7 +129,7 @@ pub fn prune_mipmaps(
     let mut scopes: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
     for path in paths {
         progress.check_cancel()?;
-        find_scopes(path, &mut scopes, &mut report);
+        find_scopes(path, &mut scopes, &mut report, progress)?;
     }
 
     let mut candidates: Vec<(PathBuf, Option<MipmapOptions>, PathBuf)> = Vec::new();
@@ -215,12 +215,13 @@ fn find_scopes(
     path: &Path,
     scopes: &mut BTreeMap<PathBuf, BTreeSet<PathBuf>>,
     report: &mut MipmapPruneReport,
-) {
+    progress: &Progress<'_>,
+) -> Result<(), Cancelled> {
     let absolute: PathBuf = match std::path::absolute(path) {
         Ok(absolute) => absolute.components().collect(),
         Err(e) => {
             report.failed.push((path.to_path_buf(), e.to_string()));
-            return;
+            return Ok(());
         }
     };
     let mut found = false;
@@ -243,7 +244,7 @@ fn find_scopes(
     }
     if matches!(real_dir(&absolute), Ok(true)) {
         let mut nested = Vec::new();
-        nested_workspaces(&absolute, &mut nested, report);
+        nested_workspaces(&absolute, &mut nested, report, progress)?;
         for root in nested {
             found = true;
             scopes.entry(root).or_default().insert(PathBuf::new());
@@ -252,18 +253,26 @@ fn find_scopes(
     if !found {
         report.outside_workspaces.push(path.to_path_buf());
     }
+    Ok(())
 }
 
 /// Every workspace root strictly below `dir`, not entering a link or a
-/// mipmap directory.
-fn nested_workspaces(dir: &Path, out: &mut Vec<PathBuf>, report: &mut MipmapPruneReport) {
+/// mipmap directory. `progress` is asked before each directory is listed
+/// whether to stop, since a large tree takes long to walk.
+fn nested_workspaces(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    report: &mut MipmapPruneReport,
+    progress: &Progress<'_>,
+) -> Result<(), Cancelled> {
+    progress.check_cancel()?;
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
             report
                 .failed
                 .push((dir.to_path_buf(), format!("it could not be listed: {e}")));
-            return;
+            return Ok(());
         }
     };
     for entry in entries.flatten() {
@@ -277,8 +286,9 @@ fn nested_workspaces(dir: &Path, out: &mut Vec<PathBuf>, report: &mut MipmapPrun
         if path.join(WORKSPACE_FILE_NAME).is_file() {
             out.push(path.clone());
         }
-        nested_workspaces(&path, out, report);
+        nested_workspaces(&path, out, report, progress)?;
     }
+    Ok(())
 }
 
 /// The candidate files of the part `part` of `mipmap_dir`: every regular file
@@ -676,10 +686,14 @@ fn current(
 }
 
 /// Delete `file`, a candidate found in `mipmap_dir`, after checking again
-/// that it is a regular file, not a link, and that its directory on disk is
-/// inside the mipmap directory on disk.
+/// that the mipmap directory is a directory and not a link, that the file is
+/// a regular file, not a link, and that its directory on disk is inside the
+/// mipmap directory on disk.
 fn delete(mipmap_dir: &Path, file: &Path) -> std::io::Result<()> {
     let refuse = |why: &str| Err(std::io::Error::other(why.to_string()));
+    if !matches!(real_dir(mipmap_dir), Ok(true)) {
+        return refuse("the mipmap directory is no longer a directory, or is a link");
+    }
     let meta = std::fs::symlink_metadata(file)?;
     if !meta.file_type().is_file() || meta.file_type().is_symlink() {
         return refuse("it is no longer a regular file");
