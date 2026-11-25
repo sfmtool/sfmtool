@@ -364,10 +364,27 @@ mipmap is missing or stale, which the photograph cache answers as `Building`
 § "In the viewer"), adds it to the front of a list shared with this task,
 once while it is there, and draws its waiting state; the code is in
 [build_mipmaps.rs](../../crates/sfm-explorer/src/state/build_mipmaps.rs).
-When a reconstruction opens, the list is also filled with its out-of-core
-photographs whose mipmaps are missing or stale, the selected image first,
-which [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md)
-specifies with the rest of the task (its step 15).
+
+- **Filled at open.** When a reconstruction opens, its open job reads the
+  layout of each of its photographs in a workspace whose file has
+  `mipmap_options` into the photograph cache (`request_layout`: a header
+  read, the region test and the coarsest mip level file's record each, on
+  the rayon pool, in the phase `mipmaps` of § "Opening a file"), and the GUI
+  thread puts the out-of-core ones whose mipmaps are missing or stale on the
+  list as it appends the node (`AppState::queue_opened_mipmaps`), in image
+  order, behind every photograph a panel queued and ahead of those an
+  earlier open queued. No image of a node that has just opened is selected,
+  and the Image Browser strip shows it from its first image, so image order
+  puts the strip's images first; a panel that shows one of the open's
+  photographs, as Image Detail does an image selected later, moves it to the
+  front, and the next run takes it, the running one left to finish. A
+  workspace without `mipmap_options` reads no photograph for it and queues
+  nothing.
+- **Emptied on close.** Closing a node, or Close All, takes every photograph
+  that no node left in the scene has off the list, waiting or in the chunk
+  a run has taken, so the task makes no mipmap that nothing on screen can
+  show (`AppState::forget_closed_mipmaps`). The same photographs opened in
+  two nodes stay until both are closed.
 
 - **One chunk a run.** Each run takes one chunk from the front of the list,
   as many photographs as the cache's build budget lets it make at once
@@ -954,10 +971,12 @@ of the bar. Each file's stages sit under a phase `open` of its own:
 | `patch bitmaps` > `decode photographs` | the file has patch frames and inline keypoints but no bitmaps | a count of `images`; note `{k} of {n} read`, with `, {r} reused from the cache` when the cache already held any and `, {m} mipmaps made` when the call made any |
 | `patch bitmaps` > `render` | the same | a count of `patches`; note `{P} patches at {R} px` |
 | `patch bitmaps` > `read regions` | the same | note `{a} region pyramids assembled, {u} reused, {t} reads on tiles`, the counts of the render's region pool |
+| `mipmaps` | an image's photograph is in a workspace whose file has `mipmap_options` | a count of `photographs`; note `{k} of {n} photographs need their mipmaps made`, the out-of-core ones whose mipmaps are not current, which go on *Build mipmaps*' list (§ "Build mipmaps") |
 
 The file's share of the bar splits 1 : 9 between the read and the rest, and the
-rest 1 : 8 between thumbnails and bitmaps, a stage the file does not need taking
-a weight of zero. The thumbnail rows come from each image's verified `.sift`
+rest 1 : 8 : 0.5 between thumbnails, bitmaps and mipmaps, a stage the file does
+not need taking a weight of zero. The `mipmaps` stage runs after the bitmaps,
+whose reads make the mipmaps they need. The thumbnail rows come from each image's verified `.sift`
 first and its photograph second
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
 loading"). The bitmaps are the render `sfm xform --add-patch-bitmaps` runs,

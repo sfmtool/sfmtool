@@ -1024,7 +1024,8 @@ reconstruction's photographs goes through it except the ones under
   to `layout`, and `display_layout` answers it so to every one of these
   panels, which ask for none of its tiles meanwhile. Each frame that asks
   adds the path to the front of *Build mipmaps*' list in
-  `PhotographRequests`, once while it is there, and the viewer's quiet task
+  `PhotographRequests`, once while it is there (a path the open of its
+  reconstruction put further back moves to the front), and the viewer's quiet task
   *Build mipmaps* ([build_mipmaps.rs](../../../crates/sfm-explorer/src/state/build_mipmaps.rs))
   makes it with `get_many`, a chunk sized by `builds_that_fit` a run
   ([gui/background-tasks.md](../../gui/background-tasks.md) § "Quiet

@@ -696,3 +696,20 @@ fn an_open_in_a_workspace_without_mipmap_options_queues_nothing() {
         .iter()
         .all(|(name, ..)| *name != "mipmaps"));
 }
+
+/// The list's order: what panels queued first, the last first, then each
+/// open's photographs in their order, the newest open's first; a run's
+/// cancelled chunk goes back ahead of every open's.
+#[test]
+fn an_opens_photographs_wait_behind_the_panels_and_ahead_of_an_earlier_opens() {
+    let p = |name: &str| PathBuf::from(name);
+    let mut list = super::MipmapList::default();
+    list.queue_opened(vec![p("b"), p("c")]);
+    list.queue(&p("a"));
+    list.queue_opened(vec![p("d"), p("a")]);
+    assert_eq!(list.waiting(), [p("a"), p("d"), p("b"), p("c")]);
+    let taken = list.take(2);
+    list.put_back(taken);
+    list.queue_opened(vec![p("e")]);
+    assert_eq!(list.waiting(), [p("a"), p("d"), p("e"), p("b"), p("c")]);
+}
