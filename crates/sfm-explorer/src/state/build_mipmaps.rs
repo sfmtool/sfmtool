@@ -241,7 +241,8 @@ pub(crate) fn not_current(
     Ok(paths
         .iter()
         .zip(building)
-        .filter_map(|(path, building)| building.then(|| path.clone()))
+        .filter(|(_, building)| *building)
+        .map(|(path, _)| path.clone())
         .collect())
 }
 
