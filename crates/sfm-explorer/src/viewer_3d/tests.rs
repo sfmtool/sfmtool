@@ -1280,9 +1280,9 @@ fn circle(staged: &Staged, observation: usize) -> egui::Pos2 {
 }
 
 /// The figure a frame builds does not depend on the camera: orbiting off the
-/// normal, to the side, nearly down it and straight down it, zooming in and
-/// resizing the panel all leave it equal to the figure the first view built, so
-/// the upload, which writes only a figure that differs, writes nothing for it
+/// normal, to the side, nearly down it and straight down it, and zooming in
+/// all leave it equal to the figure the first view built, so the upload, which
+/// writes only a figure that differs, writes nothing for it
 /// (`scene_renderer::bench_track::tests::an_upload_of_the_figure_last_written_writes_nothing`).
 #[test]
 fn a_camera_move_leaves_the_bench_figure_as_it_was() {

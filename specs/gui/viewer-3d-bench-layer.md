@@ -397,7 +397,7 @@ nothing:
   target, and the measurements on their layer. The scene target's pass draws
   its regions one at a time (`draw_producer`), since the figure's centre disc,
   which is not in the store, is drawn between them: the rays, then the disc,
-  then the figure's segments.
+  then the figure's segments and barbs.
 - **Order within a region.** A producer lays out its own instances with every
   halo first, then every stroke, then every dot, so one item's halo never
   crosses another's stroke.
