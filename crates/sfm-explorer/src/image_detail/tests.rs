@@ -5102,3 +5102,50 @@ fn a_photograph_its_workspace_file_refuses_says_workspace_file_error_and_why() {
         assert_eq!(cache.stats().decodes, 0, "{budget}");
     }
 }
+
+/// Where one headless frame painted the hover tooltip's one line with the
+/// pointer at `pointer` in `panel`.
+fn tooltip_text_rect(pointer: egui::Pos2, panel: egui::Rect) -> egui::Rect {
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(800.0, 600.0),
+        )),
+        ..Default::default()
+    };
+    let painted = crate::test_support::painted_text_rects(&ctx, input, |ui| {
+        super::overlay::draw_tooltip(
+            ui.painter(),
+            pointer,
+            panel,
+            Some("Point3D #42 | err: 0.412px | tracklen: 7"),
+            None,
+        );
+    });
+    assert_eq!(painted.len(), 1, "{painted:?}");
+    painted[0].rect
+}
+
+#[test]
+fn the_hover_tooltip_sits_right_of_the_pointer_and_moves_left_at_the_right_edge() {
+    let panel = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 400.0));
+
+    // In the open, the text starts 12 points right of and 20 above the pointer.
+    let pointer = egui::pos2(200.0, 150.0);
+    let text = tooltip_text_rect(pointer, panel);
+    assert_eq!(text.min, pointer + egui::vec2(12.0, -20.0));
+
+    // At the right edge it is left of the pointer, at the same height, and
+    // its box is the same 9 points away.
+    let pointer = egui::pos2(595.0, 150.0);
+    let text = tooltip_text_rect(pointer, panel);
+    assert_eq!(text.right() + 3.0, pointer.x - 9.0, "{text:?}");
+    assert_eq!(text.top(), pointer.y - 20.0, "{text:?}");
+
+    // At the top edge it stays right of the pointer and inside the panel.
+    let pointer = egui::pos2(200.0, 4.0);
+    let text = tooltip_text_rect(pointer, panel);
+    assert_eq!(text.left(), pointer.x + 12.0, "{text:?}");
+    assert_eq!(text.top() - 3.0, panel.top(), "{text:?}");
+}

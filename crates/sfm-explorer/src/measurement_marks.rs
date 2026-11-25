@@ -676,27 +676,29 @@ pub(crate) fn mark_radius(drawn: &DrawnMeasurement, side: EndpointSide) -> f32 {
     }
 }
 
-/// Draw `text` beside the pointer at `pos`, kept inside `bounds`: the hover
-/// text of a mark or a line.
+/// Draw `text` beside the pointer at `pos`, inside `bounds` and off the
+/// pointer: the hover text of a mark or a line. Its ground's corner is
+/// [`HOVER_TEXT_OFFSET`] right of and below the pointer where that fits, and
+/// [`place_beside_pointer`](crate::pointer_label::place_beside_pointer) picks
+/// another side where it does not.
 pub(crate) fn draw_hover_text(painter: &egui::Painter, pos: Pos2, text: &str, bounds: Rect) {
+    /// The space between the text and the edge of its ground.
+    const MARGIN: f32 = 4.0;
     let galley = painter.layout_no_wrap(text.to_string(), label_font(), Color32::WHITE);
-    let size = galley.size();
-    let mut min = pos + Vec2::new(14.0, 14.0);
-    min.x = min
-        .x
-        .min(bounds.right() - size.x - 4.0)
-        .max(bounds.left() + 4.0);
-    min.y = min
-        .y
-        .min(bounds.bottom() - size.y - 4.0)
-        .max(bounds.top() + 4.0);
-    painter.rect_filled(
-        Rect::from_min_size(min, size).expand(4.0),
-        3.0,
-        LABEL_GROUND,
+    let ground = crate::pointer_label::place_beside_pointer(
+        pos,
+        galley.size() + Vec2::splat(2.0 * MARGIN),
+        bounds,
+        HOVER_TEXT_OFFSET,
     );
-    painter.galley(min, galley, Color32::WHITE);
+    painter.rect_filled(ground, 3.0, LABEL_GROUND);
+    painter.galley(ground.min + Vec2::splat(MARGIN), galley, Color32::WHITE);
 }
+
+/// From the pointer to the top-left corner of a measurement's hover text's
+/// ground, where it fits: 10 points right and 10 below, so the text itself
+/// starts 14 points right of and below the pointer.
+const HOVER_TEXT_OFFSET: Vec2 = Vec2::new(10.0, 10.0);
 
 /// Whether the segment `a`–`b` has any part inside `rect`.
 pub(crate) fn segment_meets_rect(a: Pos2, b: Pos2, rect: Rect) -> bool {

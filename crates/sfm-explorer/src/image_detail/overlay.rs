@@ -716,12 +716,21 @@ impl ImageDetail {
     }
 }
 
+/// From the pointer to the top-left corner of the hover tooltip's box, where
+/// it fits: 9 points right and 23 up, so the text starts 12 points right of
+/// and 20 above the pointer and a one-line tooltip ends just above it.
+const TOOLTIP_OFFSET: egui::Vec2 = egui::vec2(9.0, -23.0);
+
 /// Paint the composed hover tooltip: the feature layer's line, the intrinsics
 /// layer's readout, or both with a rule between them.
 ///
-/// With `readout` `None` this is byte for byte the tooltip the panel has always
-/// drawn — same padding, same offset, same clamping — which is the regression a
-/// composed tooltip most plausibly breaks.
+/// With `readout` `None` this is byte for byte the feature tooltip the panel
+/// draws with the intrinsics layer off — same padding, same offset, same
+/// placement — which is the regression a composed tooltip most plausibly
+/// breaks. Its box's corner is
+/// [`TOOLTIP_OFFSET`] from the pointer where that fits, and
+/// [`place_beside_pointer`](crate::pointer_label::place_beside_pointer) picks
+/// another side where it does not.
 pub(super) fn draw_tooltip(
     painter: &egui::Painter,
     pointer_pos: egui::Pos2,
@@ -753,13 +762,13 @@ pub(super) fn draw_tooltip(
     );
 
     let padding = 3.0;
-    let tooltip_size = size + egui::vec2(padding * 2.0, padding * 2.0);
-    let mut tooltip_pos = pointer_pos + egui::vec2(12.0, -20.0);
-    // Clamp to keep tooltip within the panel
-    if tooltip_pos.x + tooltip_size.x > panel_rect.right() {
-        tooltip_pos.x = panel_rect.right() - tooltip_size.x;
-    }
-    let text_rect = egui::Rect::from_min_size(tooltip_pos, size).expand(padding);
+    let text_rect = crate::pointer_label::place_beside_pointer(
+        pointer_pos,
+        size + egui::Vec2::splat(padding * 2.0),
+        panel_rect,
+        TOOLTIP_OFFSET,
+    );
+    let tooltip_pos = text_rect.min + egui::Vec2::splat(padding);
     painter.rect_filled(text_rect, 2.0, egui::Color32::from_black_alpha(200));
 
     let top_height = top.size().y;

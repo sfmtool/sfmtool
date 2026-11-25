@@ -60,6 +60,7 @@ mod motion;
 mod patch_pictures;
 mod platform;
 mod point_ids;
+mod pointer_label;
 mod progress;
 mod repaint;
 mod resect;
