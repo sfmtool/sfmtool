@@ -294,7 +294,7 @@ pub(crate) fn load_for_display(
     let mut display_thumbnails = None;
     if wants_thumbnails {
         let mut phase = thumbnails.phase("thumbnails");
-        let (display, from) = DisplayThumbnails::build(&recon, &phase)?;
+        let (display, from) = DisplayThumbnails::build(&recon, photographs, &phase)?;
         progress_note!(
             phase,
             "{} from .sift files, {} from photographs, {} placeholders",

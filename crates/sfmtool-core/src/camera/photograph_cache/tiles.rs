@@ -509,6 +509,66 @@ impl PhotographCache {
             .map_err(|e| read_failed(path, e))
     }
 
+    /// Level `K` of an out-of-core photograph whole, read from its coarsest
+    /// mip level file and decoding nothing else: what a display thumbnail of
+    /// such a photograph is made from
+    /// ([`display_thumbnail_row`](crate::reconstruction::thumbnail::display_thumbnail_row)).
+    ///
+    /// `Ok(None)`, reading no more than the workspace file and the header,
+    /// for a photograph the caller reads otherwise: one in a workspace whose
+    /// file has no `mipmap_options` (no header is read then), in core under
+    /// them, too thin to have a level 1, whose header cannot be read, or
+    /// that its workspace file or its size refuses.
+    ///
+    /// When `make`, a mipmap whose files are missing or stale is made first,
+    /// as a [`Self::get_many`] member makes it, passing on only the build's
+    /// messages through `progress`; otherwise such a photograph is
+    /// [`TileError::Changed`], as [`Self::get_level`] answers it. Polls
+    /// `progress` for cancellation as those do.
+    pub(crate) fn coarsest_level(
+        &self,
+        path: &Path,
+        make: bool,
+        progress: &Progress<'_>,
+    ) -> Result<Option<ImageU8>, TileError> {
+        let setting = self.setting_for(path);
+        let Ok(Some(options)) = &setting.options else {
+            return Ok(None);
+        };
+        let Ok((width, height)) = header(path, &setting) else {
+            return Ok(None);
+        };
+        let tile_size = self.shared.options.tile_size;
+        let out_of_core = PyramidLayout::for_size(width, height, Some(options), tile_size)
+            .is_some_and(|layout| layout.is_out_of_core() && layout.stored_levels() > 0);
+        if !out_of_core {
+            return Ok(None);
+        }
+        let make = if make { Make::Quietly } else { Make::Never };
+        let (value, _) = self.fetch(path, progress, Share::None, Asked::Photograph, make);
+        let got = value.map_err(|e| failed(path, e))?;
+        let tiled = got
+            .photograph(self, path)
+            .map_err(|e| unreadable(path, e))?;
+        // The layout the photograph is read under, which a build or a change
+        // of the workspace file since the header may have decided again.
+        let k = tiled.layout().stored_levels();
+        if !tiled.layout().is_out_of_core() || k == 0 {
+            return Ok(None);
+        }
+        let (x1, y1) = tiled.layout().level_size(k);
+        let rect = LevelRect {
+            x0: 0,
+            y0: 0,
+            x1,
+            y1,
+        };
+        tiled
+            .region(k, rect, progress)
+            .map(Some)
+            .map_err(|e| read_failed(path, e))
+    }
+
     /// The photograph at `path` as [`Self::get`] answers it, for a kernel's
     /// read that never makes a mipmap: an out-of-core photograph whose files
     /// are missing or stale is [`TileError::Changed`].

@@ -847,3 +847,66 @@ fn patch_tiles_are_the_stored_bitmaps_and_a_file_without_them_renders_the_same()
         assert!(a.bytes == b.bytes, "{} differs", a.name);
     }
 }
+
+/// In a workspace whose `mipmap_options` put its 300 x 200 photographs out of
+/// core and that has no mipmap yet: the export makes each photograph's
+/// mipmap and reads its thumbnail row from the coarsest mip level file, so a
+/// second export, which finds those files current, writes the same files;
+/// and the rows are not the whole decodes' an export writes once the object
+/// is gone.
+#[test]
+fn an_export_makes_a_missing_mipmap_and_reads_the_thumbnail_from_it() {
+    use crate::camera::mipmap::mipmap_location;
+    use crate::camera::mipmap::test_support::{encode_png, synthetic_rgb};
+    use crate::workspace::WORKSPACE_FILE_NAME;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let marker = tmp.path().join(WORKSPACE_FILE_NAME);
+    std::fs::write(
+        &marker,
+        r#"{"version": 2, "mipmap_options": {"out_of_core_long_side": 64,
+        "jpeg_quality": 95, "full_resolution_jpeg_quality": 95}}"#,
+    )
+    .unwrap();
+    let mut recon = SfmrReconstruction::demo(4);
+    recon.workspace_dir = tmp.path().to_path_buf();
+    let paths: Vec<_> = recon
+        .image_set
+        .images
+        .iter_mut()
+        .enumerate()
+        .map(|(i, image)| {
+            image.name = format!("{i}.png");
+            let path = tmp.path().join(&image.name);
+            std::fs::write(&path, encode_png(&synthetic_rgb(300, 200 + i as u32))).unwrap();
+            path
+        })
+        .collect();
+    let options = WebExportOptions {
+        patches: false,
+        ..WebExportOptions::default()
+    };
+    let thumbs = |export: &WebExport| -> Vec<Vec<u8>> {
+        export
+            .files
+            .iter()
+            .filter(|f| f.name.starts_with("thumbs-"))
+            .map(|f| f.bytes.clone())
+            .collect()
+    };
+
+    let made = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    assert_eq!(made.report.thumbnails.photographs, paths.len());
+    for path in &paths {
+        let level_1 = mipmap_location(path).unwrap().level_path(1, 95);
+        assert!(level_1.is_file(), "{} has no mipmap", path.display());
+    }
+    assert!(!thumbs(&made).is_empty());
+    let read = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    assert!(thumbs(&read) == thumbs(&made));
+
+    std::fs::write(&marker, r#"{"version": 2}"#).unwrap();
+    let whole = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    assert_eq!(whole.report.thumbnails.photographs, paths.len());
+    assert!(thumbs(&whole) != thumbs(&made));
+}

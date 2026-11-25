@@ -659,6 +659,18 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   set of regions, is `TileError::OutOfRange`; a photograph that cannot be
   read is `TileError::Unreadable`, with the `GetError`, whose message names
   the file.
+- **`coarsest_level`**, crate-private, is what a display thumbnail of an
+  out-of-core photograph is made from
+  ([thumbnail.rs](../../../crates/sfmtool-core/src/reconstruction/thumbnail.rs)
+  `display_thumbnail_row`): level `K` whole, read from the coarsest mip
+  level file as `get_level` reads a level, decoding nothing else. It
+  answers `None`, reading no more than the workspace file and the header,
+  for a photograph its caller decodes itself: one in a workspace without
+  `mipmap_options` (no header is read then), in core under them, too thin
+  to have a level 1, or whose header cannot be read or is refused. Asked to
+  make, it makes a missing or stale mipmap first as a `get_many` member
+  makes it, passing on only the build's messages; otherwise such a
+  photograph is `TileError::Changed`, as `get_level` answers it.
 - **Cancellation.** A whole decode can take over a second, so the four
   calls that can make one, `try_decode_tiles`, `get_tile`,
   `view_region_pyramid` and `get_level`, take the caller's `&Progress`,
@@ -1468,8 +1480,10 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 ## Non-goals
 
-- **Display thumbnails** keep their own decodes. They make small images once
-  per open.
+- **Display thumbnails** of in-core photographs keep their own decodes,
+  made once per open, outside the cache. An out-of-core photograph's is
+  read through `coarsest_level` (§ "Layouts and tiles"), whose one small
+  file the cache keeps as it keeps any tile.
 - **No cache on disk.** Tiles are cut from the JPEGs in each session. A
   large photograph's reduced levels are stored as
   [mip level files](mipmaps.md), which the cache reads and makes
