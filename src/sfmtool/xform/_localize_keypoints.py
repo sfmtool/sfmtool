@@ -36,7 +36,6 @@ See ``specs/cli/reconstruction/xform/localize-keypoints-command.md`` and
 """
 
 from .._sfmtool.reconstruction import SfmrReconstruction
-from ._images import load_workspace_images
 from ._patch_params import _SAMPLERS, _WINDOWS
 
 _SEARCH_STRATEGIES = ("exhaustive", "plus_descent")
@@ -109,6 +108,8 @@ class LocalizeKeypointsTransform:
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
     required_feature_source = "embedded_patches"
+    # `apply_transforms` passes these steps the run's photograph cache.
+    reads_photographs = True
 
     def __init__(self, *, min_views: int = 2, **options):
         if min_views < 1:
@@ -125,7 +126,7 @@ class LocalizeKeypointsTransform:
         # Only the options the caller gave; the binding supplies the rest.
         self.options = dict(options)
 
-    def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+    def apply(self, recon: SfmrReconstruction, cache=None) -> SfmrReconstruction:
         from .._patch_compaction import (
             compact_to_embedded_patches,
             image_file_hashes_from_images,
@@ -133,8 +134,9 @@ class LocalizeKeypointsTransform:
             stored_keypoints_by_point,
             with_observation_readings,
         )
+        from ..patches import ImagePyramidSet
 
-        images = load_workspace_images(recon)
+        images = ImagePyramidSet.read(recon, cache=cache)
 
         # The reconstruction is embedded_patches (enforced by apply_transforms),
         # so the patch frame is already stored — read it back as the cloud rather

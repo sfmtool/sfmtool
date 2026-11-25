@@ -31,6 +31,7 @@ def _run_cluster_patches(
 
     import numpy as np
 
+    from ._photograph_cache_report import photograph_cache_lines
     from ._progress import _poll_progress
     from ._sfmtool.fileio import read_matches, write_matches
     from ._sfmtool.matching import refine_cluster_patches as _refine
@@ -220,25 +221,8 @@ def _run_cluster_patches(
     ):
         if result[key] is not None:
             out_data[key] = result[key]
-    stats = cache.stats()
-    click.echo(
-        f"Photographs: {stats['decodes']} whole decodes, "
-        f"{stats['mipmaps_made']} mipmaps made, cache budget "
-        f"{stats['budget_bytes'] / 2**30:.1f} GiB"
-    )
-    # A photograph decoded whole more than once had its tiles evicted while
-    # the refinement still read it: the photographs in core are more than the
-    # budget holds, and reading them out of core would decode none whole.
-    in_core = sum(not cache.layout(path).out_of_core for path in set(photograph_paths))
-    if stats["decodes"] > in_core:
-        click.echo(
-            f"The cache decoded {in_core} photographs whole {stats['decodes']} "
-            "times, since their tiles are more than its budget. To read them "
-            'from mipmaps instead, a tile at a time, add a "mipmap_options" '
-            f"object to {workspace_dir / '.sfm-workspace.json'}, such as "
-            '"mipmap_options": {"out_of_core_long_side": 4096, '
-            '"jpeg_quality": 95, "full_resolution_jpeg_quality": 95}.'
-        )
+    for line in photograph_cache_lines(cache, photograph_paths, workspace_dir):
+        click.echo(line)
     click.echo(f"Writing {out}...")
     write_matches(out, out_data)
     consistency = result["member_consistency_residual"]

@@ -37,7 +37,7 @@ from sfmtool.xform._arg_parser import (
     parse_minimal_params,
     parse_transform_args,
 )
-from sfmtool.xform._images import load_workspace_images
+from sfmtool.patches import ImagePyramidSet
 
 from ..conftest import assert_references_name_track_observations
 
@@ -402,7 +402,7 @@ def test_add_patch_bitmaps_moves_nothing_and_stores_the_reference_view_render(
     # The sub-pixel refiner with no Gauss-Newton step renders the same bitmaps
     # and picks the same reference images, reached here through its own
     # per-patch loop rather than the cloud form the step calls.
-    images = load_workspace_images(bare)
+    images = ImagePyramidSet.read(bare)
     unmoved = bare.patches.refine_keypoints(
         bare, images, resolution=16, max_gn_steps=0, render_bitmaps=True
     )

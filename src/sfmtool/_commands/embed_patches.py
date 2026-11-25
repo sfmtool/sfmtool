@@ -3,8 +3,7 @@
 
 """Convert a sift_files reconstruction to embedded_patches (photometric pipeline)."""
 
-import time
-from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import click
 
@@ -237,10 +236,12 @@ def embed_patches_command(
             --search 4 --min-relative-zncc 0.75
     """
     from .._embed_patches import embed_patches
+    from .._photograph_cache_report import photograph_cache_lines
     from .._sfmtool.patches import DEFAULT_ANISOTROPIC_THRESHOLD
     from .._sfmtool.reconstruction import SfmrReconstruction
-    from .._workspace_image import read_workspace_image
     from .._workspace import require_version_2_workspace
+    from ..patches import ImagePyramidSet
+    from ..photographs import PhotographCache
     from ..xform._arg_parser import auto_output_path
 
     input_path = check_sfmr_path(input_path, "Input path")
@@ -278,35 +279,13 @@ def embed_patches_command(
         click.echo(f"  Points: {recon.point_count}")
         click.echo(f"  Observations: {recon.observation_count}")
 
-        image_names = recon.image_names
-        n_images = len(image_names)
-        click.echo(f"Loading source images ({n_images})...")
-        # Report every ~5% (min every image) so a large image set (1000+) shows
-        # steady progress through the decode instead of one silent block.
-        report_every = max(1, n_images // 20)
-        load_start = time.perf_counter()
-        # Decode in a thread pool (the decoder releases the GIL), collecting results in
-        # submission order so `images` stays parallel to `image_names`.
-        with ThreadPoolExecutor() as pool:
-            futures = [
-                pool.submit(read_workspace_image, recon.workspace_dir, name)
-                for name in image_names
-            ]
-            images = []
-            try:
-                for i, future in enumerate(futures):
-                    images.append(future.result())
-                    if (i + 1) % report_every == 0 or (i + 1) == n_images:
-                        click.echo(f"  loaded {i + 1}/{n_images} images")
-            except BaseException:
-                # Fail fast: without this, the pool's __exit__ would finish
-                # decoding every queued image before the error surfaces.
-                for f in futures:
-                    f.cancel()
-                raise
-        click.echo(
-            f"  loaded {n_images} images in {time.perf_counter() - load_start:.1f}s"
-        )
+        click.echo(f"Reading photographs ({recon.image_count})...")
+        # Through a photograph cache, as the viewer reads them: the set holds
+        # no pixel, and the cache keeps the photographs' tiles under its
+        # budget, decoding one again for a tile it has evicted. Every kernel
+        # call of the run reads through this one cache.
+        cache = PhotographCache()
+        images = ImagePyramidSet.read(recon, cache=cache)
 
         click.echo(
             "Building + refining patches, selecting views, localizing keypoints..."
@@ -329,6 +308,12 @@ def embed_patches_command(
             sampler=sampler,
             progress=click.echo,
         )
+        for line in photograph_cache_lines(
+            cache,
+            [Path(recon.workspace_dir) / name for name in recon.image_names],
+            recon.workspace_dir,
+        ):
+            click.echo(line)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         click.echo(f"Writing {result.point_count} points to {output_path}...")

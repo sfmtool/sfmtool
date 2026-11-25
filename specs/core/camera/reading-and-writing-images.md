@@ -252,16 +252,17 @@ These read through the bindings:
 
 - `read_workspace_image` in
   [_workspace_image.py](../../../src/sfmtool/_workspace_image.py), the
-  loader behind `embed-patches`, the strip montages and the `xform` steps that
-  read photographs.
+  loader behind the strip montages.
 - `load_gray` in [_image_load.py](../../../src/sfmtool/_image_load.py), the
   grey decode for optical flow, which converts the RGB with `flow_gray`:
   `sfmtool.sift.gray_from_rgb`, sfmtool's one RGB-to-grey conversion, with
   `sfmtool.flow.matcher_image_to_gray()`, BT.601 luma rounded to 8 bits, the
   8-bit grey image the flow kernels take.
-- `cluster-patches`, whose refinement kernel takes the RGB as read. The
-  viewer's cluster run reads with `ImageU8::read_rgb`, so it hands the kernel
-  the same pixels.
+- `cluster-patches`, `embed-patches` and the `xform` steps that read
+  photographs, through `ImagePyramidSet.read`, which reads each photograph
+  through a photograph cache: in core, by a whole decode with
+  `ImageU8::read_rgb`, so the kernels get the RGB `read_image_rgb` returns,
+  as the viewer's reads through its own cache do.
 - The `sfmtool`, OpenCV and COLMAP SIFT backends' decodes and thumbnails, and
   `xform --add-thumbnails`.
 - `render_equirect_panorama`, and the drawing in `sift --draw`, the epipolar,

@@ -249,13 +249,13 @@ over Rust kernels reached through the PyO3 bindings:
 - Per-point keypoint alignment is the [keypoint-localization
   algorithm](patch-keypoint-localization.md), which lives in
   `sfmtool-core::patch` (Rust) and reuses the same patch rendering.
-- The source images are decoded into per-image pyramids **once**, up front:
-  `embed_patches()` builds an `ImagePyramidSet` (a PyO3 class wrapping the
-  rayon-parallel `ImageU8Pyramid` build) from the numpy image list and passes it
-  to every `PatchCloud` kernel call. Each kernel also still accepts the raw
-  numpy list (it then builds the pyramids for that one call — the back-compat
-  path); the prebuilt set is level-for-level identical, so results are unchanged
-  either way.
+- Every `PatchCloud` kernel call reads one `ImagePyramidSet`. `sfm
+  embed-patches` hands `embed_patches()` the set `ImagePyramidSet.read(recon,
+  cache=…)` reads through a photograph cache, which holds no pixel; given a
+  list of numpy arrays instead, `embed_patches()` builds the set from them
+  once, up front. Each kernel also still accepts the raw numpy list (it then
+  builds the pyramids for that one call); in core every form gives the same
+  levels, so results are unchanged either way.
 
 ## Parameters (defaults)
 

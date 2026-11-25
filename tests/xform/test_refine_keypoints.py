@@ -370,7 +370,7 @@ def test_cli_refine_keypoints_bare_before_other_option(seoul_bull_workspace):
 
     captured: list[RefineKeypointsTransform] = []
 
-    def _stub_apply(self, recon):
+    def _stub_apply(self, recon, cache=None):
         # Record the parsed transform, then skip the heavy refinement and pass
         # the reconstruction through unchanged.
         captured.append(self)
