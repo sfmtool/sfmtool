@@ -1065,8 +1065,15 @@ fn out_of_core_photo(dir: &Path) -> PathBuf {
 
 /// Make the mipmap of `path` with tiles of 32 px, the cache's.
 fn build_mipmap(path: &Path) {
-    sfmtool_core::camera::build_mipmaps(path, None, &mipmap_options(), 32, &Progress::none())
-        .unwrap();
+    sfmtool_core::camera::build_mipmaps(
+        path,
+        None,
+        &mipmap_options(),
+        32,
+        &Progress::none(),
+        &mut |_| {},
+    )
+    .unwrap();
 }
 
 /// Remove the mip level file of level 1 of `path`'s mipmap, which a read of
@@ -1143,7 +1150,7 @@ fn look_at(
                 }
             }
         }
-        DisplayLayout::Loading | DisplayLayout::Building => {}
+        DisplayLayout::Loading | DisplayLayout::Building(_) => {}
         DisplayLayout::Unreadable => panic!("{what}: layout unreadable"),
     }
     if rendered.is_none() {
@@ -1235,7 +1242,7 @@ fn panels_wait_on_build_mipmaps_for_an_out_of_core_photograph_without_a_current_
                     &mut level,
                     &what,
                 );
-                if matches!(cache.layout(&path), PeekedLayout::Building) {
+                if matches!(cache.layout(&path), PeekedLayout::Building { .. }) {
                     assert_eq!(queue.len(), 0, "{what}: a tile asked for while Building");
                 }
                 let made = cache.stats().mipmaps_made;
@@ -1246,7 +1253,7 @@ fn panels_wait_on_build_mipmaps_for_an_out_of_core_photograph_without_a_current_
                 if !waiting.is_empty() {
                     assert_eq!(waiting, std::slice::from_ref(&path), "{what}");
                     runs += 1;
-                    run_chunk(&cache, &requests, &Progress::none());
+                    run_chunk(&cache, &requests, &Progress::none(), None);
                 }
                 end_frame(&ctx);
             }
@@ -1343,9 +1350,9 @@ fn a_photograph_build_mipmaps_cannot_make_is_unreadable_until_its_file_changes()
     assert_eq!(queue.run_off_this_thread(), 1, "the header read");
     assert!(matches!(
         display_layout(source, &ctx),
-        DisplayLayout::Building
+        DisplayLayout::Building(None)
     ));
-    run_chunk(&cache, &requests, &Progress::none());
+    run_chunk(&cache, &requests, &Progress::none(), None);
     for look in 0..3 {
         assert!(
             matches!(display_layout(source, &ctx), DisplayLayout::Unreadable),
@@ -1371,10 +1378,10 @@ fn a_photograph_build_mipmaps_cannot_make_is_unreadable_until_its_file_changes()
     assert_eq!(queue.run_off_this_thread(), 1, "the check finds it changed");
     assert!(matches!(
         display_layout(source, &ctx),
-        DisplayLayout::Building
+        DisplayLayout::Building(None)
     ));
     assert_eq!(requests.mipmaps_waiting(), std::slice::from_ref(&path));
-    run_chunk(&cache, &requests, &Progress::none());
+    run_chunk(&cache, &requests, &Progress::none(), None);
     assert_eq!(cache.stats().mipmaps_made, 1);
     assert!(matches!(
         display_layout(source, &ctx),

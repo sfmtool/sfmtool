@@ -579,6 +579,11 @@ pub(super) fn cache_holding_its_first_decode() -> HeldDecode {
     let counted = Arc::clone(&decodes);
     let mut cache = PhotographCache::new(with_budget(GIB));
     cache.set_slot_hook(Box::new(move |cache, event, _| {
+        // A build's publishing of its coarsest level is not among the events
+        // these tests wait for.
+        if event == SlotEvent::CoarsestPublished {
+            return;
+        }
         let first =
             event == SlotEvent::DecodeStarted && counted.fetch_add(1, Ordering::SeqCst) == 0;
         let _ = event_tx.send((event, cache.shared.build_reserved.load(Ordering::SeqCst)));

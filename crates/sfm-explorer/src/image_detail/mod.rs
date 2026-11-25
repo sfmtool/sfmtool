@@ -78,6 +78,41 @@ fn show_building_mipmap(ui: &mut egui::Ui) {
     });
 }
 
+/// A spinner and [`BUILDING_MIPMAP_LABEL`] painted at the middle of
+/// `panel_rect` with `painter`, on a backing that keeps them legible over
+/// the coarsest level drawn beneath. Painted rather than laid out as
+/// widgets, so nothing over the picture takes the pointer from it. The
+/// spinner asks for the frames it turns in, as [`show_building_mipmap`]'s
+/// does.
+fn paint_building_mipmap(ui: &egui::Ui, painter: &egui::Painter, panel_rect: egui::Rect) {
+    let size = ui.spacing().interact_size.y;
+    let gap = ui.spacing().item_spacing.y;
+    let text = painter.layout_no_wrap(
+        BUILDING_MIPMAP_LABEL.to_string(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        ui.visuals().text_color(),
+    );
+    let content = egui::vec2(text.size().x.max(size), size + gap + text.size().y);
+    let backing = egui::Rect::from_center_size(panel_rect.center(), content)
+        .expand(ui.spacing().window_margin.leftf());
+    painter.rect_filled(
+        backing,
+        ui.visuals().window_corner_radius,
+        ui.visuals().window_fill.gamma_multiply(0.85),
+    );
+    let top = panel_rect.center().y - content.y / 2.0;
+    let spinner = egui::Rect::from_center_size(
+        egui::pos2(panel_rect.center().x, top + size / 2.0),
+        egui::vec2(size, size),
+    );
+    egui::Spinner::new().paint_at(ui, spinner);
+    let at = egui::pos2(
+        panel_rect.center().x - text.size().x / 2.0,
+        top + size + gap,
+    );
+    painter.galley(at, text, ui.visuals().text_color());
+}
+
 /// The least the zoom limit is, relative to the fit: 32× is pixel-level
 /// inspection for a photograph that fits the panel at a quarter of its size or
 /// larger. See [`view::zoom_limit`].
@@ -121,6 +156,9 @@ enum Shown {
     Requested,
     /// The image shown before, while the selected one's first tiles load.
     Previous(ImageRef),
+    /// The selected image's coarsest level, which the build of its mipmap
+    /// has published, under the spinner, while the photograph is `Building`.
+    Coarsest,
     /// Nothing yet: the panel says the image is loading.
     Nothing,
 }
@@ -770,6 +808,12 @@ impl ImageDetail {
             .tiles
             .shown()
             .map(|(image, layout)| (image, layout.size()));
+        // A photograph waiting for its mipmap draws the coarsest level once the
+        // build has published it, whatever was drawn before.
+        if let (Some(DisplayLayout::Building(Some(coarsest))), Some(_)) = (layout, photograph) {
+            self.tiles.show_coarsest(ctx, requested, coarsest);
+            return Shown::Coarsest;
+        }
         if shown.is_some_and(|(image, _)| image == requested) {
             return Shown::Requested;
         }
@@ -799,7 +843,7 @@ impl ImageDetail {
             (Some(DisplayLayout::Loading), Some(_)) => false,
             // A mipmap takes seconds to make, so the panel does not keep the
             // image it showed before meanwhile: it says what it waits on.
-            (Some(DisplayLayout::Building), Some(_)) => return Shown::Nothing,
+            (Some(DisplayLayout::Building(_)), Some(_)) => return Shown::Nothing,
             _ => true,
         };
         if landed {
@@ -909,8 +953,9 @@ impl ImageDetail {
             panel_size,
             pending_look,
         );
+        let building = matches!(shown, Shown::Coarsest);
         let (image_ref, photograph, look, sift_features, holding) = match shown {
-            Shown::Requested => {
+            Shown::Requested | Shown::Coarsest => {
                 // A look asked for while the previous image was held is for
                 // this one, and is applied on the frame that first draws it.
                 let held = self
@@ -918,6 +963,12 @@ impl ImageDetail {
                     .take()
                     .filter(|(image, _)| *image == requested)
                     .map(|(_, look)| look);
+                // The coarsest level is the selected photograph at low
+                // resolution, drawn at its own level-0 geometry: a look
+                // applies to it and carries over, and it takes the gestures
+                // the photograph does, but none of the photograph's tiles is
+                // asked for while its mipmap is made.
+                let photograph = photograph.filter(|_| !building);
                 (requested, photograph, look.or(held), sift_features, false)
             }
             Shown::Previous(previous) => {
@@ -930,7 +981,7 @@ impl ImageDetail {
                 if let Some(look) = look {
                     self.held_look = Some((requested, look));
                 }
-                if matches!(layout, Some(DisplayLayout::Building)) {
+                if matches!(layout, Some(DisplayLayout::Building(_))) {
                     show_building_mipmap(ui);
                 } else {
                     ui.centered_and_justified(|ui| {
@@ -983,7 +1034,7 @@ impl ImageDetail {
         // pixels whichever level the tiles are drawn from.
         let Some(size) = layout_size else {
             ui.centered_and_justified(|ui| match layout {
-                Some(DisplayLayout::Building | DisplayLayout::Loading) => {
+                Some(DisplayLayout::Building(_) | DisplayLayout::Loading) => {
                     ui.label(DECODING_LABEL);
                 }
                 Some(DisplayLayout::Known(_) | DisplayLayout::Unreadable) | None => {
@@ -1297,6 +1348,12 @@ impl ImageDetail {
                 panel_rect,
             },
         );
+
+        // Over everything: the picture is the coarsest level until the
+        // mipmap is made.
+        if building {
+            paint_building_mipmap(ui, &painter, panel_rect);
+        }
 
         response
     }

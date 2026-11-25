@@ -88,7 +88,15 @@ impl Workspace {
 
 /// Make `photograph`'s mipmap, writing its files.
 pub(super) fn build(photograph: &Path) {
-    let built = build_mipmaps(photograph, None, &options(), TILE, &Progress::none()).unwrap();
+    let built = build_mipmaps(
+        photograph,
+        None,
+        &options(),
+        TILE,
+        &Progress::none(),
+        &mut |_| {},
+    )
+    .unwrap();
     assert_eq!(built.not_written, None);
 }
 
@@ -431,7 +439,11 @@ fn request_layout_answers_building_until_the_mipmap_is_made() {
         let path = ws.photograph("a.jpg", &readable_jpeg());
         let cache = cache_of(budget);
         cache.request_layout(&path);
-        assert_eq!(cache.layout(&path), PeekedLayout::Building, "{budget}");
+        assert_eq!(
+            cache.layout(&path),
+            PeekedLayout::Building { coarsest: None },
+            "{budget}"
+        );
         let building = matches!(cache.peek_tile(&path, key), PeekedTile::Building);
         assert_eq!(building, budget > 0, "{budget}");
         assert!(ws.mipmap_files().is_empty(), "{budget}: no mipmap made");
@@ -477,7 +489,10 @@ fn a_panel_s_decode_reads_nothing_in_core_and_leaves_the_photograph_building() {
             Some(TileError::Changed { path: path.clone() }),
             "budget {budget}"
         );
-        assert_eq!(cache.layout(&path), PeekedLayout::Building);
+        assert_eq!(
+            cache.layout(&path),
+            PeekedLayout::Building { coarsest: None }
+        );
         assert_eq!(cache.stats().decodes, 0);
         assert!(ws.mipmap_files().is_empty(), "no mipmap made");
         assert_eq!(cache.stats().mipmaps_made, 0);
@@ -518,11 +533,19 @@ fn a_panel_s_decode_reads_nothing_in_core_and_leaves_the_photograph_building() {
                     }),
                     "{replace}, budget {budget}"
                 );
-                assert_eq!(cache.layout(&path), PeekedLayout::Building, "{replace}");
+                assert_eq!(
+                    cache.layout(&path),
+                    PeekedLayout::Building { coarsest: None },
+                    "{replace}"
+                );
                 // Asked again, it is still `Building`, decoding nothing.
                 let again = cache.try_decode_tiles(&path, &[key(1, 1)], &Progress::none());
                 assert!(matches!(again, Err(TileError::Changed { .. })), "{replace}");
-                assert_eq!(cache.layout(&path), PeekedLayout::Building, "{replace}");
+                assert_eq!(
+                    cache.layout(&path),
+                    PeekedLayout::Building { coarsest: None },
+                    "{replace}"
+                );
             }
             assert_eq!(cache.stats().decodes, 0, "{replace}, {budget}");
             assert_eq!(ws.mipmap_files(), on_disk, "no mipmap made");

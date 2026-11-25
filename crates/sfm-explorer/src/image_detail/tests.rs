@@ -4573,7 +4573,7 @@ fn a_photograph_without_a_mipmap_draws_a_spinner_until_build_mipmaps_has_made_it
         assert_eq!(requests.mipmaps_waiting(), paths, "frame {frame}");
     }
 
-    run_chunk(&cache, &requests, &Progress::none());
+    run_chunk(&cache, &requests, &Progress::none(), None);
     let mut drawn = false;
     for frame in 0..4 {
         let texts = painted_frame(&mut detail, &ctx, &node, source);
@@ -4588,6 +4588,328 @@ fn a_photograph_without_a_mipmap_draws_a_spinner_until_build_mipmaps_has_made_it
         queue.run_off_this_thread();
     }
     assert!(drawn, "the photograph was drawn");
+}
+
+/// A 1920 x 1080 grey PNG with no mipmap, in a temporary workspace whose
+/// `mipmap_options` puts a photograph with a side over 1024 px out of core:
+/// with the cache's 512 px tiles its mipmap stores levels 1 and 2, level 2,
+/// 480 x 270, the coarsest, so a build publishes one tile of each of levels
+/// 2 to 10.
+fn large_out_of_core_photo() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path()
+            .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
+        r#"{"version": 2, "mipmap_options": {"out_of_core_long_side": 1024,
+        "jpeg_quality": 95, "full_resolution_jpeg_quality": 95}}"#,
+    )
+    .unwrap();
+    let path = dir.path().join("large.png");
+    image::RgbImage::from_pixel(1920, 1080, image::Rgb([90, 90, 90]))
+        .save(&path)
+        .unwrap();
+    (dir, path)
+}
+
+/// What one headless frame drew: the strings, and the texture and screen
+/// rectangle of each textured mesh.
+struct Drawn {
+    texts: Vec<String>,
+    meshes: Vec<(egui::TextureId, egui::Rect)>,
+}
+
+/// Every textured mesh in `shape`, with its texture and the rectangle its
+/// vertices span.
+fn collect_meshes(shape: &egui::Shape, out: &mut Vec<(egui::TextureId, egui::Rect)>) {
+    match shape {
+        egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+            let rect = mesh.vertices.iter().fold(egui::Rect::NOTHING, |rect, v| {
+                rect.union(egui::Rect::from_min_max(v.pos, v.pos))
+            });
+            out.push((mesh.texture_id, rect));
+        }
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_meshes(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// One frame of the panel showing image 0 of `node` from `photograph`, with
+/// what it drew and reported.
+fn drawn_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    photograph: crate::state::PhotographSource<'_>,
+) -> (Drawn, super::ImageDetailResponse) {
+    let display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+        ..Default::default()
+    };
+    let mut response = None;
+    let mut output = ctx.run_ui(input, |ui| {
+        response = Some(detail.show(
+            ui,
+            node.edited(),
+            node.id,
+            node.history.current_version().serial,
+            Some(0),
+            None,
+            None,
+            None,
+            BenchMenu::default(),
+            &[],
+            &crate::platform::ScrollInput::default(),
+            None,
+            Some(photograph),
+            &display,
+            &mut intrinsics_display,
+            None,
+        ));
+    });
+    output.textures_delta.clear();
+    let mut meshes = Vec::new();
+    for clipped in &output.shapes {
+        collect_meshes(&clipped.shape, &mut meshes);
+    }
+    let drawn = Drawn {
+        texts: crate::test_support::output_texts(&output),
+        meshes,
+    };
+    (drawn, response.expect("the frame ran"))
+}
+
+/// While *Build mipmaps* makes an out-of-core photograph's mipmap, held once
+/// the build has published the coarsest level, the panel draws that level
+/// under the spinner and *Building mipmap…*: level 2's tile, uploaded once,
+/// laid over the level-0 pixels it covers in a view of the photograph's own
+/// 1920 x 1080, so what the panel draws in level-0 pixels lines up with it.
+/// It asks for no tile and starts no task meanwhile. Once the run has ended
+/// the spinner is gone and the photograph's own tiles are asked for. Before
+/// the build publishes, the spinner is drawn on its own. With a budget
+/// smaller than the photograph, where the slot holds the level, and with one
+/// of 0, where it is handed to the panel that asked through the layout it
+/// asked for.
+#[test]
+fn a_photograph_whose_mipmap_is_being_made_draws_its_coarsest_level_under_the_spinner() {
+    use crate::state::build_mipmaps::tests::run_held_once_published;
+    for budget in [1_000_000, 0] {
+        let (_dir, path) = large_out_of_core_photo();
+        let node = demo_node("/runs/coarsest.sfmr");
+        let cache = std::sync::Arc::new(sfmtool_core::camera::PhotographCache::new(
+            sfmtool_core::camera::PhotographCacheOptions {
+                budget_bytes: budget,
+                ..Default::default()
+            },
+        ));
+        let (requests, queue) = crate::state::PhotographRequests::queued();
+        let source = crate::state::PhotographSource {
+            cache: &cache,
+            requests: &requests,
+            path: &path,
+        };
+        let ctx = egui::Context::default();
+        let mut detail = ImageDetail::new();
+
+        drawn_frame(&mut detail, &ctx, &node, source);
+        assert_eq!(queue.run_off_this_thread(), 1, "{budget}: the header read");
+        let (before, _) = drawn_frame(&mut detail, &ctx, &node, source);
+        assert!(
+            before
+                .texts
+                .iter()
+                .any(|t| t == super::BUILDING_MIPMAP_LABEL),
+            "{budget}: {:?}",
+            before.texts
+        );
+        assert!(before.meshes.is_empty(), "{budget}: drawn before published");
+
+        let run = run_held_once_published(&cache, &requests);
+        run.wait_published();
+        let coarsest = super::photograph_tiles::PhotographTileKey {
+            image: crate::scene::ImageRef::new(node.id, 0),
+            level: 2,
+            col: 0,
+            row: 0,
+        };
+        // Level 2's 480 x 270 covers level-0 pixels 0 to 1920 by 0 to 1080,
+        // which the fit puts at the middle of the panel.
+        let scale = (PANEL.x / 1920.0).min(PANEL.y / 1080.0);
+        let expected = egui::Rect::from_center_size(
+            (PANEL / 2.0).to_pos2(),
+            egui::vec2(1920.0 * scale, 1080.0 * scale),
+        );
+        let mut textures = Vec::new();
+        for frame in 0..3 {
+            let (drawn, response) = drawn_frame(&mut detail, &ctx, &node, source);
+            assert!(
+                drawn
+                    .texts
+                    .iter()
+                    .any(|t| t == super::BUILDING_MIPMAP_LABEL),
+                "{budget}, frame {frame}: {:?}",
+                drawn.texts
+            );
+            assert_eq!(queue.len(), 0, "{budget}, frame {frame}: a task started");
+            let view = response.view.expect("a view of the photograph");
+            assert_eq!(view.image_size, [1920.0, 1080.0], "{budget}");
+            let texture = detail
+                .tiles
+                .resident()
+                .into_iter()
+                .find(|(key, _)| *key == coarsest)
+                .map(|(_, texture)| texture)
+                .expect("the coarsest level is uploaded");
+            textures.push(texture);
+            // Drawn in the pieces of the zoom's level it stands in for.
+            let rect = drawn
+                .meshes
+                .iter()
+                .filter(|(id, _)| *id == texture)
+                .fold(egui::Rect::NOTHING, |all, (_, rect)| all.union(*rect));
+            assert!(
+                (rect.min - expected.min).length() < 0.01
+                    && (rect.max - expected.max).length() < 0.01,
+                "{budget}: drawn over {rect:?}, not {expected:?}"
+            );
+        }
+        assert!(
+            textures.windows(2).all(|pair| pair[0] == pair[1]),
+            "{budget}: uploaded again"
+        );
+
+        run.finish();
+        let mut asked = 0;
+        for frame in 0..3 {
+            let (drawn, _) = drawn_frame(&mut detail, &ctx, &node, source);
+            assert!(
+                !drawn
+                    .texts
+                    .iter()
+                    .any(|t| t == super::BUILDING_MIPMAP_LABEL),
+                "{budget}, frame {frame}: {:?}",
+                drawn.texts
+            );
+            asked += queue.run_off_this_thread();
+        }
+        assert!(asked > 0, "{budget}: the photograph's tiles were asked for");
+    }
+}
+
+/// One frame showing image 0 of `node` with the pointer at `at`, right-clicked
+/// there, answering what the panel reported.
+fn right_click_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    sift: &crate::state::CachedSiftFeatures,
+    photograph: crate::state::PhotographSource<'_>,
+    at: egui::Pos2,
+) -> super::ImageDetailResponse {
+    let display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let mut events = vec![egui::Event::PointerMoved(at)];
+    for pressed in [true, false] {
+        events.push(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+        events,
+        ..Default::default()
+    };
+    crate::platform::set_test_pointer_pos(Some(at));
+    let mut response = None;
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
+        response = Some(detail.show(
+            ui,
+            node.edited(),
+            node.id,
+            node.history.current_version().serial,
+            Some(0),
+            None,
+            None,
+            None,
+            BenchMenu::default(),
+            &[],
+            &crate::platform::ScrollInput::default(),
+            Some(sift),
+            Some(photograph),
+            &display,
+            &mut intrinsics_display,
+            None,
+        ));
+    });
+    crate::platform::set_test_pointer_pos(None);
+    response.expect("the frame ran")
+}
+
+/// The coarsest level drawn while the mipmap is made is the selected
+/// photograph at low resolution, at its own level-0 size, so it takes the
+/// gestures the photograph does (G1, G3): a click on a feature drawn over it
+/// selects that feature's point, and a right-click there opens the menu at
+/// the feature's level-0 pixel, as on the finished photograph.
+#[test]
+fn the_coarsest_level_drawn_while_the_mipmap_is_made_takes_clicks_as_the_photograph_does() {
+    use crate::state::build_mipmaps::tests::run_held_once_published;
+    let (_dir, path) = large_out_of_core_photo();
+    let node = demo_node("/runs/coarsest-clicked.sfmr");
+    let image = pixels(1920, 1080);
+    let (&feature, &point) = node.recon().point_set.image_feature_to_point[0]
+        .iter()
+        .next()
+        .expect("the demo's images track features");
+    let [x, y] = feature_pixel(feature as usize);
+    let on_feature = to_panel(&image, [f64::from(x), f64::from(y)]);
+    let point = point as usize;
+    let sift = sift_of(&node, 0);
+    let cache = std::sync::Arc::new(sfmtool_core::camera::PhotographCache::new(
+        sfmtool_core::camera::PhotographCacheOptions::default(),
+    ));
+    let (requests, queue) = crate::state::PhotographRequests::queued();
+    let source = crate::state::PhotographSource {
+        cache: &cache,
+        requests: &requests,
+        path: &path,
+    };
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, on_feature, 0);
+    assert_eq!(queue.run_off_this_thread(), 1, "the header read");
+    // The frame that finds the photograph `Building` queues it.
+    pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, on_feature, 0);
+    assert_eq!(requests.mipmaps_waiting(), std::slice::from_ref(&path));
+
+    let run = run_held_once_published(&cache, &requests);
+    run.wait_published();
+    // The first frame that draws the level lays out what a click lands on.
+    pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, on_feature, 0);
+    let clicked = pointer_frame(&mut detail, &ctx, &node, 0, &sift, source, on_feature, 1);
+    assert_eq!(clicked.view.map(|v| v.image.index()), Some(0));
+    assert_eq!(
+        clicked.select_point,
+        Some(point),
+        "a click selected nothing"
+    );
+    let menu = right_click_frame(&mut detail, &ctx, &node, &sift, source, on_feature);
+    let pixel = menu
+        .context_menu_pixel
+        .expect("a right-click opened the menu");
+    assert!(
+        (pixel[0] - x).abs() < 1.0 && (pixel[1] - y).abs() < 1.0,
+        "the menu is at {pixel:?}, not the feature's ({x}, {y})"
+    );
+    assert_eq!(queue.len(), 0, "a tile asked for while Building");
+    run.finish();
 }
 
 // ── The focused measurement item's two entries ──────────────────────────

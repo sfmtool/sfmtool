@@ -683,7 +683,7 @@ or render keeps it.
 ```rust
 pub enum PeekedLayout {
     Known(Arc<PyramidLayout>), // header read, and for out of core files current: tiles may be asked for
-    Building { coarsest: Option<Arc<PhotographTile>> }, // mipmap missing, stale or being made; the coarsest once published
+    Building { coarsest: Option<Arc<CoarsestLevel>> }, // mipmap missing, stale or being made; the coarsest once published
     Unreadable(String),         // the original or the workspace file cannot be read; the message says which
     NotKnown,                   // not checked yet
 }
@@ -1168,13 +1168,15 @@ pub fn mipmap_location(photograph: &Path, layout: &PyramidLayout, level0_file: b
 /// `decoded` is `ImageU8::read_rgb(photograph)` when the caller already holds
 /// it (`build_sift_file` does), and is decoded here otherwise. Returns the
 /// encoded bytes of every stored level, which the caller decodes rather than
-/// reading the files back.
+/// reading the files back. Tells `on_level` each level as it is encoded, the
+/// coarsest first.
 pub fn build_mipmaps(
     photograph: &Path,
     decoded: Option<&ImageU8>,
     options: &MipmapOptions,
     tile_size: u32,
     progress: &Progress<'_>,
+    on_level: &mut dyn FnMut(&MipLevelFile),
 ) -> Result<BuiltMipmap, MipmapError>;
 
 /// One mip level file's bytes, record and restart index, read and checked once.
@@ -3053,14 +3055,16 @@ in core. Step 17 turns the tier on.
     with another record during a read fails with `Changed`, and one made
     stale during a kernel fails it with the named error.
 
-    The step is six pull requests, 14a to 14e2. The cache first learns each
+    The step is seven pull requests, 14a to 14e2b. The cache first learns each
     photograph's workspace setting, reading every photograph as before; then
     it reads an out-of-core photograph whose mipmap is current from its
     files; then `get` makes a missing or stale mipmap in the slot; then
     `get_many` makes its misses in groups sized by the build budget and
     reports what it made; then the panels act on the `Building` state and
-    queue photographs for *Build mipmaps*, whose job makes them (14e1); and
-    last a waiting panel draws the coarsest level as it is made (14e2). Reading
+    queue photographs for *Build mipmaps*, whose job makes them (14e1); then
+    Image Detail and the 3D background draw the coarsest level as it is made
+    (14e2a); and last the other panels' spinner and Image Detail's message
+    for a workspace file error (14e2b). Reading
     comes before making, so that making a mipmap only hands the slot the
     files the reading part already reads, as `build_mipmaps` returns them.
     In a workspace without `mipmap_options`, which until step 17 is every
@@ -3377,12 +3381,12 @@ in core. Step 17 turns the tier on.
       its list; and a panel's spinner ends once the task has made its
       photograph's mipmap.
 
-      The step is two pull requests, split so that no part leaves a panel
+      The step is three pull requests, split so that no part leaves a panel
       waiting on work nothing does (the reason for open question 14) and no
       part can ask for a photograph and repaint without end. 14e1 gives the
       panels the `Building` state together with the task that ends it, so
-      the moment a panel waits, something makes what it waits for; 14e2
-      changes only what a waiting panel draws.
+      the moment a panel waits, something makes what it waits for; 14e2a
+      and 14e2b change only what a waiting panel draws.
       - **14e1, the panels wait on *Build mipmaps*.** **Built.**
         `PeekedLayout::Building` and `PeekedTile::Building`; `layout`,
         `request_layout` and `peek_tile` answering them for an out-of-core
@@ -3463,34 +3467,88 @@ in core. Step 17 turns the tier on.
         nothing over the current files but decodes the original. Image
         Detail's prefetch of the next animated image queues it too, since
         it asks through `display_layout`.
-      - **14e2, what a waiting panel draws.** `PeekedLayout::Building {
-        coarsest: Option<Arc<PhotographTile>> }`; a build publishing each
-        reduced level to its slot as it is encoded, coarsest first
-        (`build_mipmaps` telling its caller each level, which the cache
-        cuts into the coarse tiles a finished mipmap keeps), so `layout`
-        answers the coarsest tile about a second after a build starts;
-        Image Detail drawing it under the spinner and the 3D background
-        drawing it as the background while the photograph is `Building`;
-        Track View's pictures, the Track Table's crop cells and hover, and
-        Measurement View's endpoint crops drawing the spinner with
-        *Building mipmap…* in place of their loading state
-        (`PeekedRead::Building`); and Image Detail's *Workspace file error:*
-        with the message for a photograph refused by an invalid
-        `mipmap_options` (`DisplayLayout::Unreadable` carrying the cache's
-        message, or a variant for a workspace's refusal). Signature changes:
-        `PeekedLayout::Building` gains `coarsest`; `DisplayLayout::Building`
-        carries the coarsest tile; `PeekedRead` gains `Building`. Tests: a
-        build held after its coarsest level is encoded (the cache's slot
-        hook) answers `Building` with that tile, and Image Detail and the 3D
-        background draw it before the build ends; under a budget of 0 the
-        coarsest is handed to the panel that asked, as a tile is; a Track
-        View picture, a Track Table crop and a Measurement View crop of a
-        `Building` photograph draw the spinner and *Building mipmap…* and
-        ask for no tile; Image Detail on a photograph of a workspace whose
-        `mipmap_options` is invalid draws *Workspace file error:* and the
-        message naming the key; and none of these asks for a tile or
-        repaints more than the reads need, at a budget of 0 and at one
-        smaller than the photograph.
+      - **14e2, what a waiting panel draws.** Two pull requests: the
+        coarsest level drawn by the two panels that show a whole photograph
+        (14e2a), then the other panels' spinner and Image Detail's message
+        for a refused workspace file (14e2b), each changing only what a
+        waiting panel draws.
+        - **14e2a, the coarsest level while a mipmap is made.** **Built.**
+          `PeekedLayout::Building { coarsest }`; a build publishing the
+          coarsest level to its slot as it is encoded (`build_mipmaps`
+          telling its caller each level, which the cache cuts into the
+          coarse tiles a finished mipmap keeps), so `layout` answers it
+          about a second after a build starts; Image Detail drawing it
+          under the spinner and the 3D background drawing it as the
+          background while the photograph is `Building`. Signature
+          changes: `PeekedLayout::Building` gains `coarsest`;
+          `build_mipmaps` gains `on_level`; `DisplayLayout::Building`
+          carries the coarsest level. Tests: a build held after its
+          coarsest level is encoded (the cache's slot hook) answers
+          `Building` with that level, and Image Detail and the 3D
+          background draw it before the build ends; under a budget of 0
+          the coarsest is handed to the panel that asked, as a tile is; the
+          level drawn while waiting takes clicks as the photograph does
+          (open question 16); and neither panel asks for a tile or
+          repaints more than the reads need, at a budget of 0 and at one
+          smaller than the photograph.
+          **As built** ([photograph_cache/build.rs](../../crates/sfmtool-core/src/camera/photograph_cache/build.rs),
+          [image_detail/mod.rs](../../crates/sfm-explorer/src/image_detail/mod.rs),
+          [scene_renderer/upload/bg_image.rs](../../crates/sfm-explorer/src/scene_renderer/upload/bg_image.rs)):
+          `coarsest` is a `CoarsestLevel`, the photograph's out-of-core
+          layout and one tile of level `K` and of each level below it, not
+          the one tile the plan named: a panel needs the level-0 size to
+          lay the level over the pixels it covers and fit its view, which
+          the tile alone does not give, and with the levels below `K` cut
+          too Image Detail draws the level at any zoom through its usual
+          fallback, and the 3D background at level `K`. They are cut from
+          the level-`K` file as the finished mipmap's coarse tiles are
+          (`files::cut_coarse`, which both share), so Image Detail keeps
+          them as the photograph's own coarse tiles once it is `Known`.
+          Only level `K` is published; `on_level` tells every level, and
+          the finer ones would serve no panel, which asks for no tile while
+          the photograph is `Building`. The slot holds the level
+          (`SlotData::coarsest`) until it reads the build's files or drops
+          its entries, not counted against the budget; under a budget of
+          0 the build puts it in the layout `request_layout` kept for the
+          path, when a panel asked for one and it is `Building`, which is
+          how it reaches that panel. A failed build's level is dropped and
+          a cancelled one's kept until the next build publishes, since the
+          photograph is queued again; a build made again in memory for a
+          kernel publishes nothing. The repaint: a quiet task's progress
+          wakes no one, so the build reports `COARSEST_PUBLISHED` through
+          its `Progress` (a `get_many` member passing it on beside the
+          messages) and *Build mipmaps*' run, tapping its `Progress`, calls
+          the viewer's `wake` once a build, so the repaints are bounded by
+          the photographs built, one each besides the run's end. Image
+          Detail's coarsest frames take clicks, drags and menus as the
+          finished photograph does, under G1 to G12, since the level is the
+          selected photograph at low resolution (open question 16; the
+          first form held them under G13, which the maintainer reversed),
+          draw the view at the photograph's own size so the overlays and
+          the pixels a gesture names line up, ask for no tile, and paint
+          the spinner and *Building mipmap…* over everything, on a
+          backing, as painted shapes that take no pointer. The background copies level `K` into its texture once
+          and keeps it while the photograph's own level loads once it is
+          `Known`. An audit-time flake in
+          `a_file_a_read_found_missing_is_made_again_each_time` (two writes
+          within one tick of the file system's clock sharing a modification
+          time) is closed by giving each rewrite a time of its own.
+        - **14e2b, the other panels and a workspace file error.** Track
+          View's pictures, the Track Table's crop cells and hover, and
+          Measurement View's endpoint crops drawing the spinner with
+          *Building mipmap…* in place of their loading state
+          (`PeekedRead::Building`); and Image Detail's *Workspace file
+          error:* with the message for a photograph refused by an invalid
+          `mipmap_options` (`DisplayLayout::Unreadable` carrying the cache's
+          message, or a variant for a workspace's refusal). Signature
+          changes: `PeekedRead` gains `Building`. Tests: a Track View
+          picture, a Track Table crop and a Measurement View crop of a
+          `Building` photograph draw the spinner and *Building mipmap…* and
+          ask for no tile; Image Detail on a photograph of a workspace whose
+          `mipmap_options` is invalid draws *Workspace file error:* and the
+          message naming the key; and none of these asks for a tile or
+          repaints more than the reads need, at a budget of 0 and at one
+          smaller than the photograph.
 15. **Makers**: `sfm sift` and `build_sift_file`, the rest of the viewer's
     *Build mipmaps* quiet task, whose job, shared list, `QuietRank` place
     and giving way 14e builds (the list filled when a reconstruction opens,
@@ -3696,3 +3754,20 @@ decisions.
     of 0, where no slot keeps the levels at all, so that a panel's every
     request would otherwise have the build made again (14e1's as-built
     note).
+16. **Gestures on the coarsest level drawn while a mipmap is made.** Found
+    while building 14e2a: Image Detail draws the selected photograph's
+    coarsest level under the spinner while *Build mipmaps* makes its
+    mipmap. The options:
+    - (a) it takes no click, drag or menu, as G13 has a picture kept while
+      its replacement loads take none, hover and the view's own wheel and
+      keys still working;
+    - (b) it takes the gestures the finished photograph does, under G1 to
+      G12, only the painted spinner and its label sitting over it.
+
+    *Decided by the user:* (b). The level is the selected photograph at low
+    resolution, drawn at its real level-0 size with the overlays lined up,
+    so a click, a drag or a menu names the pixel and the feature the user
+    sees; G13's reason, that the drawn picture is not the selected one,
+    does not apply. The first form of 14e2a built (a) and named the
+    stand-in in G13; that clause is gone and the panel's spec cites G1 to
+    G12 for it.

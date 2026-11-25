@@ -87,7 +87,15 @@ fn readable_jpeg() -> Vec<u8> {
 }
 
 fn build(photograph: &Path, options: &MipmapOptions) -> BuiltMipmap {
-    build_mipmaps(photograph, None, options, TILE, &Progress::none()).unwrap()
+    build_mipmaps(
+        photograph,
+        None,
+        options,
+        TILE,
+        &Progress::none(),
+        &mut |_| {},
+    )
+    .unwrap()
 }
 
 /// [`check_mipmap`] of the photograph as its workspace's file sets it, with
@@ -278,6 +286,35 @@ fn two_builds_give_the_same_bytes() {
     assert_eq!(first.len(), 6, "CACHEDIR.TAG, -mip0 and four levels");
 }
 
+/// A build tells its caller each level as it is encoded, the coarsest first
+/// and before any file is written, then the finer levels and `-mip0` last;
+/// a build that finds a level current tells it too, read from its file.
+#[test]
+fn a_build_tells_each_level_coarsest_first_before_it_is_written() {
+    let ws = Workspace::new(Some(options(95)));
+    let photograph = ws.photograph("images/a.png", &encode_png(&synthetic_rgb(300, 200)));
+    let coarsest = location(&photograph).level_path(4, 95);
+    for pass in ["first", "files current"] {
+        let mut told = Vec::new();
+        build_mipmaps(
+            &photograph,
+            None,
+            &options(95),
+            TILE,
+            &Progress::none(),
+            &mut |file| {
+                let level = file.record().level;
+                if level == 4 && pass == "first" {
+                    assert!(!coarsest.exists(), "the coarsest was written first");
+                }
+                told.push(level);
+            },
+        )
+        .unwrap();
+        assert_eq!(told, [4, 3, 2, 1, 0], "{pass}");
+    }
+}
+
 #[test]
 fn each_staleness_case_is_found_and_made_again() {
     let ws = Workspace::new(Some(options(95)));
@@ -392,7 +429,15 @@ fn a_source_differing_only_in_case_is_decided_by_the_hash() {
             warnings.lock().unwrap().push(text.to_string());
         }
     };
-    build_mipmaps(&photograph, None, &options(95), TILE, &Progress::to(&sink)).unwrap();
+    build_mipmaps(
+        &photograph,
+        None,
+        &options(95),
+        TILE,
+        &Progress::to(&sink),
+        &mut |_| {},
+    )
+    .unwrap();
     assert!(check(&photograph).is_ok());
     let warnings = warnings.into_inner().unwrap();
     assert_eq!(warnings.len(), 1, "{warnings:?}");
@@ -468,7 +513,14 @@ fn a_photograph_in_core_writes_nothing() {
     // With no workspace there is nowhere to write, whatever options a caller
     // passes.
     assert!(matches!(
-        build_mipmaps(&alone, None, &options(95), TILE, &Progress::none()),
+        build_mipmaps(
+            &alone,
+            None,
+            &options(95),
+            TILE,
+            &Progress::none(),
+            &mut |_| {}
+        ),
         Err(MipmapError::NotOutOfCore { .. })
     ));
     for path in [&photograph, &alone] {
@@ -585,7 +637,14 @@ fn a_build_answers_in_core_or_too_large_from_the_header_without_decoding() {
     let ws = Workspace::new(Some(options(95)));
     let build = |relative: &str, width: u32, height: u32| {
         let path = ws.photograph(relative, &header_only_png(width, height));
-        build_mipmaps(&path, None, &options(95), TILE, &Progress::none())
+        build_mipmaps(
+            &path,
+            None,
+            &options(95),
+            TILE,
+            &Progress::none(),
+            &mut |_| {},
+        )
     };
     // The pixel data of these files does not decode, so the first two
     // answers come from the header alone.
@@ -636,7 +695,14 @@ fn a_cancelled_build_writes_nothing() {
     let flag = AtomicBool::new(true);
     let progress = Progress::none().cancelled_by(&flag);
     assert!(matches!(
-        build_mipmaps(&photograph, None, &options(95), TILE, &progress),
+        build_mipmaps(
+            &photograph,
+            None,
+            &options(95),
+            TILE,
+            &progress,
+            &mut |_| {}
+        ),
         Err(MipmapError::Cancelled)
     ));
     assert!(!ws.mipmaps().exists());

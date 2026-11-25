@@ -205,7 +205,13 @@ pub enum PeekedPhotograph { Decoded(Arc<TiledPhotograph>), Unreadable, NotDecode
 pub struct GetManyTally { pub read: usize, pub from_mipmaps: usize, pub mipmaps_made: usize,
                           pub reused: usize, pub unreadable: usize }
 
-pub enum PeekedLayout { Known(Arc<PyramidLayout>), Building, Unreadable(String), NotKnown }
+pub enum PeekedLayout { Known(Arc<PyramidLayout>), Building { coarsest: Option<Arc<CoarsestLevel>> },
+                        Unreadable(String), NotKnown }
+/// The coarsest level a build publishes as soon as it is encoded: the
+/// out-of-core layout, and one tile of level `K` and of each level below it.
+pub struct CoarsestLevel { pub layout: Arc<PyramidLayout>, pub tiles: Vec<Arc<PhotographTile>> }
+/// The `Progress::value` a build reports once it has published that level.
+pub const COARSEST_PUBLISHED: &str = "coarsest_published";
 pub enum PeekedTile { Ready(Arc<PhotographTile>), Building, Unreadable, NotReady }
 pub enum TileError { Changed { path: PathBuf }, Unreadable { path: PathBuf, why: String },
                      OutOfRange { path: PathBuf, why: String }, Cancelled }
@@ -591,6 +597,8 @@ level's edge, so tiles drawn side by side with linear filtering show no seam.
   last read, moved to `Known` when a build or a check makes or finds the
   photograph's mipmap current and to `Building` when a read finds a file of
   it not current.
+  `Building` carries the coarsest level once a build of the photograph has
+  published it (§ "Making a mipmap"), and `None` before.
 - **`request_layout`** reads the header and keeps what it says of the
   layout the photograph's tiles are served under, or why it could not be
   read: for an out-of-core photograph it checks the coarsest mip level file
@@ -850,6 +858,24 @@ in-core photograph there, with no builder object or queue; the code is in
   build that writes its files drops the note. A build that fails
   otherwise is `GetError::Unreadable` naming the photograph, remembered as
   a failed decode is until the file changes.
+- **The coarsest level first.** `build_mipmaps` tells its caller each level
+  as it encodes it, the coarsest first, about one decode's time after the
+  build starts and before any file is written. The build cuts that level
+  into a `CoarsestLevel`, the tiles of level `K` and of each level below it
+  as a finished mipmap's coarse tiles are cut, and publishes it: in the
+  slot, where `layout` answers it as `Building { coarsest }` until the slot
+  reads the files the build made, and under a budget of 0, which keeps no
+  slot, in the layout `request_layout` kept for the path when a panel asked
+  for one, which is how it reaches the panel that asked. It then reports the
+  value `COARSEST_PUBLISHED` through the caller's `Progress`, once a build,
+  a `get_many` member passing it on as it passes on messages, so a caller
+  that draws repaints as the level lands. A failed build's level is
+  dropped; a cancelled build's stays until the next build publishes its
+  own, since the photograph is queued again. The level is not counted
+  against the budget: it is held only while a build of the photograph is
+  unfinished, level `K`'s long side at most a tile, so up to about 1 MB
+  each with the cache's 512 px tiles. A build made again in memory
+  for a kernel's read publishes nothing.
 - **Progress.** A `get` reports the build's phases `decode`, `reduce` and
   `encode`, counting levels, through its `Progress`; a `get_many` member
   passes on only the build's messages, since the phases of members running in
@@ -1002,10 +1028,13 @@ reconstruction's photographs goes through it except the ones under
   tasks"). A photograph the task could not make is kept as a failed decode
   is, with the file's stamp, so a cache of budget 0, which remembers no
   failure, is not asked to make it on every frame. Image Detail draws a
-  spinner with *Building mipmap…* meanwhile; the background keeps the
-  previous image's photograph on its own mesh, as while a level loads; the
-  pictures read through `read_peeked` draw their loading state. No panel's
-  task makes a mipmap or waits on one.
+  spinner with *Building mipmap…* meanwhile, over the coarsest level once
+  the build has published it; the background draws that level, keeping
+  the previous image's photograph on its own mesh until it lands, as while
+  a level loads; the pictures read through `read_peeked` draw their loading
+  state. The run of *Build mipmaps* wakes the viewer as each build of its
+  chunk publishes its coarsest level, once a build, and again as it ends.
+  No panel's task makes a mipmap or waits on one.
 - **The image menu** asks only whether each photograph is decoded, with
   `keeps_every_tile`, and reads no pixel. The scene graph lays the menu out
   for every node on every frame, so the question allocates nothing and is no
@@ -1223,6 +1252,14 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   its record current and its scan spoiled, found not current again making
   the photograph unreadable, with no further build, until `forget` drops
   it; each under a budget too small to keep a file and under a budget of 0.
+  A build held once it has published the coarsest level answering
+  `layout` as `Building` with that level, before any file is written: the
+  layout the finished mipmap is read under and one tile of each of levels
+  `K` to the last, equal to the coarse tiles the written files give and
+  kept through a panel's header read and tile ask meanwhile, the
+  value `COARSEST_PUBLISHED` reported once through `get_many`'s `Progress`,
+  and the photograph `Known` with no coarsest level once the build ends,
+  with a budget and with a budget of 0.
   The `get_many` tests, on smaller 96 x 64
   photographs where they make many mipmaps: a `get_many` over 20
   photographs with no mipmap making them in groups that never pass a build
@@ -1340,12 +1377,18 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   a slow task locks the node on screen and pushing no version; a run
   displaced by an asked-for task putting its chunk back at the front,
   holding nothing on the build count, and taking it first once queued again;
-  and a kernel's `get_many` and a run over the same photographs making each
-  mipmap once between them),
+  a kernel's `get_many` and a run over the same photographs making each
+  mipmap once between them; and a run waking the viewer once for each
+  coarsest level it publishes, and not at all over current mipmaps),
   [image_detail/tests.rs](../../../crates/sfm-explorer/src/image_detail/tests.rs)
   (the spinner with *Building mipmap…* drawn while the photograph waits,
   with no tile asked for and the photograph queued once, and the photograph
-  drawn once the task has made it),
+  drawn once the task has made it; a run held once its build has published
+  the coarsest level, the panel drawing that level under the spinner over
+  the level-0 pixels it covers, uploaded once, asking for no tile, under a
+  budget smaller than the photograph and one of 0; and a click on that
+  level selecting the point under it and a right-click opening the menu at
+  its level-0 pixel, as on the photograph),
   [image_detail/photograph_tiles/tests.rs](../../../crates/sfm-explorer/src/image_detail/photograph_tiles/tests.rs)
   (two panels showing one photograph ask for its layout and its tiles once,
   neither decoding as it draws, with a budget and with a budget of 0; the tiles
@@ -1355,7 +1398,11 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   [scene_renderer/upload/tests.rs](../../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
   (the camera-view background's photograph read off the calling thread and
   drawn once it lands, with a budget and with a budget of 0, and an
-  unreadable one's header read once),
+  unreadable one's header read once; and the coarsest level a held run of
+  *Build mipmaps* has published drawn as the background, its texture
+  coordinates scaled for it, copied into a texture once and kept while the
+  photograph's own level loads once the run ends, under a budget smaller
+  than the photograph and one of 0),
   [track_table_panel/tests/crop.rs](../../../crates/sfm-explorer/src/track_table_panel/tests/crop.rs)
   and [measurement_view/tests/crops.rs](../../../crates/sfm-explorer/src/measurement_view/tests/crops.rs)
   (a crop whose tiles are not there drawn as loading, its photograph asked

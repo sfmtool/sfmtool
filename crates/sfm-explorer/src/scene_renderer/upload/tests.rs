@@ -1995,6 +1995,67 @@ fn a_photograph_is_read_off_the_calling_thread_and_drawn_once_it_lands() {
     }
 }
 
+/// While *Build mipmaps* makes an out-of-core photograph's mipmap, held once
+/// the build has published the coarsest level, the background draws that
+/// level: level 4 of the 300 x 200 photograph read with tiles of 32 px,
+/// 18 x 12, with its texture coordinates scaled for it, copied into a
+/// texture once however many frames ask, with no task started. Before it is
+/// published nothing is drawn; once the run has ended the photograph's own
+/// level is asked for, the coarsest level kept while it loads. With a budget
+/// smaller than the photograph and with one of 0.
+#[test]
+fn a_photograph_whose_mipmap_is_being_made_draws_its_coarsest_level_as_the_background() {
+    use crate::state::build_mipmaps::tests::{
+        cache_for, out_of_core_workspace, run_held_once_published,
+    };
+    for budget in [20_000, 0] {
+        let (device, queue) = device();
+        let (dir, _) = out_of_core_workspace(1);
+        let mut recon = demo(4);
+        recon.workspace_dir = dir.path().to_path_buf();
+        recon.image_set.images[0].name = "0.png".to_string();
+        let cache = cache_for(budget, 1);
+        let (requests, tasks) = PhotographRequests::queued();
+        let mut r = renderer_at(64, 64);
+        let gpu = (&device, &queue);
+        bg_frame_from_cache(&mut r, gpu, &recon, 0, (&cache, &requests));
+        assert_eq!(tasks.run_off_this_thread(), 1, "{budget}: the header read");
+        bg_frame_from_cache(&mut r, gpu, &recon, 0, (&cache, &requests));
+        assert!(
+            r.bg_image_texture.is_none(),
+            "{budget}: drawn before published"
+        );
+
+        let run = run_held_once_published(&cache, &requests);
+        run.wait_published();
+        bg_frame_from_cache(&mut r, gpu, &recon, 0, (&cache, &requests));
+        assert_eq!(bg_texture_size(&r), Some((18, 12)), "{budget}");
+        assert_eq!(r.bg_image_loaded.as_ref().map(|l| l.level), Some(4));
+        assert_eq!(
+            r.bg_image_mesh_key.as_ref().map(|key| key.uv_scale),
+            Some(level_uv_scale((300, 200), (18, 12), 4)),
+            "{budget}"
+        );
+        let texture = r.bg_image_texture.clone();
+        for frame in 0..2 {
+            bg_frame_from_cache(&mut r, gpu, &recon, 0, (&cache, &requests));
+            assert!(
+                r.bg_image_texture == texture,
+                "{budget}, {frame}: copied again"
+            );
+            assert_eq!(tasks.len(), 0, "{budget}, {frame}: a task started");
+        }
+
+        run.finish();
+        // A 64 px viewport needs level 2, 75 x 50, read by one task.
+        bg_frame_from_cache(&mut r, gpu, &recon, 0, (&cache, &requests));
+        assert_eq!(bg_texture_size(&r), Some((18, 12)), "{budget}: kept");
+        assert_eq!(tasks.run_off_this_thread(), 1, "{budget}: the level read");
+        bg_frame_from_cache(&mut r, gpu, &recon, 0, (&cache, &requests));
+        assert_eq!(bg_texture_size(&r), Some((75, 50)), "{budget}");
+    }
+}
+
 #[test]
 fn an_unreadable_photograph_is_read_once_and_draws_nothing() {
     let (device, queue) = device();

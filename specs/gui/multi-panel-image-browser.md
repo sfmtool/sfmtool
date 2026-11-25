@@ -543,7 +543,15 @@ tiles"):
   queues it once for the quiet task *Build mipmaps*, which makes it
   ([background-tasks.md](background-tasks.md) § "Build mipmaps"), and in place of the
   image the panel draws a spinner over "Building mipmap…", repainting while it turns.
-  It does not keep drawing the image it showed before meanwhile, since a mipmap takes
+  Once the build making the mipmap has published the photograph's coarsest level, the
+  panel draws that level under the spinner, its tiles laid over the level-0 pixels they
+  cover in the view of the photograph's own size, so the overlays, which are in level-0
+  pixels, line up with it and the view carries over to the photograph unchanged. It is
+  the selected photograph at low resolution, so it takes the gestures the photograph
+  does, under G1 to G12 ([interaction-rules.md](interaction-rules.md)); the spinner
+  and its label are painted over it and take no pointer. The level's tiles are the
+  ones the finished mipmap answers, so they stay drawn as the photograph's tiles land.
+  The panel does not keep drawing the image it showed before meanwhile, since a mipmap takes
   seconds to make rather than the milliseconds a tile decode takes; an image the panel
   has already drawn, whose files are found changed later, keeps its uploaded tiles. The
   run of the task that makes the mipmap ends with a repaint, and the panel then asks for

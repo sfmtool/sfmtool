@@ -48,13 +48,78 @@ pub enum PeekedLayout {
     Known(Arc<PyramidLayout>),
     /// An out-of-core photograph whose mipmap is missing, stale or being
     /// made: no tile of it is asked for until a `get` or `get_many` makes
-    /// the mipmap, which a panel never does.
-    Building,
+    /// the mipmap, which a panel never does. `coarsest` is the mipmap's
+    /// coarsest level once a build has encoded it, which a panel draws while
+    /// it waits; `None` before.
+    Building {
+        coarsest: Option<Arc<CoarsestLevel>>,
+    },
     /// The photograph cannot be read; the message names the file and why.
     Unreadable(String),
     /// Not read yet: [`PhotographCache::request_layout`] reads it.
     NotKnown,
 }
+
+/// The name of the [`Progress::value`] a build of the cache reports when it
+/// has published a photograph's coarsest level ([`CoarsestLevel`]), so a
+/// caller that draws can repaint: the value is the level, `K`. Reported once
+/// a build, through `get`'s `Progress` and every `get_many` member's.
+pub const COARSEST_PUBLISHED: &str = "coarsest_published";
+
+/// The coarsest level of an out-of-core photograph's mipmap, published by
+/// the build that is making it as soon as that level is encoded, before the
+/// rest is made: what a panel draws while the photograph is
+/// [`PeekedLayout::Building`].
+///
+/// `tiles` are the tiles of level `K` and of every level below it, one
+/// each, cut from level `K` and the levels box-filtered from it, as the
+/// finished mipmap's coarse tiles are, so they are the tiles a panel is
+/// answered once the photograph is `Known`. A panel draws them over level-0
+/// pixels with `layout`, the layout the finished mipmap is read under, whose
+/// level 0 is the photograph's own size, so what it draws in level-0 pixels
+/// over them lines up.
+pub struct CoarsestLevel {
+    /// The photograph's out-of-core layout.
+    pub layout: Arc<PyramidLayout>,
+    /// The tiles of levels `K` to the last, in level order, each `(level,
+    /// 0, 0)` with its border.
+    pub tiles: Vec<Arc<PhotographTile>>,
+}
+
+impl CoarsestLevel {
+    /// `K`, the level of the first tile.
+    pub fn level(&self) -> usize {
+        self.layout.stored_levels()
+    }
+}
+
+impl fmt::Debug for CoarsestLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CoarsestLevel")
+            .field("layout", &self.layout)
+            .field(
+                "tiles",
+                &self.tiles.iter().map(|tile| tile.key).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+/// The same layout and the same tiles, not copies of them: what a panel
+/// compares to know it has uploaded these already.
+impl PartialEq for CoarsestLevel {
+    fn eq(&self, other: &Self) -> bool {
+        self.layout == other.layout
+            && self.tiles.len() == other.tiles.len()
+            && self
+                .tiles
+                .iter()
+                .zip(&other.tiles)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+    }
+}
+
+impl Eq for CoarsestLevel {}
 
 /// What [`PhotographCache::peek_tile`] found for a tile.
 pub enum PeekedTile {
@@ -245,13 +310,20 @@ impl PhotographCache {
     /// An out-of-core photograph whose slot found its mipmap missing or
     /// stale, or is making it, is [`PeekedLayout::Building`] until the
     /// mipmap is made, or [`PeekedLayout::Unreadable`] when its build
-    /// failed.
+    /// failed. It carries the coarsest level once a build has published it:
+    /// the slot's under a budget, and under a budget of 0, which keeps no
+    /// slot, the one the build put in the layout [`Self::request_layout`]
+    /// kept, which is how it is handed to the panel that asked.
     pub fn layout(&self, path: &Path) -> PeekedLayout {
         if let Some(slot) = self.mapped(path) {
             let data = slot.lock();
             match (&data.made, &data.tier) {
                 (Some(Err(e)), _) => return PeekedLayout::Unreadable(e.to_string()),
-                (_, Tier::NotCurrent) => return PeekedLayout::Building,
+                (_, Tier::NotCurrent) => {
+                    return PeekedLayout::Building {
+                        coarsest: data.coarsest.clone(),
+                    }
+                }
                 (Some(Ok(layout)), _) => return PeekedLayout::Known(Arc::clone(layout)),
                 (None, _) => {}
             }
@@ -290,7 +362,7 @@ impl PhotographCache {
                         Unmapped::Files(_, files) => PeekedLayout::Known(Arc::clone(&files.layout)),
                         Unmapped::InCore => in_core(),
                         Unmapped::NotCurrent if self.held_in_memory(path) => in_core(),
-                        Unmapped::NotCurrent => PeekedLayout::Building,
+                        Unmapped::NotCurrent => PeekedLayout::Building { coarsest: None },
                     }
                 } else {
                     let slot = self.slot_for(path);
@@ -298,14 +370,28 @@ impl PhotographCache {
                         Tier::Files(files) => PeekedLayout::Known(Arc::clone(&files.layout)),
                         Tier::NotCurrent => match &slot.lock().made {
                             Some(Err(e)) => PeekedLayout::Unreadable(e.to_string()),
-                            _ => PeekedLayout::Building,
+                            _ => PeekedLayout::Building { coarsest: None },
                         },
                         Tier::Unchecked | Tier::InCore => in_core(),
                     }
                 }
             }
         };
-        self.lock().layouts.insert(path.to_path_buf(), layout);
+        let mut inner = self.lock();
+        let kept = inner
+            .layouts
+            .entry(path.to_path_buf())
+            .or_insert(layout.clone());
+        // A coarsest level a build in progress has published stays.
+        if !matches!(
+            (&*kept, &layout),
+            (
+                PeekedLayout::Building { coarsest: Some(_) },
+                PeekedLayout::Building { .. }
+            )
+        ) {
+            *kept = layout;
+        }
     }
 
     /// The tile `key` of `path` if the cache keeps it, without reading a
@@ -512,9 +598,17 @@ impl PhotographCache {
                 // a budget of 0: the tiles are decoded whole in core.
                 Unmapped::NotCurrent if self.held_in_memory(path) => None,
                 Unmapped::NotCurrent => {
+                    // A coarsest level a build in progress has published
+                    // stays.
                     self.lock()
                         .layouts
-                        .insert(path.to_path_buf(), PeekedLayout::Building);
+                        .entry(path.to_path_buf())
+                        .and_modify(|kept| {
+                            if !matches!(kept, PeekedLayout::Building { .. }) {
+                                *kept = PeekedLayout::Building { coarsest: None };
+                            }
+                        })
+                        .or_insert(PeekedLayout::Building { coarsest: None });
                     return Err(TileError::Changed {
                         path: path.to_path_buf(),
                     });

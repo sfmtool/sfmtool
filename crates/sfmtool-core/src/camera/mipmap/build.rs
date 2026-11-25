@@ -195,6 +195,13 @@ impl BuiltMipmap {
 /// counting levels, and polls it for cancellation between levels and before
 /// the coarsest file is written.
 ///
+/// Tells `on_level` each level's file as soon as it is encoded, or found
+/// current and read, before it is written: the coarsest level first, about
+/// one decode's time after the build starts, then each finer level, and
+/// `-mip0` last. The photograph cache cuts the coarsest into the tiles a
+/// panel draws while it waits for the rest. A caller that wants none of them
+/// passes `&mut |_| {}`.
+///
 /// # Errors
 ///
 /// [`MipmapError::NotOutOfCore`] when the photograph is in no workspace or
@@ -210,6 +217,7 @@ pub fn build_mipmaps(
     options: &MipmapOptions,
     tile_size: u32,
     progress: &Progress<'_>,
+    on_level: &mut dyn FnMut(&MipLevelFile),
 ) -> Result<BuiltMipmap, MipmapError> {
     let not_out_of_core = || MipmapError::NotOutOfCore {
         path: photograph.to_path_buf(),
@@ -338,6 +346,7 @@ pub fn build_mipmaps(
         // that stopped or by another writer, is not made again.
         match MipLevelFile::open(&target, &expected) {
             Ok(existing) if is_current_for(&existing, &source, k, region_readable) => {
+                on_level(&existing);
                 files.push(existing);
                 phase.count(done as u64 + 1, Some(total), "levels");
                 continue;
@@ -372,6 +381,7 @@ pub fn build_mipmaps(
         let encoded: Arc<[u8]> =
             encode_mip_level(image, grey, record.jpeg_quality, &record)?.into();
         let file = MipLevelFile::from_bytes(encoded, &expected)?;
+        on_level(&file);
         if level == k {
             coarsest = Some((target, expected));
         } else if not_written.is_none() {

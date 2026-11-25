@@ -53,8 +53,8 @@ use std::time::Duration;
 
 use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::camera::{
-    PeekedLayout, PeekedTile, PhotographCache, PhotographReadError, PhotographTile, PyramidLayout,
-    TileError, TileKey, TiledPhotograph, TryDecode,
+    CoarsestLevel, PeekedLayout, PeekedTile, PhotographCache, PhotographReadError, PhotographTile,
+    PyramidLayout, TileError, TileKey, TiledPhotograph, TryDecode,
 };
 use sfmtool_core::progress::Progress;
 
@@ -73,8 +73,11 @@ pub(crate) enum DisplayLayout {
     Loading,
     /// An out-of-core photograph whose mipmap is missing or stale: queued
     /// for *Build mipmaps*, whose run that makes it ends with a repaint. No
-    /// tile of it is asked for meanwhile.
-    Building,
+    /// tile of it is asked for meanwhile. It carries the coarsest level once
+    /// the build making the mipmap has published it, which Image Detail and
+    /// the 3D background draw while they wait; the run repaints when it
+    /// lands ([`sfmtool_core::camera::COARSEST_PUBLISHED`]).
+    Building(Option<Arc<CoarsestLevel>>),
     /// The file could not be read or decoded.
     Unreadable,
 }
@@ -643,11 +646,11 @@ fn layout_of(source: PhotographSource<'_>, ctx: Option<&egui::Context>) -> Displ
     }
     match source.cache.layout(source.path) {
         PeekedLayout::Known(layout) => DisplayLayout::Known(layout),
-        PeekedLayout::Building => {
+        PeekedLayout::Building { coarsest } => {
             if ctx.is_some() {
                 super::build_mipmaps::lock(&source.requests.mipmaps).queue(source.path);
             }
-            DisplayLayout::Building
+            DisplayLayout::Building(coarsest)
         }
         PeekedLayout::Unreadable(_) => DisplayLayout::Unreadable,
         PeekedLayout::NotKnown => {
@@ -850,7 +853,7 @@ fn read_tiles<T>(
         // A picture of a photograph waiting for its mipmap is drawn as
         // loading; the run of *Build mipmaps* that makes it ends with a
         // repaint.
-        DisplayLayout::Loading | DisplayLayout::Building => return PeekedRead::Loading,
+        DisplayLayout::Loading | DisplayLayout::Building(_) => return PeekedRead::Loading,
         DisplayLayout::Unreadable => return PeekedRead::Unreadable,
     };
     let Some(coarsest) = layout.levels().checked_sub(1) else {

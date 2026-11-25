@@ -731,11 +731,18 @@ and its pyramid of `ImageU8Pyramid::full_levels` levels, so the background
 shares its pixels with Image Detail. An out-of-core photograph whose mipmap
 is missing or stale is `Building`: `display_layout` queues it for the quiet
 task *Build mipmaps* ([background-tasks.md](background-tasks.md) § "Build
-mipmaps"), no level of it is asked for, and the previous image's photograph
-stays on its own mesh, as while a level loads, until the task's run that
-makes the mipmap ends with a repaint. A photograph whose decode failed is
-remembered with its file's length and modification time and not decoded
-again until the file changes, under a budget of 0 too.
+mipmaps"), and no level of it is asked for. Once the build making the
+mipmap has published the photograph's coarsest level, level `K`, the one
+tile a build encodes first (about one decode's time after it starts), the
+background draws that level, its texture coordinates scaled for level `K` as
+for any level, copied into the texture once rather than on every frame that
+asks; the run wakes the viewer when it is published. Until then the
+previous image's photograph stays on its own mesh, as while a level loads.
+When the run that makes the mipmap ends with a repaint, the photograph's own
+level is asked for, and the coarsest level stays drawn until it lands. A
+photograph whose decode failed is remembered with its file's length and
+modification time and not decoded again until the file changes, under a
+budget of 0 too.
 
 The loader state:
 
