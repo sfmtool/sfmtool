@@ -123,3 +123,6 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> EdlPipelineRes
         sampler,
     }
 }
+
+#[cfg(test)]
+mod tests;

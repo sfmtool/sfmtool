@@ -1,7 +1,9 @@
 // Eye-Dome Lighting (EDL) post-process shader.
 //
 // Samples linear depth at 8 neighbors to detect depth discontinuities,
-// then darkens edges to create a sense of surface and depth.
+// then darkens edges to create a sense of surface and depth. A point darker
+// than the background has its silhouette lightened toward a grey instead,
+// since darkening a dark point changes nothing on screen.
 
 struct EdlUniforms {
     screen_size: vec2<f32>,
@@ -16,12 +18,28 @@ struct EdlUniforms {
     aspect: f32,
     target_radius: f32,
     time: f32,
+    rim_light: f32,              // 1 over the plain background, 0 over the camera's photograph
 }
 
 @group(0) @binding(0) var color_tex: texture_2d<f32>;
 @group(0) @binding(1) var depth_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
 @group(0) @binding(3) var<uniform> edl: EdlUniforms;
+
+// The 3D view's background in linear light, BG_COLOR in gpu_types.rs: the
+// clear colour.
+// sRGB (30, 30, 35)
+const BACKGROUND_COLOR: vec3<f32> = vec3<f32>(0.012983, 0.012983, 0.016807);
+// The luminance of linear light, ITU-R BT.709.
+const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
+// The grey a dark point's silhouette is shaded toward, in linear light: what a
+// pixel of the point with every neighbour empty would reach at a shade of 0.
+const RIM_LIGHT: vec3<f32> = vec3<f32>(0.1, 0.1, 0.1);
+// Where the rim turns from light to dark, as multiples of the background's
+// luminance: a point at or below the first is lightened fully, one at or above
+// the second is darkened as any point is, and a smoothstep blends between.
+const RIM_LIGHT_FROM: f32 = 1.0;
+const RIM_LIGHT_TO: f32 = 4.0;
 
 const NUM_NEIGHBORS: u32 = 8u;
 const NEIGHBOR_DIRS: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
@@ -50,15 +68,41 @@ fn vs_fullscreen(@builtin(vertex_index) idx: u32) -> FullscreenVertexOutput {
     return out;
 }
 
-fn edl_response(center_depth: f32, neighbor_depth: f32) -> f32 {
+// The response to one neighbour, as (depth, empty): a nearer point there gives
+// the depth part and no point there the empty part, which the rim of a dark
+// point reads on its own.
+fn edl_response(center_depth: f32, neighbor_depth: f32) -> vec2<f32> {
     if neighbor_depth <= 0.0 {
         // No point at neighbor — treat as maximum edge (infinite distance).
-        return 1.0;
+        return vec2<f32>(0.0, 1.0);
     }
     // Linear depth difference normalized by point size, following the original
     // CloudCompare/Boucheny formulation: depth_diff / scale. Using point_size
     // as the scale makes the response dimensionless and scale-invariant.
-    return max(0.0, (center_depth - neighbor_depth) / edl.point_size);
+    return vec2<f32>(max(0.0, (center_depth - neighbor_depth) / edl.point_size), 0.0);
+}
+
+// How much of RIM_LIGHT a point of this linear colour takes at its silhouette:
+// 1 for a point as dark as the background or darker, 0 for one RIM_LIGHT_TO
+// times as bright or brighter, and a smoothstep between, so points of similar
+// colour get similar rims.
+fn rim_light_weight(rgb: vec3<f32>) -> f32 {
+    let background = dot(BACKGROUND_COLOR, LUMINANCE_WEIGHTS);
+    let luminance = dot(rgb, LUMINANCE_WEIGHTS);
+    return 1.0 - smoothstep(RIM_LIGHT_FROM * background, RIM_LIGHT_TO * background, luminance);
+}
+
+// The shaded colour of a point pixel, premultiplied like its input. Every
+// point is multiplied by the shade of its whole response. A dark point also
+// takes RIM_LIGHT by as much as its empty neighbours alone would darken it, so
+// its silhouette mixes toward the grey rather than toward black. A point of
+// weight 0 is shaded exactly as it is without the rim, and so is every point
+// while edl.rim_light is 0: the rim is drawn only over the plain background.
+fn edl_shade(premultiplied: vec3<f32>, alpha: f32, response: vec2<f32>) -> vec3<f32> {
+    let shade = mix(1.0, exp(-(response.x + response.y) * edl.strength), edl.opacity);
+    let silhouette = 1.0 - mix(1.0, exp(-response.y * edl.strength), edl.opacity);
+    let rim = edl.rim_light * rim_light_weight(premultiplied / alpha) * silhouette;
+    return premultiplied * shade + RIM_LIGHT * (rim * alpha);
 }
 
 fn supernova_lighting(uv: vec2<f32>, frag_depth: f32) -> f32 {
@@ -138,7 +182,7 @@ fn fs_edl(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // anti-aliased edge. The inner ring contributes full weight, the outer
     // ring contributes half weight for a smooth falloff.
     let pixel_size = vec2<f32>(1.0 / edl.screen_size.x, 1.0 / edl.screen_size.y);
-    var response = 0.0;
+    var response = vec2<f32>(0.0, 0.0);
     let inner_radius = edl.radius;
     let outer_radius = edl.radius + 1.5;
 
@@ -154,19 +198,15 @@ fn fs_edl(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     response /= f32(NUM_NEIGHBORS) * 1.5; // normalize by total weight
 
-    // Convert response to shade factor. The response is already in units of
-    // point_size, so strength is the direct exponential decay rate.
-    let shade = exp(-response * edl.strength);
-
-    // Apply EDL shading, output premultiplied color + alpha.
-    let shade_factor = mix(1.0, shade, edl.opacity);
+    // Shade the pixel. The response is already in units of point_size, so
+    // strength is the direct exponential decay rate.
+    let shaded_rgb = edl_shade(color.rgb, alpha, response);
     let supernova = supernova_lighting(in.uv, center_depth);
 
     // Supernova brightens all point pixels near the target, blowing out to white.
     // The colour is already premultiplied by Pass 1's blend, so only the glow
     // takes the alpha: a point the Track Table's filter dims, the one splat
     // drawn with an alpha below 1, keeps its DIM_ALPHA rather than its square.
-    let shaded_rgb = color.rgb * shade_factor;
     let lit_rgb = shaded_rgb + vec3<f32>(supernova) * alpha;
     return vec4<f32>(lit_rgb, alpha);
 }

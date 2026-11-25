@@ -3,6 +3,7 @@
 
 use std::ops::Range;
 
+use super::gpu_types::BG_COLOR;
 use super::recon::ReconResources;
 use super::SceneRenderer;
 
@@ -192,6 +193,12 @@ impl SceneRenderer {
         }
     }
 
+    /// Whether Pass 0 draws the camera's photograph behind the scene this
+    /// frame, rather than the scene being drawn over the plain `BG_COLOR`.
+    pub(super) fn draws_background_photograph(&self, in_camera_view: bool) -> bool {
+        in_camera_view && self.bg_image_bind_group.is_some()
+    }
+
     /// Render the scene: Passes 0 to 2b of `specs/gui/architecture.md`
     /// § "Pass Order", which are the background image, the scene geometry
     /// (Passes 1a to 1e, one render pass), the EDL post-process and the hidden
@@ -208,18 +215,10 @@ impl SceneRenderer {
             return;
         };
 
-        // BG_COLOR as wgpu::Color (linear sRGB ≈ (30, 30, 35))
-        let bg_color = wgpu::Color {
-            r: 0.013,
-            g: 0.013,
-            b: 0.017,
-            a: 1.0,
-        };
-
         // ── Pass 0: Background image (camera view only) ──
         // Renders the camera's photograph into edl_output, cleared to BG_COLOR
         // so letterbox/pillarbox bars match the normal background.
-        let has_bg_image = in_camera_view && self.bg_image_bind_group.is_some();
+        let has_bg_image = self.draws_background_photograph(in_camera_view);
         if has_bg_image {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bg image pass"),
@@ -227,7 +226,7 @@ impl SceneRenderer {
                     view: edl_output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(bg_color),
+                        load: wgpu::LoadOp::Clear(BG_COLOR),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -444,7 +443,7 @@ impl SceneRenderer {
             let edl_load_op = if has_bg_image {
                 wgpu::LoadOp::Load
             } else {
-                wgpu::LoadOp::Clear(bg_color)
+                wgpu::LoadOp::Clear(BG_COLOR)
             };
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

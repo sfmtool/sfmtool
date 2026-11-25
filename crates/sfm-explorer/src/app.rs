@@ -930,6 +930,7 @@ impl App {
             self.state.patch_opacity,
             self.state.patch_alpha_cutoff,
             self.viewer_3d.overlay_view.pixels_per_point,
+            self.viewer_3d.camera_view.is_some(),
         );
 
         // Update background image uniforms every frame in camera view (viewport

@@ -4,7 +4,8 @@ The SfM Explorer's 3D viewer draws each reconstructed point as a small round
 splat that always faces the camera, using GPU instancing to draw one shared quad
 once per point. A point has no surface normal to shade by, so a full-screen
 Eye-Dome Lighting (EDL) pass then darkens each point pixel whose neighboring
-pixels hold nearer points or no point at all. That outlines surfaces and depth
+pixels hold nearer points or no point at all, and lightens the silhouette of a
+point darker than the background instead. That outlines surfaces and depth
 edges and makes the 3D shape of a sparse cloud readable. While Alt is held, or
 while the HUD's Target indicator checkbox is on, a rotating compass glyph marks
 the orbit camera's target point: cyan where it is in front of the scene, a faded orange where scene
@@ -335,35 +336,107 @@ of a more distant surface — producing an effect similar to ambient occlusion.
 The result gives sparse point clouds a sense of solidity and makes it much
 easier to perceive the 3D structure.
 
+Darkening outlines a point only when the point is lighter than what is around
+it. A point darker than the background, such as a near-black point drawn
+(13, 12, 9) on the background's (30, 30, 35), would lose its outline and
+nearly vanish, so its silhouette is shaded toward a light grey instead: the
+point keeps its own colour inside and gains a faint light rim at its edge.
+
 ### Algorithm
 
-The EDL shader runs as a fullscreen post-process after the point splat pass.
-For each pixel:
+The EDL shader (`shaders/edl.wgsl`) runs as a fullscreen post-process after the
+point splat pass. For each point pixel:
 
 1. Read the center pixel's linear depth
 2. Sample 8 neighbors (cardinal + diagonal directions) at two radii:
    - Inner ring at `radius` pixels
-   - Outer ring at `2 × radius` pixels (weighted 0.5×)
-3. For each neighbor, compute a depth response:
+   - Outer ring at `radius + 1.5` pixels (weighted 0.5×)
+3. For each neighbor, compute a response, in one of two parts:
    ```
-   response = max(0, (center_depth - neighbor_depth) / point_size)
+   depth response = max(0, (center_depth - neighbor_depth) / point_size)   (a point there)
+   empty response = 1                                                      (no point there)
    ```
-4. Average all responses and apply exponential falloff:
+   "No point there" means a linear depth of 0 or less: no geometry, or a
+   frustum, image quad, surfel or point at infinity, none of which writes a
+   positive depth (see "Background and Frustum Handling" below). A dark point
+   beside one of them takes its rim on that side.
+4. Average each part over the neighbours' total weight, and turn the sum and
+   the empty part alone into shades:
    ```
-   shade = exp(-average_response * strength)
+   shade      = mix(1, exp(-(depth + empty) * strength), opacity)
+   silhouette = 1 - mix(1, exp(-empty * strength), opacity)
    ```
-5. Multiply the original color by the shade factor
+5. Shade the pixel's colour `c` (premultiplied by its alpha `a`):
+   ```
+   shaded = c * shade + RIM_LIGHT * (rim_light * rim_light_weight(c / a) * silhouette * a)
+   ```
+
+`rim_light_weight` is 1 for a point whose luminance (BT.709 weights on its
+linear colour) is at or below the background's, 0 for one at or above
+`RIM_LIGHT_TO` times the background's, and a smoothstep between. A point of
+weight 0 is shaded exactly as `c * shade`, the darkening alone, so every point
+at least four times as bright as the background, the selection's yellow, the
+hover's cyan and the brush's reds among them, is drawn as it is without the
+rim. A point of weight 1 at a silhouette with every neighbour empty mixes
+halfway from its colour toward `RIM_LIGHT`: the near-black point above reaches
+about (64, 64, 64) at the edge of a lone dot, and less further in.
+`rim_light` is 1 while the scene is drawn over the plain background and 0
+while the camera's photograph is behind it, which leaves `c * shade` for every
+point.
+
+These choices are deliberate:
+
+- **"Darker than the background" is decided in linear light, against
+  `BACKGROUND_COLOR`**, the scene's clear colour `BG_COLOR`
+  (`scene_renderer/gpu_types.rs`), since that is what the points are drawn on.
+- **The rim fades out across a band rather than at a threshold.** A hard
+  threshold would turn the edge of one point light and the edge of a point of
+  nearly the same colour dark. Across the band, from the background's luminance
+  to four times it (sRGB greys of about 30 to 65), the weight falls smoothly,
+  so the shaded edge changes little for a small change of colour. Somewhere in
+  the band a point's edge is shaded neither lighter nor darker; such a point is
+  already visibly lighter than the background.
+- **The rim comes from empty neighbours only.** Where a nearer point is beside
+  a dark point, the dark point is darkened as any point is. The depth response
+  lands on the farther of two points, so lightening it would draw a light band
+  along the nearer point's edge, which reads as a halo round that point rather
+  than as the dark point's outline.
+- **The rim takes the pixel's alpha.** A point the Track Table's filter dims
+  keeps its `DIM_ALPHA` at the rim as it does inside, and the shade is computed
+  before the supernova brightening, which adds to it as it does to any point.
+- **No rim is drawn while the camera's photograph is behind the scene.** The
+  rim is there to separate a dark point from the plain `BACKGROUND_COLOR`. In
+  a camera view whose photograph Pass 0 draws, what is behind a point is the
+  photograph, which the EDL pass writes onto and cannot read. A grey rim there
+  turns a crisp dark dot over a bright part of the photograph into one whose
+  edge blends into it, so the pass draws every point as it does without the
+  rim. The uniform `rim_light` carries this: `edl_rim_light` in `gpu_types.rs`
+  makes it 0 when `SceneRenderer::draws_background_photograph`, the same test
+  that decides whether Pass 0 runs, holds, and 1 otherwise. It is one value
+  for the whole frame, so a dark point over the plain letterbox or pillarbox
+  bars of such a view gets no rim either; a camera view without a photograph
+  to draw keeps the rim.
 
 ### Parameters
 
 | Parameter | Default | UI Control | Effect |
 |-----------|---------|------------|--------|
-| `edl_strength` | 0.7 | — | Controls how dark the edges get |
-| `edl_radius` | 2.4 | "EDL width" slider, 0.5–8 px (viewport HUD, Advanced) | Sampling distance in pixels |
+| `strength` | 0.7 (`EDL_STRENGTH`) | — | Controls how dark the edges get |
+| `opacity` | 1.0 (`EDL_OPACITY`) | — | How much of the shade a point pixel takes |
+| `rim_light` | 1, or 0 over the photograph | — | Whether a dark point's silhouette takes the rim: `edl_rim_light` of whether Pass 0 drew the camera's photograph |
+| `radius` | 2.4 | "EDL width" slider, 0.5–8 px (viewport HUD, Advanced) | Sampling distance in pixels |
 | `point_size` | auto | — | Normalizes depth differences |
+| `BACKGROUND_COLOR` | (0.012983, 0.012983, 0.016807), linear | — | The background a point's luminance is compared with: `BG_COLOR`, sRGB (30, 30, 35) |
+| `RIM_LIGHT` | (0.1, 0.1, 0.1), linear | — | The grey a dark point's silhouette is shaded toward: sRGB (89, 89, 89) |
+| `RIM_LIGHT_FROM`, `RIM_LIGHT_TO` | 1, 4 | — | The band of the rim's fade, as multiples of the background's luminance |
 
-`edl_radius` is wired end-to-end: `AppState::edl_line_thickness` flows into the
-EDL uniforms every frame and the HUD's Advanced section drives it.
+`strength` and `opacity` are constants in `gpu_types.rs`; `BACKGROUND_COLOR`,
+`RIM_LIGHT` and the band are constants in `edl.wgsl`, and a test in
+`scene_renderer/pipelines/edl/tests.rs` pins the shader's lines, checks
+`BACKGROUND_COLOR` against `BG_COLOR`, and mirrors the shading on the CPU at
+known colours. `radius` is wired end-to-end: `AppState::edl_line_thickness`
+flows into the EDL uniforms every frame and the HUD's Advanced section drives
+it.
 
 ### Background and Frustum Handling
 

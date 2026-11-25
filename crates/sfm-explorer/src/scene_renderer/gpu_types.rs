@@ -477,6 +477,24 @@ pub(super) struct TargetIndicatorUniforms {
     pub(crate) screen_size_ps: [f32; 4],    // xy = screen_size, z = point_size, w = line_half_width
 }
 
+/// The 3D view's background in linear light, which the sRGB target shows as
+/// (30, 30, 35): the clear colour of the scene's output, and the colour the
+/// EDL pass's `BACKGROUND_COLOR` names to decide whether a point is darker than
+/// the background.
+pub(super) const BG_COLOR: wgpu::Color = wgpu::Color {
+    r: 0.012983,
+    g: 0.012983,
+    b: 0.016807,
+    a: 1.0,
+};
+
+/// The EDL pass's `strength`: the decay rate of its shade with the depth
+/// response, which is in units of the point size.
+pub(super) const EDL_STRENGTH: f32 = 0.7;
+
+/// The EDL pass's `opacity`: how much of its shade a point pixel takes.
+pub(super) const EDL_OPACITY: f32 = 1.0;
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct EdlUniforms {
@@ -492,7 +510,21 @@ pub(super) struct EdlUniforms {
     pub(crate) aspect: f32,
     pub(crate) target_radius: f32,
     pub(crate) time: f32,
-    pub(crate) _pad: [f32; 2],
+    /// [`edl_rim_light`] of whether the camera's photograph is behind the scene.
+    pub(crate) rim_light: f32,
+    pub(crate) _pad: f32,
+}
+
+/// The EDL pass's `rim_light`: 1 when the scene is drawn over the plain
+/// [`BG_COLOR`], so a point darker than it takes a light rim, and 0 while Pass
+/// 0 has drawn the camera's photograph behind the scene. The pass cannot read
+/// the photograph, and a dark point over it is shaded as any point is.
+pub(super) const fn edl_rim_light(draws_background_photograph: bool) -> f32 {
+    if draws_background_photograph {
+        0.0
+    } else {
+        1.0
+    }
 }
 
 #[repr(C)]

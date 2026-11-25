@@ -636,7 +636,7 @@ fn the_splat_and_the_outline_share_the_highlight_colours_and_the_bench_stroke() 
 
 /// The sRGB transfer function, `IEC 61966-2-1`, in `f64`: the reference the
 /// shaders' decode is checked against.
-fn srgb_to_linear_reference(encoded: f64) -> f64 {
+pub(super) fn srgb_to_linear_reference(encoded: f64) -> f64 {
     if encoded <= 0.04045 {
         encoded / 12.92
     } else {
@@ -819,6 +819,7 @@ fn each_named_srgb_colour_constant_holds_its_linear_value() {
             "target_indicator.wgsl",
             include_str!("../../shaders/target_indicator.wgsl"),
         ),
+        ("edl.wgsl", include_str!("../../shaders/edl.wgsl")),
     ] {
         let lines: Vec<&str> = source.lines().map(str::trim).collect();
         for (k, line) in lines.iter().enumerate() {
@@ -852,6 +853,7 @@ fn each_named_srgb_colour_constant_holds_its_linear_value() {
             checked += 1;
         }
     }
-    // The brush's two reds, the failure colour, and the indicator's two.
-    assert_eq!(checked, 5);
+    // The brush's two reds, the failure colour, the indicator's two and the
+    // EDL pass's background.
+    assert_eq!(checked, 6);
 }
