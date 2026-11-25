@@ -146,10 +146,10 @@ const BEHIND_OPACITY: f32 = 0.45;
 // before a press: the same hue, so the preview reads as what a press would do,
 // and lighter, so it reads as not done yet. Each is the linear value of the
 // sRGB colour its comment names, so the screen shows that colour.
-// sRGB (255, 26, 26)
-const BRUSH_PAINTED_COLOR: vec3<f32> = vec3<f32>(1.000000, 0.010330, 0.010330);
-// sRGB (255, 153, 153)
-const BRUSH_UNDER_COLOR: vec3<f32> = vec3<f32>(1.000000, 0.318547, 0.318547);
+// sRGB (255, 89, 89)
+const BRUSH_PAINTED_COLOR: vec3<f32> = vec3<f32>(1.000000, 0.099899, 0.099899);
+// sRGB (255, 203, 203)
+const BRUSH_UNDER_COLOR: vec3<f32> = vec3<f32>(1.000000, 0.597202, 0.597202);
 
 // The camera model proposal's preview flags, matching `FLAG_*` in
 // `camera_model_proposal/preview.rs`: the `w` of a preview buffer row. A row

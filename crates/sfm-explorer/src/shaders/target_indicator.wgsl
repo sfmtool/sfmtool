@@ -97,14 +97,14 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
-// Cyan when unoccluded, warm red-orange when behind geometry. Each is the
+// Cyan when unoccluded, warm orange when behind geometry. Each is the
 // linear value of the sRGB colour its comment names, since the target is
 // `Rgba8UnormSrgb` and encodes what the shader writes; the glow then scales
 // them in linear light.
 // sRGB (0, 255, 255)
 const COLOR_FRONT: vec3<f32> = vec3<f32>(0.000000, 1.000000, 1.000000);
-// sRGB (255, 77, 0)
-const COLOR_BEHIND: vec3<f32> = vec3<f32>(1.000000, 0.074214, 0.000000);
+// sRGB (255, 149, 0)
+const COLOR_BEHIND: vec3<f32> = vec3<f32>(1.000000, 0.300544, 0.000000);
 
 /// Depth-aware color and opacity. Returns (color, opacity).
 /// Reversed-Z: near=1, far=0. Cleared to 0 (no geometry).

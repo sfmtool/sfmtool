@@ -81,8 +81,8 @@ calls out, reach the pass without rewriting the instance buffer:
 | `0` | `MASK_DELETED` | deleted by the version in view | nothing: a clipped vertex, which occludes nothing and answers no pick |
 | `1` | `MASK_ALIVE` | live | its own colour |
 | `2` | `MASK_HIGHLIGHTED` | live, and observed by a camera being moved (the Move Camera lock, `crate::camera_lock`) | the hover cyan, `(0, 1, 1)` |
-| `3` | `MASK_PAINTED` | live, and painted by the eraser brush's stroke being held | red, sRGB `(255, 26, 26)` |
-| `4` | `MASK_UNDER_BRUSH` | live, and under the eraser brush's circle before a press | pale red, sRGB `(255, 153, 153)` |
+| `3` | `MASK_PAINTED` | live, and painted by the eraser brush's stroke being held | red, `(1.0, 0.1, 0.1)` |
+| `4` | `MASK_UNDER_BRUSH` | live, and under the eraser brush's circle before a press | pale red, `(1.0, 0.6, 0.6)` |
 
 The words are declared in
 [upload/overlay.rs](../../crates/sfm-explorer/src/scene_renderer/upload/overlay.rs)
@@ -454,8 +454,8 @@ the scene"):
 
 | Depth Relationship | Color | Opacity | Description |
 |-------------------|-------|---------|-------------|
-| In front of geometry | Cyan, sRGB `(0, 255, 255)` | 100% | Fully visible, unoccluded |
-| Behind geometry | Red-orange, sRGB `(255, 77, 0)` | Fades with depth | Color shift signals occlusion |
+| In front of geometry | Cyan | 100% | Fully visible, unoccluded |
+| Behind geometry | Warm orange | Fades with depth | Color shift signals occlusion |
 
 The opacity when occluded falls linearly from 20% to a 5% floor
 (`shaders/target_indicator.wgsl`):
