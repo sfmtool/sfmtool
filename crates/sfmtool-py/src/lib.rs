@@ -11,7 +11,8 @@
 //! `_sfmtool.fileio`, `_sfmtool.sift`, `_sfmtool.reconstruction`,
 //! `_sfmtool.patches`, `_sfmtool.bench`, `_sfmtool.matching`,
 //! `_sfmtool.analysis`, `_sfmtool.flow`, `_sfmtool.spatial`,
-//! `_sfmtool.spherical`, `_sfmtool.explorer`, `_sfmtool.workspace`). The
+//! `_sfmtool.spherical`, `_sfmtool.explorer`, `_sfmtool.workspace`,
+//! `_sfmtool.photographs`). The
 //! extension is internal to the Python package:
 //! each submodule's public home is the Python module `sfmtool.<name>`, which
 //! re-exports it (`sfmtool/sift/__init__.py` for `sift`). Each submodule's
@@ -177,6 +178,10 @@ mod explorer;
 // ── Workspace configuration files (named image lists) ────────────────────
 
 mod workspace;
+
+// ── The photograph cache and the mipmaps it makes ────────────────────────
+
+mod photographs;
 
 // ── Module registration ───────────────────────────────────────────────────
 
@@ -377,6 +382,10 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The files in a workspace root that configure the workspace as a whole:
     // its named image lists.
     helpers::install_submodule(m, "sfmtool.workspace", workspace::register)?;
+
+    // The photograph cache, which makes the mipmaps of out-of-core
+    // photographs.
+    helpers::install_submodule(m, "sfmtool.photographs", photographs::register)?;
 
     // Deliberately root-level: `ProgressCounter` is cross-cutting progress
     // instrumentation consumed by patch AND matching kernels, so no single

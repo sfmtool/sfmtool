@@ -38,9 +38,9 @@ pub use mipmap::{
     PHOTOGRAPH_TILE_SIZE,
 };
 pub use photograph_cache::{
-    BuildReservation, CoarsestLevel, GetError, GetManyTally, PeekedLayout, PeekedPhotograph,
-    PeekedTile, PhotographCache, PhotographCacheOptions, PhotographCacheStats, TileError,
-    TryDecode, COARSEST_PUBLISHED,
+    BuildReservation, CoarsestLevel, GetError, GetManyTally, MipmapBuildReport, PeekedLayout,
+    PeekedPhotograph, PeekedTile, PhotographCache, PhotographCacheOptions, PhotographCacheStats,
+    TileError, TryDecode, COARSEST_PUBLISHED,
 };
 pub use tiled_photograph::{PhotographReadError, PhotographTile, TileKey, TiledPhotograph};
 pub use viewport::Camera;

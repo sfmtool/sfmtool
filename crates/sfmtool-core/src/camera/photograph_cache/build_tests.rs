@@ -997,3 +997,79 @@ fn a_build_publishes_the_coarsest_level_before_it_ends() {
         );
     }
 }
+
+/// `build_mipmaps` over an out-of-core photograph with no mipmap, one whose
+/// mipmap is current, an in-core photograph and a missing file makes the one
+/// mipmap, reports each path in its list, and decodes nothing whole: the
+/// in-core photograph is not decoded, as `get_many` would decode it. A
+/// second call finds both mipmaps current. In a workspace without
+/// `mipmap_options` every photograph is in core and no mipmap directory is
+/// made. With a budget and with one of 0.
+#[test]
+fn build_mipmaps_makes_the_missing_mipmaps_and_decodes_no_photograph_in_core() {
+    for budget in [GIB, 0] {
+        let ws = Workspace::new();
+        let current = ws.photograph("current.jpg", &readable_jpeg());
+        super::mipmap_tests::build(&current);
+        let no_mipmap = ws.photograph("no_mipmap.jpg", &readable_jpeg());
+        let in_core = ws.photograph(
+            "in_core.jpg",
+            &encode_jpeg(&synthetic_rgb(48, 32), JpegOptions::default()),
+        );
+        let gone = ws.dir.path().join("images").join("gone.jpg");
+        let paths: Vec<&Path> = vec![&no_mipmap, &current, &in_core, &gone];
+        let cache = cache_of(budget);
+        let made = MipmapsMade(Mutex::new(Vec::new()));
+        let sink = |event: Event<'_>| made.sink(event);
+
+        let report = cache.build_mipmaps(&paths, &Progress::to(&sink)).unwrap();
+        assert_eq!(
+            report.made,
+            std::slice::from_ref(&no_mipmap),
+            "budget {budget}"
+        );
+        assert_eq!(report.current, std::slice::from_ref(&current));
+        assert_eq!(report.in_core, std::slice::from_ref(&in_core));
+        assert_eq!(
+            report.failed,
+            [(gone.clone(), GetError::NotFound(gone.clone()))]
+        );
+        assert_eq!(*made.0.lock().unwrap(), [1.0]);
+        let stats = cache.stats();
+        assert_eq!((stats.decodes, stats.mipmaps_made), (0, 1));
+        assert_eq!(levels_on_disk(&ws).iter().filter(|&&l| l == 4).count(), 2);
+
+        let report = cache.build_mipmaps(&paths, &Progress::none()).unwrap();
+        assert_eq!(report.made, Vec::<PathBuf>::new());
+        assert_eq!(report.current, [no_mipmap, current]);
+        assert_eq!(cache.stats().mipmaps_made, 1);
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(WORKSPACE_FILE_NAME), r#"{"version": 2}"#).unwrap();
+    let big = dir.path().join("big.jpg");
+    std::fs::write(&big, readable_jpeg()).unwrap();
+    let cache = cache_of(GIB);
+    let report = cache
+        .build_mipmaps(&[big.as_path()], &Progress::none())
+        .unwrap();
+    assert_eq!(report.in_core, [big]);
+    assert!(!dir.path().join(MIPMAP_DIR_NAME).exists());
+    assert_eq!(cache.stats().decodes, 0);
+}
+
+/// A cancelled `build_mipmaps` answers `Cancelled` and makes nothing.
+#[test]
+fn a_cancelled_build_mipmaps_makes_nothing() {
+    let ws = Workspace::new();
+    let photograph = ws.photograph("a.jpg", &readable_jpeg());
+    let cancel = AtomicBool::new(true);
+    let progress = Progress::none().cancelled_by(&cancel);
+    let cache = cache_of(GIB);
+    assert_eq!(
+        cache.build_mipmaps(&[photograph.as_path()], &progress),
+        Err(Cancelled)
+    );
+    assert_eq!(cache.stats().mipmaps_made, 0);
+    assert!(ws.mipmap_files().is_empty());
+}

@@ -109,6 +109,44 @@ Each image `<dir>/<name>` gets one `.sift` file:
 new as the image (by modification time), and reports how many images were
 skipped and how many were extracted.
 
+## Mipmaps
+
+In a workspace whose `.sfm-workspace.json` has `mipmap_options`, `--extract`
+also makes the mipmap of each out-of-core photograph among the images it
+extracted, so a solve's workspace has them before the viewer opens it
+([mipmaps.md](../../core/camera/mipmaps.md)). Once every `.sift` file is
+written, `image_files_to_sift_files` calls `PhotographCache.build_mipmaps`
+([python-bindings.md § `photographs`](../../python-bindings.md#photographs))
+over those images on one cache of budget 0: a mipmap already current is read,
+not made again, an in-core photograph is not decoded, and each out-of-core one
+whose mipmap is missing or stale is decoded again for its build, whichever the
+feature tool. The builds start after the extraction's decodes are freed, and
+the cache's default build budget (a quarter of physical memory, between 1 and
+16 GiB) bounds them, where the extraction runs as many images as fit in half
+of it, so they do not raise the command's peak memory: over two 24-megapixel
+JPEGs it peaks at about 960 MiB with the object and without it. The `.sift`
+files are the same bytes with or without the object.
+
+When there is an out-of-core photograph, the summary has one more line after
+the count of new `.sift` files:
+
+```
+New SIFT feature extraction (SFMTOOL): 3 / 3 image(s)
+New mipmaps: 2 / 2 out-of-core image(s)
+```
+
+the first number the mipmaps made, the second the out-of-core photographs
+extracted whose mipmaps are now current, made or found so. A photograph whose
+mipmap could not be made, such as
+every photograph of a workspace whose `mipmap_options` is invalid, is a line
+`Warning: no mipmap was made: <why>` on standard error, naming it, and its
+`.sift` file is still written. In a workspace without the object, and outside
+every workspace, each image's header is read, nothing is written and nothing
+is printed. Images skipped as up to date are not looked at. The same happens
+where `sfm solve`, `sfm match`, `sfm to-colmap-db` and, for the `colmap` and
+`opencv` tools, `sfm pick-images` extract missing features, since they extract
+through `image_files_to_sift_files`.
+
 ## Version refusals
 
 In a workspace, a version 1 workspace file is refused before anything else,

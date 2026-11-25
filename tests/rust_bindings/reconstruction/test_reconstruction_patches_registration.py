@@ -142,6 +142,7 @@ _SUBMODULES = (
     "geometry",
     "matching",
     "patches",
+    "photographs",
     "reconstruction",
     "sift",
     "spatial",
