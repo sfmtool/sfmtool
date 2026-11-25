@@ -70,7 +70,7 @@ impl ImageDetail {
     /// warning colour. A pixel that is not finite draws no mark, and so no
     /// line, hover target or indicator.
     pub(super) fn measurement_screen(&self, painter: &egui::Painter, at: &Placement) -> Screen {
-        let layer = &self.measurements;
+        let layer = self.measurements.layer();
         let mut screen = Screen::default();
         for (index, drawn) in layer.drawn.iter().enumerate() {
             if drawn.node != at.node() {
@@ -141,7 +141,7 @@ impl ImageDetail {
         let screen = self.measurement_screen(painter, at);
         let followed =
             measurement_marks::follow(&mut self.measurement_press, ui, interact, |pos| {
-                screen.hit(&self.measurements, pos)
+                screen.hit(self.measurements.layer(), pos)
             });
         if let Some((press, double)) = &followed.released {
             self.release_measurement_press(press, *double, &screen, at, response);
@@ -149,7 +149,7 @@ impl ImageDetail {
         let held = self.measurement_press.is_some();
         self.measurement_hover = followed.hovered.clone();
         if let Some(target) = &followed.hovered {
-            let handle = measurement_marks::is_handle(&self.measurements, target);
+            let handle = measurement_marks::is_handle(self.measurements.layer(), target);
             ui.ctx()
                 .set_cursor_icon(measurement_marks::cursor(handle, held));
         }
@@ -170,7 +170,7 @@ impl ImageDetail {
         }
         if press.moved {
             if let Target::Mark(DrawnId::Item { node, label }, side) = &press.target {
-                if measurement_marks::is_handle(&self.measurements, &press.target) {
+                if measurement_marks::is_handle(self.measurements.layer(), &press.target) {
                     response.measurement_gesture = Some(MeasurementGesture::SetEndpoint(
                         crate::bench::measurement::EndpointSet {
                             node: *node,
@@ -188,8 +188,9 @@ impl ImageDetail {
             Target::Indicator => {
                 let Some(target) = self
                     .measurements
+                    .layer()
                     .selected()
-                    .and_then(|d| screen.of(&self.measurements, &d.id))
+                    .and_then(|d| screen.of(self.measurements.layer(), &d.id))
                     .map(indicator_target)
                 else {
                     return;
@@ -222,17 +223,21 @@ impl ImageDetail {
         let mut screen = self.measurement_screen(painter, at);
         if let Some(press) = self.measurement_press.as_ref().filter(|p| p.moved) {
             if let Target::Mark(id, side) = &press.target {
-                if measurement_marks::is_handle(&self.measurements, &press.target) {
+                if measurement_marks::is_handle(self.measurements.layer(), &press.target) {
                     let pos = at.to_panel(at.to_image(press.to));
-                    screen.move_mark(&self.measurements, id, *side, pos);
+                    screen.move_mark(self.measurements.layer(), id, *side, pos);
                 }
             }
         }
-        screen.draw(painter, &self.measurements, ui.visuals().warn_fg_color);
+        screen.draw(
+            painter,
+            self.measurements.layer(),
+            ui.visuals().warn_fg_color,
+        );
         let text = self
             .measurement_hover
             .as_ref()
-            .and_then(|target| measurement_marks::hover_text(&self.measurements, target));
+            .and_then(|target| measurement_marks::hover_text(self.measurements.layer(), target));
         if let (Some(text), Some(pos)) = (text, interact.hover_pos()) {
             measurement_marks::draw_hover_text(painter, pos, text, at.panel_rect);
         }

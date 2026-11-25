@@ -55,8 +55,9 @@ fn frame_sized(
     pointer: egui::Pos2,
     size: egui::Vec2,
 ) -> Frame {
-    viewer.measurement_key = state.measurement_layer_key(state.show_all_measurements);
-    viewer.measurements = state.measurement_layer(state.show_all_measurements);
+    viewer
+        .measurements
+        .update(state, state.show_all_measurements);
     crate::platform::set_test_pointer_pos(Some(pointer));
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
@@ -582,7 +583,7 @@ fn a_measurement_draws_its_line_and_marks_as_instances() {
         Vec::new(),
         egui::pos2(5.0, 5.0),
     );
-    let pieces = super::instances(&viewer.measurements);
+    let pieces = super::instances(viewer.measurements.layer());
     assert_eq!(
         viewer.measurement_upload.as_ref(),
         Some(&pieces),
@@ -643,8 +644,8 @@ fn a_ring_or_a_dot_is_one_instance_with_its_radius_in_points() {
         egui::pos2(5.0, 5.0),
     )
     .0;
-    let pieces = super::instances(&near.measurements);
-    assert_eq!(pieces, super::instances(&far.measurements));
+    let pieces = super::instances(near.measurements.layer());
+    assert_eq!(pieces, super::instances(far.measurements.layer()));
     let rings: Vec<_> = pieces
         .iter()
         .filter(|p| p.kind == OverlayInstance::RING)
@@ -675,9 +676,9 @@ fn halos_come_before_strokes_across_measurements() {
     select(&mut state, id, 0);
     state.show_all_measurements = true;
     let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
-    assert!(viewer.measurements.drawn.len() > 1);
+    assert!(viewer.measurements.layer().drawn.len() > 1);
     let halo = pack_rgba8(super::encoded_rgba(crate::measurement_marks::HALO));
-    let pieces = super::instances(&viewer.measurements);
+    let pieces = super::instances(viewer.measurements.layer());
     let rank = |p: &OverlayInstance| match (p.color == halo, p.kind) {
         (true, _) => 0,
         (false, OverlayInstance::DISC) => 2,
@@ -697,6 +698,7 @@ fn halos_come_before_strokes_across_measurements() {
         .collect();
     let expected: Vec<u32> = viewer
         .measurements
+        .layer()
         .drawn
         .iter()
         .filter(|d| {
@@ -724,7 +726,7 @@ fn a_line_stops_at_the_outer_edge_of_each_end_s_ring() {
     state.show_all_measurements = true;
     let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
     let halo = pack_rgba8(super::encoded_rgba(crate::measurement_marks::HALO));
-    let pieces = super::instances(&viewer.measurements);
+    let pieces = super::instances(viewer.measurements.layer());
     let segments: Vec<_> = pieces
         .iter()
         .filter(|p| p.kind == OverlayInstance::SEGMENT)
@@ -776,7 +778,7 @@ fn show_all_emphasises_the_selected_measurement_and_the_item_is_violet() {
     select(&mut state, id, 0);
     state.show_all_measurements = true;
     let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
-    let layer = &viewer.measurements;
+    let layer = viewer.measurements.layer();
     assert!(layer.drawn.len() > 1, "every measurement is drawn");
     let halo = pack_rgba8(super::encoded_rgba(crate::measurement_marks::HALO));
     let mut roles = Vec::new();
@@ -831,7 +833,7 @@ fn refused_and_infinite_endpoints_draw_no_instances() {
     for index in [2, 3] {
         select(&mut state, id, index);
         let (viewer, _ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
-        let drawn = &viewer.measurements.drawn[0];
+        let drawn = &viewer.measurements.layer().drawn[0];
         let crate::measurement_marks::Place::Finite(a) = drawn.endpoints[0].place else {
             panic!("measurement {index}: A is finite");
         };
@@ -842,7 +844,7 @@ fn refused_and_infinite_endpoints_draw_no_instances() {
             ),
             "measurement {index}: B is not"
         );
-        let pieces = super::instances(&viewer.measurements);
+        let pieces = super::instances(viewer.measurements.layer());
         let kinds: Vec<u32> = pieces.iter().map(|p| p.kind).collect();
         assert_eq!(
             kinds,
@@ -975,7 +977,7 @@ fn the_instances_are_built_when_their_key_changes_and_not_for_the_camera() {
         assert_eq!(viewer.measurement_builds, builds, "{what}");
         assert_eq!(
             viewer.measurement_upload.take(),
-            Some(super::instances(&viewer.measurements)),
+            Some(super::instances(viewer.measurements.layer())),
             "{what}"
         );
         frame(viewer, &ctx, state, Vec::new(), pointer);
@@ -1032,7 +1034,7 @@ fn a_thousand_measurements_orbited_build_and_upload_nothing() {
     select(&mut state, id, 0);
     state.show_all_measurements = true;
     let (mut viewer, ctx) = looking_from(&mut state, eye(), egui::pos2(5.0, 5.0));
-    assert_eq!(viewer.measurements.drawn.len(), 1000);
+    assert_eq!(viewer.measurements.layer().drawn.len(), 1000);
     assert_eq!(viewer.measurement_builds, 1);
     let built = viewer.measurement_upload.take().expect("built once");
     assert!(built.len() > 5000, "{} instances", built.len());

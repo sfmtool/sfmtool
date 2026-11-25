@@ -260,9 +260,10 @@ pub(crate) struct ImageDetail {
     /// Measurement View on the new item. See
     /// [`ImageDetail::take_measurement_start`].
     measurement_start: Option<(ImageRef, [f32; 2])>,
-    /// The measurements this panel draws, set by the dock each frame with the
-    /// toolbar's *Show all measurements* ([`crate::measurement_marks`]).
-    pub(crate) measurements: crate::measurement_marks::MeasurementLayer,
+    /// The measurements this panel draws, brought up to date by the dock each
+    /// frame with the toolbar's *Show all measurements* and built again only
+    /// when what they are built from changes ([`crate::measurement_marks`]).
+    pub(crate) measurements: crate::measurement_marks::MeasurementLayerCache,
     /// A press a measurement's mark, line or the off-screen indicator holds,
     /// from the press until the button comes up, for the reason
     /// [`ImageDetail::bench_drag`] is held.
