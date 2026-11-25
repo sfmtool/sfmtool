@@ -280,8 +280,9 @@ fewer than 3 frames, the vote reached no consensus, or its pool spread is
 above 0.35. The pilot writes nothing: no `.matches` file, no `.camrig`, and
 nothing in the workspace but the `.sift` files of the frames it reads, which
 the walk after it reuses, and their mipmaps in a workspace with
-`mipmap_options` ([Extraction](#extraction)). A rig sequence always has a camera, from its
-`.camrig`, so the pilot runs only for sequences of single images.
+`mipmap_options` ([Extraction](#extraction)). A rig sequence always has a
+camera, from its `.camrig`, so the pilot runs only for sequences of single
+images.
 
 ### Extraction
 

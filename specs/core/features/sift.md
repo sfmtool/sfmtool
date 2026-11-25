@@ -872,8 +872,9 @@ warning through the caller's `Progress` naming the image, and the `.sift` file
 is still written; a build cancelled by the caller is the run's cancellation.
 The build reports only its messages through the caller's `Progress`, not its
 phases and counts, which would replace the image count. In a workspace
-without the object, or with no workspace, nothing is read or written for
-mipmaps and the files are as before.
+without the object nothing is read for mipmaps but the workspace file, which
+is read for each image decoded, and nothing is written for them; with no
+workspace nothing is read or written for them; and the files are as before.
 
 It runs images concurrently in the way the Python backend does (see
 [`sfm sift` § Extraction-orchestration

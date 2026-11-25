@@ -236,9 +236,9 @@ version 1 settings
 ([workspace.md § Versions](../workspace/workspace.md#versions)). In a
 workspace whose `.sfm-workspace.json` has `mipmap_options`, the build also
 makes the mipmap of each out-of-core photograph it decodes whose mipmap is
-not current, from that decode, rather than leave *Build mipmaps* to decode the
-photograph again; a mipmap it cannot make is a warning through the task's progress, and the
-`.sift` file is still written.
+not current, from that decode, rather than leave *Build mipmaps* to decode
+the photograph again; a mipmap it cannot make is a warning through the task's
+progress, and the `.sift` file is still written.
 
 **The options are the node's own.** The feature options and the
 `feature_prefix_dir` come from the workspace definition the node's `.sfmr`
