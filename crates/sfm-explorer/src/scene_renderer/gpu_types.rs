@@ -41,8 +41,9 @@ pub(super) struct ReconUniforms {
     /// 0 → emit `PICK_TAG_NONE` instead of a pick id (a display-only node,
     /// i.e. the Scene panel's interaction cursor switched off).
     pub(crate) pickable: u32,
-    /// The node's comparison tint: the palette color in `rgb`, the strength it
-    /// is mixed in at in `a`. Every scene shader composites the same way —
+    /// The node's comparison tint: the palette color in `rgb`, in linear
+    /// light (`NodeTint::to_uniform`), the strength it is mixed in at in `a`.
+    /// Every scene shader composites the same way —
     /// `mix(color, tint_color.rgb, tint_color.a)` — so `a == 0` draws the
     /// node's original colors. Highlight colors are exempt; see the shaders.
     pub(crate) tint_color: [f32; 4],

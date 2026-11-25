@@ -373,7 +373,8 @@ fn fs_main(in: VertexOutput) -> FragOutput {
 // reversed-Z depth with no write, passes only where something nearer than the
 // outline was drawn, so the part fs_main drew in full is not drawn again. The
 // band is the one fs_main draws, in its colours, at BEHIND_OPACITY in place of
-// opaque, and straight alpha, as the bench figure draws through the scene. It
+// opaque, in straight alpha, which composites as the bench figure's
+// premultiplied pieces do through the scene. It
 // writes the colour alone: no linear depth, which would change the EDL pass's
 // shading, and no pick id, which would change what a click picks.
 @fragment
