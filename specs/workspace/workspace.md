@@ -130,6 +130,9 @@ threshold and JPEG qualities, read and validated by `read_mipmap_options`
 ([mipmaps.md](../core/camera/mipmaps.md#the-workspace-setting)). `sfm ws init`
 writing it is proposed in
 [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+`sfm ws mipmaps` makes, checks and prunes the files under the workspace's
+`.sfm-mipmaps/`
+([ws-mipmaps-command.md](../cli/workspace/ws-mipmaps-command.md)).
 An optional second file beside it in the workspace
 root, `.sfm-named-image-lists.json`, names sets of the workspace's images by
 pattern and frame range; it is described in

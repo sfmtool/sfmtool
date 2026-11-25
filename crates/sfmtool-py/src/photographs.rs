@@ -4,7 +4,9 @@
 //! Bindings for the photograph cache (`sfmtool_core::camera::PhotographCache`):
 //! the `PhotographCache` class, which a script or command holds so that its
 //! calls share one build count, and through which it makes the mipmaps of
-//! out-of-core photographs.
+//! out-of-core photographs; and `check_mipmaps` and `prune_mipmaps`, which
+//! check the mipmaps of photographs and delete a mipmap directory's orphan
+//! files, as `sfm ws mipmaps --check` and `--prune` do.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -14,9 +16,12 @@ use std::time::Duration;
 use pyo3::exceptions::{PyInterruptedError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use sfmtool_core::camera::mipmap::{
+    check_mipmaps, prune_mipmaps, PruneMipmapsOptions, PHOTOGRAPH_TILE_SIZE,
+};
 use sfmtool_core::camera::photograph_cache::{default_budget_bytes, default_build_budget_bytes};
 use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
-use sfmtool_core::progress::{Event, Progress};
+use sfmtool_core::progress::{Cancelled, Event, Progress};
 
 use crate::signals::SignalWatch;
 use crate::ProgressCounter;
@@ -121,50 +126,16 @@ impl PyPhotographCache {
                 counter.fetch_max(value as usize, Ordering::Relaxed);
             }
         };
-        // The builds run on the rayon pool, whose workers cannot run Python's
-        // signal handlers, so the call goes on a thread of its own while the
-        // calling thread waits for it, taking the GIL every `PATIENCE` to run
-        // them. One that raises stops the builds, and its exception is raised
-        // in place of the call's result.
-        const PATIENCE: Duration = Duration::from_millis(50);
-        let watch = SignalWatch::new();
         let cache = &self.inner;
-        let result = py.detach(|| {
-            std::thread::scope(|scope| {
-                let (sender, receiver) = mpsc::channel();
-                let (sink, cancel, paths) = (&sink, watch.cancel_flag(), &paths);
-                let run = scope.spawn(move || {
-                    let progress = Progress::to(sink).cancelled_by(cancel);
-                    let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-                    // The calling thread receives until this arrives, so the
-                    // send succeeds.
-                    let _ = sender.send(cache.build_mipmaps(&paths, &progress));
-                });
-                loop {
-                    match receiver.recv_timeout(PATIENCE) {
-                        Ok(result) => return result,
-                        Err(mpsc::RecvTimeoutError::Timeout) => watch.check(),
-                        // The call's thread ended without sending: it panicked.
-                        Err(mpsc::RecvTimeoutError::Disconnected) => match run.join() {
-                            Err(panic) => std::panic::resume_unwind(panic),
-                            Ok(()) => unreachable!("the call sends its result before it ends"),
-                        },
-                    }
-                }
-            })
-        });
-        let report = watch
-            .finish(result)?
-            .map_err(|e| PyInterruptedError::new_err(e.to_string()))?;
+        let report = run_watched(py, &sink, |progress| {
+            let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+            cache.build_mipmaps(&paths, progress)
+        })?;
         let dict = PyDict::new(py);
         dict.set_item("made", report.made)?;
         dict.set_item("current", report.current)?;
         dict.set_item("in_core", report.in_core)?;
-        let failed = PyList::empty(py);
-        for (path, error) in report.failed {
-            failed.append((path, error.to_string()))?;
-        }
-        dict.set_item("failed", failed)?;
+        dict.set_item("failed", pairs(py, report.failed)?)?;
         Ok(dict.into_any().unbind())
     }
 
@@ -202,7 +173,185 @@ impl PyPhotographCache {
     }
 }
 
+/// Run `run` with the GIL released on a thread of its own, its `Progress`
+/// reporting to `sink` and cancelled when one of Python's signal handlers
+/// raises, while the calling thread waits for it and runs the handlers every
+/// 50 ms. The work runs on the rayon pool, whose workers cannot run them, so
+/// this is what lets Ctrl+C stop it within one stage.
+///
+/// A handler's exception (`KeyboardInterrupt` for Ctrl+C) is raised in place
+/// of the result, and a run cancelled otherwise raises `InterruptedError`.
+fn run_watched<T: Send>(
+    py: Python<'_>,
+    sink: &(dyn Fn(Event<'_>) + Sync),
+    run: impl FnOnce(&Progress<'_>) -> Result<T, Cancelled> + Send,
+) -> PyResult<T> {
+    const PATIENCE: Duration = Duration::from_millis(50);
+    let watch = SignalWatch::new();
+    let result = py.detach(|| {
+        std::thread::scope(|scope| {
+            let (sender, receiver) = mpsc::channel();
+            let cancel = watch.cancel_flag();
+            let thread = scope.spawn(move || {
+                let progress = Progress::to(sink).cancelled_by(cancel);
+                // The calling thread receives until this arrives, so the
+                // send succeeds.
+                let _ = sender.send(run(&progress));
+            });
+            loop {
+                match receiver.recv_timeout(PATIENCE) {
+                    Ok(result) => return result,
+                    Err(mpsc::RecvTimeoutError::Timeout) => watch.check(),
+                    // The thread ended without sending: it panicked.
+                    Err(mpsc::RecvTimeoutError::Disconnected) => match thread.join() {
+                        Err(panic) => std::panic::resume_unwind(panic),
+                        Ok(()) => unreachable!("the run sends its result before it ends"),
+                    },
+                }
+            }
+        })
+    });
+    watch
+        .finish(result)?
+        .map_err(|e| PyInterruptedError::new_err(e.to_string()))
+}
+
+/// A `sink` that sets `counter` to the count the run reports.
+fn count_into(counter: Option<&ProgressCounter>) -> impl Fn(Event<'_>) + Sync {
+    let counter = counter.map(ProgressCounter::handle);
+    move |event: Event<'_>| {
+        if let (Event::Count { done, .. }, Some(counter)) = (event, &counter) {
+            counter.store(done as usize, Ordering::Relaxed);
+        }
+    }
+}
+
+/// A list of `(path, message)` pairs.
+fn pairs<'py, M: ToString>(
+    py: Python<'py>,
+    items: impl IntoIterator<Item = (PathBuf, M)>,
+) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    for (path, message) in items {
+        list.append((path, message.to_string()))?;
+    }
+    Ok(list)
+}
+
+/// Check the mipmaps of the photographs at `paths`, writing nothing.
+///
+/// Each photograph's header and workspace are read first; an in-core
+/// photograph is read no further and no photograph is decoded. An
+/// out-of-core photograph's mipmap is missing when there is no file at its
+/// coarsest mip level's name, and otherwise current or stale as the files'
+/// records say, the original hashed only when its length matches a record
+/// and its modification time does not. The GIL is released while it runs.
+///
+/// Args:
+///     paths: The photographs' paths; a directory is not expanded.
+///     progress: A ``ProgressCounter``, set to the number of photographs
+///         checked so far.
+///
+/// Returns:
+///     A dict with the keys ``current``, ``missing`` and ``in_core``, lists
+///     of the paths whose mipmap is current, whose mipmap is missing, and
+///     that are in core; ``stale``, a list of ``(path, message)`` pairs
+///     naming the first mip level file found not current and why; and
+///     ``failed``, a list of ``(path, message)`` pairs for the paths that
+///     could not be read or whose workspace file is invalid, each message
+///     naming the path. Each path is as given, in the order given.
+///
+/// Raises:
+///     KeyboardInterrupt: for Ctrl+C, which stops the check.
+///     InterruptedError: when the run was cancelled otherwise.
+#[pyfunction(name = "check_mipmaps")]
+#[pyo3(signature = (paths, *, progress=None))]
+fn check_mipmaps_py(
+    py: Python<'_>,
+    paths: Vec<PathBuf>,
+    progress: Option<ProgressCounter>,
+) -> PyResult<Py<PyAny>> {
+    let sink = count_into(progress.as_ref());
+    let report = run_watched(py, &sink, |progress| {
+        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        check_mipmaps(&paths, PHOTOGRAPH_TILE_SIZE, progress)
+    })?;
+    let dict = PyDict::new(py);
+    dict.set_item("current", report.current)?;
+    dict.set_item("missing", report.missing)?;
+    dict.set_item("stale", pairs(py, report.stale)?)?;
+    dict.set_item("in_core", report.in_core)?;
+    dict.set_item("failed", pairs(py, report.failed)?)?;
+    Ok(dict.into_any().unbind())
+}
+
+/// Delete the orphan files of the mipmap directories that hold the mipmaps
+/// of the photographs under `paths`.
+///
+/// Each path, a photograph or a directory, existing or not, searches the
+/// part of its workspace's mipmap directory that mirrors it, and a directory
+/// also the whole mipmap directory of each workspace nested below it. A file
+/// there is an orphan when its name is a mip level file's and the
+/// workspace's file has no ``mipmap_options``, its quality is not the one
+/// the object gives its level, its photograph no longer exists, is in core
+/// or is too large, the photograph's mipmap is kept in a nested workspace,
+/// the mipmap stores no such level, or the file is not current for its
+/// photograph; or when it is a build's temporary file older than an hour.
+/// Only regular files inside a mipmap directory whose names are a mip level
+/// file's or a temporary file's are deleted; a link is neither entered nor
+/// deleted, and no directory is deleted. The GIL is released while it runs.
+///
+/// Args:
+///     paths: Photographs and directories.
+///     dry_run: Judge every file and delete none; ``orphans`` then lists
+///         the files a prune would delete.
+///     progress: A ``ProgressCounter``, set to the number of files judged so
+///         far.
+///
+/// Returns:
+///     A dict, each list sorted by path: ``orphans``, ``(path, why)`` pairs
+///     of the files deleted (in a dry run, to be deleted); ``kept``, the
+///     current mip level files and temporary files too new to delete;
+///     ``other_files``, the files whose names are not a mip level file's,
+///     left as they are; ``links``, the links met and not entered;
+///     ``failed``, ``(path, why)`` pairs of what could not be searched,
+///     judged or deleted, nothing of which is deleted; and
+///     ``outside_workspaces``, the paths in no workspace.
+///
+/// Raises:
+///     KeyboardInterrupt: for Ctrl+C, which stops the prune; the files
+///         deleted before it stay deleted.
+///     InterruptedError: when the run was cancelled otherwise.
+#[pyfunction(name = "prune_mipmaps")]
+#[pyo3(signature = (paths, *, dry_run=false, progress=None))]
+fn prune_mipmaps_py(
+    py: Python<'_>,
+    paths: Vec<PathBuf>,
+    dry_run: bool,
+    progress: Option<ProgressCounter>,
+) -> PyResult<Py<PyAny>> {
+    let sink = count_into(progress.as_ref());
+    let options = PruneMipmapsOptions {
+        dry_run,
+        ..PruneMipmapsOptions::default()
+    };
+    let report = run_watched(py, &sink, |progress| {
+        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        prune_mipmaps(&paths, &options, progress)
+    })?;
+    let dict = PyDict::new(py);
+    dict.set_item("orphans", pairs(py, report.orphans)?)?;
+    dict.set_item("kept", report.kept)?;
+    dict.set_item("other_files", report.other_files)?;
+    dict.set_item("links", report.links)?;
+    dict.set_item("failed", pairs(py, report.failed)?)?;
+    dict.set_item("outside_workspaces", report.outside_workspaces)?;
+    Ok(dict.into_any().unbind())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPhotographCache>()?;
+    m.add_function(wrap_pyfunction!(check_mipmaps_py, m)?)?;
+    m.add_function(wrap_pyfunction!(prune_mipmaps_py, m)?)?;
     Ok(())
 }

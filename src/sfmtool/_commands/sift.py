@@ -11,7 +11,7 @@ import click
 
 from .._cli_utils import timed_command
 from .._path_summary import summarize_path_list
-from .._filenames import expand_paths
+from .._filenames import SIFT_IMAGE_EXTENSIONS, expand_paths
 from .._sfmtool.reconstruction import RangeExpr
 from .._workspace import load_workspace_config
 from ..workspace import find_workspace_for_path
@@ -106,7 +106,7 @@ def sift(
     if filter_sfm_path:
         filter_sfm_path = Path(filter_sfm_path)
 
-    extensions = (".png", ".jpg", ".jpeg")
+    extensions = SIFT_IMAGE_EXTENSIONS
     if selection.list_name is not None:
         filenames = resolve_list_images(selection, extensions=extensions).paths
         given = f"Given {selection.describe_list()}"

@@ -26,8 +26,12 @@ makes the mipmap of each out-of-core photograph it decodes, from that decode
 extracted once their `.sift` files are written, through
 `PhotographCache::build_mipmaps`
 ([sift-command.md § Mipmaps](../../cli/image-feature/sift-command.md#mipmaps)).
-No command writes `mipmap_options` yet; `sfm ws mipmaps` and the object's
-writers come in the steps of
+`sfm ws mipmaps` makes the mipmaps of the photographs under its paths the same
+way, and with `--check` reports which are missing or stale through
+`check_mipmaps`, and with `--prune` deletes a mipmap directory's orphan files
+through `prune_mipmaps`
+([ws-mipmaps-command.md](../../cli/workspace/ws-mipmaps-command.md)).
+No command writes `mipmap_options` yet; its writers come in the steps of
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
 which also has the measurements behind the choices below.
 
@@ -92,6 +96,14 @@ pub fn check_mipmap(source: &MipmapSource, location: &MipmapLocation, layout: &P
 /// The original's facts a record is checked against, hashed at most once.
 impl MipmapSource { pub fn read(photograph: &Path, location: &MipmapLocation) -> Result<Self, MipmapError>;
                     pub fn hashes(&self) -> usize; /* … */ }
+
+/// Whether the mipmaps of many photographs are current, writing nothing;
+/// and the deletion of a mipmap directory's orphan files, or a list of them.
+/// Both are `sfm ws mipmaps`', specified in ws-mipmaps-command.md.
+pub fn check_mipmaps(photographs: &[&Path], tile_size: u32, progress: &Progress<'_>)
+    -> Result<MipmapCheckReport, Cancelled>;
+pub fn prune_mipmaps(paths: &[&Path], options: &PruneMipmapsOptions, progress: &Progress<'_>)
+    -> Result<MipmapPruneReport, Cancelled>;
 
 /// One file's bytes, record and restart index, read and checked once.
 impl MipLevelFile {
@@ -490,7 +502,10 @@ decodes.
 - Every search for a workspace's images skips any directory named
   `.sfm-mipmaps`: `expand_paths`, the rig-config converter's sensor search,
   the `.camrig` pattern matcher and the named-image-list walk.
-- No reader deletes a file; deleting the directory by hand is always safe.
+- No reader deletes a file. `sfm ws mipmaps --prune` deletes the orphan
+  files, those no photograph would read, and nothing else in it
+  ([ws-mipmaps-command.md § Orphans](../../cli/workspace/ws-mipmaps-command.md#orphans));
+  deleting the directory by hand is always safe.
 
 ## Implementation notes
 
