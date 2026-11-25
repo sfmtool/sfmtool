@@ -465,3 +465,234 @@ fn a_run_wakes_the_viewer_once_for_each_coarsest_level_it_publishes() {
         assert_eq!(cache.stats().mipmaps_made, 3, "budget {budget}");
     }
 }
+
+/// A reconstruction of eight images saved as `recon.sfmr` in a temporary
+/// workspace whose `mipmap_options` puts a photograph with a side over 64 px
+/// out of core: images 0 to 4 are [`out_of_core_workspace`]'s 300 x 200
+/// PNGs with no mipmap, image 5 is in core (40 x 30), image 6 is out of
+/// core with a current mipmap, and image 7 has no file. Answers the
+/// workspace, the file and the paths of images 0 to 4.
+fn saved_out_of_core_recon() -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recon = SfmrReconstruction::demo(32);
+    assert_eq!(recon.image_set.images.len(), 8);
+    let mut paths = out_of_core_photographs_of(&mut recon, dir.path(), &[0, 1, 2, 3, 4, 6]);
+    image::RgbImage::from_pixel(40, 30, image::Rgb([90, 120, 150]))
+        .save(dir.path().join("image_005.png"))
+        .unwrap();
+    let current = paths.pop().unwrap();
+    let (made, _) = cache_for(1 << 30, 1)
+        .get_many(&[current.as_path()], &Progress::none())
+        .unwrap();
+    assert!(made[0].is_some(), "image 6's mipmap is made");
+    let path = dir.path().join("recon.sfmr");
+    recon.save(&path, &Progress::none()).unwrap();
+    (dir, path, paths)
+}
+
+/// A state whose photograph cache makes one build at a time, so each run of
+/// *Build mipmaps* takes one photograph, with `saved` open.
+fn opened(saved: &Path) -> (AppState, ReconId) {
+    let mut state = AppState::new();
+    state.photographs = cache_for(1 << 30, 1);
+    let id = state.open_now(saved).expect("the file opens");
+    (state, id)
+}
+
+/// Record the file names of each chunk *Build mipmaps* takes in `events`,
+/// holding the first run once it has taken its chunk until the answered
+/// sender is sent on or dropped.
+fn record_chunks(state: &mut AppState, events: &Arc<Mutex<Vec<String>>>) -> mpsc::Sender<()> {
+    let (release, released) = mpsc::channel::<()>();
+    let released = Mutex::new(Some(released));
+    let events = Arc::clone(events);
+    state
+        .photograph_requests
+        .set_chunk_hook(Arc::new(move |chunk: &[PathBuf]| {
+            let names: Vec<String> = chunk
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            events.lock().unwrap().push(names.join(","));
+            if let Some(released) = released.lock().unwrap().take() {
+                let _ = released.recv_timeout(HANG);
+            }
+        }));
+    release
+}
+
+/// An open in a workspace with `mipmap_options` puts the reconstruction's
+/// out-of-core photographs whose mipmaps are not current on *Build
+/// mipmaps*' list, in image order, and not one that is in core, has a
+/// current mipmap or has no file; its `mipmaps` phase says how many of the
+/// photographs it read need their mipmaps. The open has read their
+/// layouts, so the panel showing an image selected before the task's first
+/// run starts (as when the fast queue is busy when the open lands) finds it
+/// building at once and puts it at the front, and the first run, named with
+/// the whole list, makes that image's mipmap.
+#[test]
+fn an_open_fills_the_list_and_the_first_run_makes_the_selected_images_mipmap() {
+    let (_dir, saved, paths) = saved_out_of_core_recon();
+    let (mut state, id) = opened(&saved);
+    assert_eq!(state.photograph_requests.mipmaps_waiting(), paths);
+    let entry = state.action_log.entries().next_back().unwrap();
+    assert_eq!(
+        crate::test_support::phase_note(&entry.detail, "mipmaps").as_deref(),
+        Some("5 of 8 photographs need their mipmaps made")
+    );
+
+    state.select_image(Some(crate::scene::ImageRef {
+        recon: id,
+        image: 3,
+    }));
+    let ctx = egui::Context::default();
+    let layout = crate::state::display_layout(
+        crate::state::PhotographSource {
+            cache: &state.photographs,
+            requests: &state.photograph_requests,
+            path: &paths[3],
+        },
+        &ctx,
+    );
+    assert!(matches!(layout, crate::state::DisplayLayout::Building(_)));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    drop(record_chunks(&mut state, &events));
+
+    state.drive_build_mipmaps();
+    let run = state
+        .quiet_running_in(Queue::Fast)
+        .expect("the run started");
+    assert_eq!(run.label, "Building mipmaps: 0 of 5");
+    state.land_quiet_tasks();
+    assert_eq!(*events.lock().unwrap(), ["image_003.png"]);
+    assert!(matches!(
+        state.photographs.layout(&paths[3]),
+        PeekedLayout::Known(_)
+    ));
+    assert_eq!(state.photographs.stats().mipmaps_made, 1);
+}
+
+/// A photograph a panel queues while a run is making another goes to the
+/// front of the list, ahead of the open's, and the next run takes it; the
+/// running one is not asked to stop and makes its own.
+#[test]
+fn a_photograph_a_panel_queues_is_taken_by_the_next_run_and_the_running_one_goes_on() {
+    let (_dir, saved, paths) = saved_out_of_core_recon();
+    let (mut state, _) = opened(&saved);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let release = record_chunks(&mut state, &events);
+    state.drive_build_mipmaps();
+    let run = state
+        .quiet_running_in(Queue::Fast)
+        .expect("the run started")
+        .id;
+    let waited = std::time::Instant::now();
+    while events.lock().unwrap().is_empty() {
+        assert!(waited.elapsed() < HANG, "the run took no chunk");
+        std::thread::yield_now();
+    }
+
+    lock(&state.photograph_requests.mipmaps).queue(&paths[4]);
+    assert_eq!(state.photograph_requests.mipmaps_waiting()[0], paths[4]);
+    assert!(!state.quiet_task_cancelled(run));
+    release.send(()).unwrap();
+    state.land_quiet_tasks();
+    assert!(matches!(
+        state.photographs.layout(&paths[0]),
+        PeekedLayout::Known(_)
+    ));
+    state.drive_build_mipmaps();
+    state.land_quiet_tasks();
+    assert_eq!(*events.lock().unwrap(), ["image_000.png", "image_004.png"]);
+    assert_eq!(state.photographs.stats().mipmaps_made, 2);
+}
+
+/// A camera model proposal's job, queued while a run of *Build mipmaps*
+/// makes the first of a long list, waits for that run rather than stop it,
+/// and starts before the next run: the task ends after each chunk.
+#[test]
+fn a_waiting_proposal_job_starts_between_two_chunks_of_a_long_list() {
+    let (_dir, saved, paths) = saved_out_of_core_recon();
+    let (mut state, id) = opened(&saved);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let release = record_chunks(&mut state, &events);
+    state.drive_build_mipmaps();
+    let run = state
+        .quiet_running_in(Queue::Fast)
+        .expect("the run started")
+        .id;
+
+    let told = Arc::clone(&events);
+    state
+        .start_quiet_task(
+            Operation::CAMERA_MODEL_PROPOSAL,
+            crate::background::QuietSource::CameraModelProposal,
+            crate::background::QuietRank::CameraModelProposal,
+            Some(id),
+            "proposal".to_string(),
+            crate::background::QuietJob::new(
+                move |_: &Progress<'_>| told.lock().unwrap().push("proposal".to_string()),
+                || {},
+            ),
+        )
+        .expect("the job is queued");
+    assert!(!state.quiet_task_cancelled(run), "the run goes on");
+    release.send(()).unwrap();
+    state.land_quiet_tasks();
+    state.drive_build_mipmaps();
+    state.land_quiet_tasks();
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["image_000.png", "proposal", "image_001.png"]
+    );
+    assert_eq!(
+        state.photograph_requests.mipmaps_waiting(),
+        paths[2..],
+        "the list is still long"
+    );
+}
+
+/// Closing a node takes the photographs only it has off the list and keeps
+/// those another node in the scene has: the same file opened twice keeps
+/// them until both are closed, and Close All empties the list.
+#[test]
+fn closing_a_node_takes_off_the_list_the_photographs_no_other_node_has() {
+    let (_dir, saved, paths) = saved_out_of_core_recon();
+    let (mut state, first) = opened(&saved);
+    let second = state.open_now(&saved).expect("the file opens again");
+    assert_eq!(state.photograph_requests.mipmaps_waiting(), paths);
+    state.close_node(first).unwrap();
+    assert_eq!(state.photograph_requests.mipmaps_waiting(), paths);
+    state.close_node(second).unwrap();
+    assert!(state.photograph_requests.mipmaps_waiting().is_empty());
+
+    state.open_now(&saved).expect("the file opens");
+    assert_eq!(state.photograph_requests.mipmaps_waiting(), paths);
+    state.close_all().unwrap();
+    assert!(state.photograph_requests.mipmaps_waiting().is_empty());
+    state.drive_build_mipmaps();
+    assert!(!state.build_mipmaps_queued(), "nothing is made");
+}
+
+/// An open in a workspace whose file has no `mipmap_options` queues nothing
+/// and reads no photograph's layout, though its photographs are over the
+/// threshold the other tests' workspaces set, and has no `mipmaps` phase.
+#[test]
+fn an_open_in_a_workspace_without_mipmap_options_queues_nothing() {
+    let (dir, saved, paths) = saved_out_of_core_recon();
+    std::fs::write(
+        dir.path()
+            .join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
+        r#"{"version": 2}"#,
+    )
+    .unwrap();
+    let (state, _) = opened(&saved);
+    assert!(state.photograph_requests.mipmaps_waiting().is_empty());
+    for path in &paths {
+        assert_eq!(state.photographs.layout(path), PeekedLayout::NotKnown);
+    }
+    let entry = state.action_log.entries().next_back().unwrap();
+    assert!(crate::test_support::phase_rows(&entry.detail)
+        .iter()
+        .all(|(name, ..)| *name != "mipmaps"));
+}
