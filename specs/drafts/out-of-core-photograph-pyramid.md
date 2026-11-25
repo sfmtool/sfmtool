@@ -884,7 +884,7 @@ rayon task a panel starts waits.
 | Image Detail | asks for the layout once (a header read, the region test and a record check, on the rayon pool) and draws *Loading image…* | queues the photograph, draws the coarsest level if the build has published it and the spinner with *Building mipmap…* otherwise | peeks the visible tiles and asks for the missing ones |
 | Track View's patch tiles, cluster-stage tiles, context and crops; the Track Table's crop column and hover | the same layout request; the cell draws its loading state | queues the photograph; the cell draws the spinner with *Building mipmap…* | computes the render's regions, peeks their tiles, asks for the missing ones, and renders when all are present |
 | The 3D background | the same layout request; nothing drawn | queues the photograph; draws the coarsest level if published | asks for its level's tiles with `try_decode_tiles` on the rayon pool and builds the level from the tiles that call returns, at every budget, and draws the coarsest until it lands |
-| Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mip level file is not current gets the grey placeholder row | the row stays the placeholder | a placeholder row whose photograph has become `Known` is filled, on the rayon pool, from the coarsest mip level file |
+| Display thumbnails | built in the open job, off the GUI thread: a photograph whose coarsest mip level file is not current gets the grey placeholder row | the row stays the placeholder | a placeholder row whose photograph *Build mipmaps* has answered is filled, on the rayon pool, from the coarsest mip level file, or from a whole decode when the mipmap is still not current; one made during the open is filled by the open |
 
 A build publishes each reduced level to the slot's `Building` state as it is
 encoded, coarsest first, so a panel shows a photograph's coarsest level about a
@@ -1023,7 +1023,10 @@ nor the reconstruction carries one
 [thumbnail.rs](../../crates/sfmtool-core/src/reconstruction/thumbnail.rs)). For
 an out-of-core photograph it is made from the coarsest mip level file rather than from
 a whole decode, which turns 0.8 to 1.7 s into a few milliseconds. Its pixels
-differ slightly from a thumbnail of level 0; it is for display only.
+differ slightly from a thumbnail of level 0; it is for display only. One whose
+mipmap is not current when the reconstruction opens is the grey placeholder
+until *Build mipmaps* has answered it, and is then filled in from that file (§
+"Readers on the GUI thread").
 Thumbnails written into files (`xform --add-thumbnails`, `.sift`) keep coming
 from level 0.
 
@@ -3787,13 +3790,67 @@ in core. Step 17 turns the tier on.
         makes every missing mipmap, a second export reading them writes the
         same thumbnail pages, and an export without the object writes other
         pages (`web_export::tests`).
-      - **15c2, the placeholder and its fill.** The open gives a photograph
-        whose mipmap is not current the placeholder row instead of a whole
-        decode (`NotCurrentMipmap::DecodeOriginal` becomes a placeholder),
-        and the row is filled on the rayon pool from the coarsest file once
-        *Build mipmaps* reports the photograph made. Tests: a placeholder
-        row is filled once the task has made the mipmap, and the atlas and
-        the Image Browser draw the filled row.
+      - **15c2, the placeholder and its fill.** **Built.** The open gives a
+        photograph whose mipmap is not current the placeholder row instead
+        of a whole decode, and the row is filled on the rayon pool from the
+        coarsest file once *Build mipmaps* reports the photograph made.
+        **As built**
+        ([thumbnail.rs](../../crates/sfmtool-core/src/reconstruction/thumbnail.rs),
+        [display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails.rs),
+        [thumbnail_fills.rs](../../crates/sfm-explorer/src/state/thumbnail_fills.rs)):
+        `NotCurrentMipmap` gains `Placeholder`, which the open passes, and
+        `ThumbnailSource` gains `AwaitingMipmap`, the grey row it answers
+        for an out-of-core photograph whose mipmap is not current
+        (`TileError::Changed` from `coarsest_level`), reading the header and
+        the record and decoding nothing; the photograph part of
+        `display_thumbnail_row` is now `photograph_thumbnail_row`, taking a
+        path, which the fill calls. `DisplayThumbnails` remembers the rows
+        awaiting a mipmap by path, and `with_rows` gives a new column with
+        rows filled in, sharing the built column and every row filled
+        before, with a count of fills and the fill that changed each row
+        (`fills`, `filled_after`). `MipmapList` records each photograph a
+        run answers, and `AppState::drive_thumbnail_fills`, once a frame
+        after `drive_build_mipmaps`, takes them, starts one read on the
+        rayon pool for each a node's row awaits (once while it runs), waking
+        the viewer as it lands, and replaces the column of each node whose
+        row awaits a landed photograph; no version is pushed and nothing
+        reaches a save. The frustum atlas keeps its texture and writes only
+        the cells filled since it was written
+        (`SceneRenderer::thumbnails_changed`, then `upload_thumbnails`), and
+        the Image Browser drops those rows' textures, which load again, and
+        writes those images' barcode columns again (`patch_barcode`, one
+        `set_partial` a column) rather than building the whole barcode, which
+        reads every row's pixels. A fill copies nothing of the column: the
+        names, the awaiting rows and the filled rows are shared behind an
+        `Arc`, each filled row set once, and a value sees only the fills up
+        to its own number. Two cases the plan did not name: the fill reads with
+        `NotCurrentMipmap::DecodeOriginal`, so a photograph the task answers
+        whose mipmap is still not current (a failed build, or levels that
+        could not be written and were not kept under a budget of 0) is
+        decoded whole, the rule `display_thumbnail_row` already had for a
+        mipmap that cannot be made or read, and is read once, with no
+        request queued again; and a row whose mipmap the open's patch bitmap
+        render made after the thumbnails stage is not on the list, so the
+        open fills it itself, on its worker, after its `mipmaps` stage. A
+        node closed before its rows land gets none of them. Tests: the core
+        row of a photograph without a current mipmap under `Placeholder` is
+        the grey `AwaitingMipmap`, with no decode and no mipmap
+        (`reconstruction::thumbnail::tests`); the open leaves five rows
+        awaiting, decoding none, and once the task has made their mipmaps
+        five reads fill them from the coarsest files, the history, the value
+        and the unsaved state unchanged and no further read, build or
+        repaint following; under a budget of 0 with the level files
+        unwritable each answered row is decoded whole once and nothing is
+        queued again; reads that land after their node closed change
+        nothing, and an answered photograph no row awaits starts no read;
+        and the open fills the rows whose mipmaps its patch bitmaps made
+        (`state::thumbnail_fills::tests`); `with_rows` replaces only awaited
+        rows and shares the rest (`display_thumbnails::tests`); the atlas
+        writes only the filled cells into the same texture
+        (`scene_renderer::upload::tests`); and the Image Browser loads only
+        the filled row's texture again, with its pixels, and writes only
+        that image's barcode column, the barcode then equal to one built
+        whole (`image_browser::tests`).
     - **15d, the Python makers and `sfm sift`.** The `sfmtool.photographs`
       submodule with the `PhotographCache` class, only its constructor,
       `build_mipmaps` and `stats` (open question 17), wired as § "Python

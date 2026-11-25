@@ -159,6 +159,10 @@ struct NavigationMinibar {
     /// Texture: width = num_images, height = 8, RGBA.
     /// Each column has 8 pixels representing the average color of each vertical eighth of the thumbnail.
     color_barcode: Option<egui::TextureHandle>,
+    /// The barcode's pixels, `BARCODE_BANDS` rows of one pixel per image,
+    /// kept so that a fill writes again only the columns of the rows it
+    /// filled ([`ImageBrowser::patch_barcode`]).
+    barcode_pixels: Vec<egui::Color32>,
     /// Number of images when the barcode was last built (for invalidation).
     cached_image_count: usize,
     /// Whether the minibar is currently being dragged.
@@ -169,6 +173,7 @@ impl NavigationMinibar {
     fn new() -> Self {
         Self {
             color_barcode: None,
+            barcode_pixels: Vec::new(),
             cached_image_count: 0,
             dragging: false,
         }
@@ -176,8 +181,47 @@ impl NavigationMinibar {
 
     fn invalidate(&mut self) {
         self.color_barcode = None;
+        self.barcode_pixels = Vec::new();
         self.cached_image_count = 0;
     }
+}
+
+/// How many horizontal bands of a thumbnail the barcode averages, one pixel
+/// each, top to bottom.
+const BARCODE_BANDS: usize = 8;
+
+/// The barcode column of one thumbnail row: the average colour of each of its
+/// [`BARCODE_BANDS`] horizontal bands, top to bottom.
+fn barcode_column(rgb_slice: ndarray::ArrayView3<'_, u8>) -> [egui::Color32; BARCODE_BANDS] {
+    // Both extents come from the row itself rather than from the 128×128 the
+    // `.sfmr` format pins: `thumb_h` divides into bands and `thumb_w` bounds
+    // the row scan. Proportional bounds, so a height that is not a multiple of
+    // BARCODE_BANDS still covers every row, and every band still spans at
+    // least one.
+    let (thumb_h, thumb_w) = (rgb_slice.shape()[0], rgb_slice.shape()[1]);
+    std::array::from_fn(|band| {
+        let y_start = band * thumb_h / BARCODE_BANDS;
+        let y_end = ((band + 1) * thumb_h / BARCODE_BANDS)
+            .max(y_start + 1)
+            .min(thumb_h);
+        let (mut r_sum, mut g_sum, mut b_sum) = (0u64, 0u64, 0u64);
+        let mut count = 0u64;
+        for y in y_start..y_end {
+            for x in 0..thumb_w {
+                r_sum += rgb_slice[[y, x, 0]] as u64;
+                g_sum += rgb_slice[[y, x, 1]] as u64;
+                b_sum += rgb_slice[[y, x, 2]] as u64;
+                count += 1;
+            }
+        }
+        // Zero only for a height-0 thumbnail, which no valid file carries.
+        let count = count.max(1);
+        egui::Color32::from_rgb(
+            (r_sum / count) as u8,
+            (g_sum / count) as u8,
+            (b_sum / count) as u8,
+        )
+    })
 }
 
 /// Image browser panel state.
@@ -194,6 +238,10 @@ pub(crate) struct ImageBrowser {
     cached_recon: Option<ReconId>,
     /// Number of images when the cache was last built (for invalidation).
     cached_image_count: usize,
+    /// How many times the node's display column had had rows filled in when
+    /// the cache last caught up with it ([`DisplayThumbnails::fills`]): a
+    /// column with more has rows whose textures are stale.
+    cached_fills: u64,
     /// How many leading characters of every image name the labels leave out
     /// ([`label::shared_prefix_chars`]). Dropped with the thumbnail cache, by a
     /// change of node or image count and by [`ImageBrowser::forget_recon`],
@@ -227,6 +275,7 @@ impl ImageBrowser {
             thumbnail_cache: HashMap::new(),
             cached_recon: None,
             cached_image_count: 0,
+            cached_fills: 0,
             label_prefix: None,
             prev_selected: None,
             next_lazy_load: 0,
@@ -333,6 +382,31 @@ impl ImageBrowser {
             self.minibar.invalidate();
             self.animation.reset();
             self.menu_image = None;
+            self.cached_fills = display.map_or(0, DisplayThumbnails::fills);
+        }
+        // Rows filled in since the textures were loaded, once their
+        // photograph's mipmap was made: their textures go and load again
+        // from the filled rows, and the barcode's columns for them are
+        // written again, leaving the rest of it as it is.
+        let fills = display.map_or(0, DisplayThumbnails::fills);
+        if fills != self.cached_fills {
+            if let Some(display) = display {
+                let since = self.cached_fills;
+                let filled: Vec<usize> = recon
+                    .image_set
+                    .images
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, image)| display.filled_after(since, &image.name))
+                    .map(|(idx, _)| idx)
+                    .collect();
+                for idx in &filled {
+                    self.thumbnail_cache.remove(idx);
+                }
+                self.patch_barcode(recon, Some(display), &filled);
+            }
+            self.cached_fills = fills;
+            self.next_lazy_load = 0;
         }
         let label_prefix = *self.label_prefix.get_or_insert_with(|| {
             let names: Vec<&str> = recon
@@ -960,15 +1034,15 @@ impl ImageBrowser {
 
     /// Build the color barcode texture from thumbnail vertical band averages.
     ///
-    /// Each image contributes a column of 8 pixels, where each pixel is the
-    /// average color of the corresponding vertical eighth of the thumbnail.
+    /// Each image contributes a column of [`BARCODE_BANDS`] pixels, where each
+    /// pixel is the average color of the corresponding horizontal band of the
+    /// thumbnail ([`barcode_column`]).
     fn build_barcode(
         &mut self,
         ctx: &egui::Context,
         recon: &SfmrReconstruction,
         display: Option<&DisplayThumbnails>,
     ) {
-        const BANDS: usize = 8;
         let num_images = recon.image_set.images.len();
         let rows: Option<Vec<_>> = (0..num_images)
             .map(|i| row_for(display, recon, i))
@@ -976,42 +1050,55 @@ impl ImageBrowser {
         let Some(rows) = rows else {
             return;
         };
-        // Texture layout: width = num_images, height = BANDS, row-major (top to bottom).
-        let mut pixels = Vec::with_capacity(num_images * BANDS * 4);
-        // egui textures are stored row-major, so we iterate band (row) first.
-        for band in 0..BANDS {
-            for rgb_slice in &rows {
-                // Both extents come from the row itself rather than from the
-                // 128×128 the `.sfmr` format pins: `thumb_h` divides into bands
-                // and `thumb_w` bounds the row scan. Proportional bounds, so a
-                // height that is not a multiple of BANDS still covers every
-                // row, and every band still spans at least one.
-                let (thumb_h, thumb_w) = (rgb_slice.shape()[0], rgb_slice.shape()[1]);
-                let y_start = band * thumb_h / BANDS;
-                let y_end = ((band + 1) * thumb_h / BANDS).max(y_start + 1).min(thumb_h);
-                // Average the horizontal band [y_start..y_end].
-                let (mut r_sum, mut g_sum, mut b_sum) = (0u64, 0u64, 0u64);
-                let mut count = 0u64;
-                for y in y_start..y_end {
-                    for x in 0..thumb_w {
-                        r_sum += rgb_slice[[y, x, 0]] as u64;
-                        g_sum += rgb_slice[[y, x, 1]] as u64;
-                        b_sum += rgb_slice[[y, x, 2]] as u64;
-                        count += 1;
-                    }
-                }
-                // Zero only for a height-0 thumbnail, which no valid file carries.
-                let count = count.max(1);
-                let r = (r_sum / count) as u8;
-                let g = (g_sum / count) as u8;
-                let b = (b_sum / count) as u8;
-                pixels.extend_from_slice(&[r, g, b, 255]);
+        // Texture layout: width = num_images, height = BARCODE_BANDS,
+        // row-major (top to bottom).
+        let mut pixels = vec![egui::Color32::BLACK; num_images * BARCODE_BANDS];
+        for (i, row) in rows.into_iter().enumerate() {
+            for (band, colour) in barcode_column(row).into_iter().enumerate() {
+                pixels[band * num_images + i] = colour;
             }
         }
-        let image = egui::ColorImage::from_rgba_unmultiplied([num_images, BANDS], &pixels);
+        let image = egui::ColorImage::new([num_images, BARCODE_BANDS], pixels.clone());
         let texture = ctx.load_texture("minibar_barcode", image, egui::TextureOptions::LINEAR);
         self.minibar.color_barcode = Some(texture);
+        self.minibar.barcode_pixels = pixels;
         self.minibar.cached_image_count = num_images;
+    }
+
+    /// Write again the barcode columns of the images `filled`, whose display
+    /// rows a fill has just replaced, from their rows as they are now, and
+    /// leave every other column as it is: the same pixels a build of the whole
+    /// barcode would give, for the cost of the filled rows alone. Nothing to
+    /// do before the barcode is built, which reads the rows as they are then.
+    fn patch_barcode(
+        &mut self,
+        recon: &SfmrReconstruction,
+        display: Option<&DisplayThumbnails>,
+        filled: &[usize],
+    ) {
+        let num_images = recon.image_set.images.len();
+        let minibar = &mut self.minibar;
+        let Some(texture) = minibar.color_barcode.as_mut() else {
+            return;
+        };
+        if minibar.barcode_pixels.len() != num_images * BARCODE_BANDS {
+            minibar.invalidate();
+            return;
+        }
+        for &i in filled {
+            let Some(row) = row_for(display, recon, i) else {
+                continue;
+            };
+            let column = barcode_column(row);
+            for (band, &colour) in column.iter().enumerate() {
+                minibar.barcode_pixels[band * num_images + i] = colour;
+            }
+            texture.set_partial(
+                [i, 0],
+                egui::ColorImage::new([1, BARCODE_BANDS], column.to_vec()),
+                egui::TextureOptions::LINEAR,
+            );
+        }
     }
 
     /// Load a single thumbnail into the texture cache, when there is a picture.

@@ -240,6 +240,13 @@ impl App {
         if self.state.drive_build_mipmaps() {
             self.egui_ctx.request_repaint();
         }
+        // The display thumbnail rows awaiting the photographs it answered are
+        // read on the rayon pool, and those read are filled in, so the
+        // panels drawn below and the frustum atlas show them
+        // (`crate::state::thumbnail_fills`).
+        if self.state.drive_thumbnail_fills() {
+            self.egui_ctx.request_repaint();
+        }
         // The bench's live evaluation lands here too, for the same reason
         // (`specs/gui/bench.md` § "Live evaluation").
         if self.state.drive_bench_evaluation() {
@@ -613,6 +620,22 @@ impl App {
                 }
                 self.scene_renderer.set_uploaded_base(id, base);
                 uploaded_any = true;
+            } else if self
+                .scene_renderer
+                .thumbnails_changed(id, node.display_thumbnails.as_ref())
+            {
+                // Rows filled in after the open: the atlas keeps its texture
+                // and only their cells are written again.
+                let mut phase = uploads.phase("thumbnails");
+                let did = self.scene_renderer.upload_thumbnails(
+                    device,
+                    queue,
+                    id,
+                    node.recon(),
+                    node.display_thumbnails.as_ref(),
+                    &phase,
+                );
+                note_upload(&mut phase, did, "image", "images");
             }
             // The overlay's additions are the other half of the same question,
             // and are keyed on the addition set rather than on the base: a base

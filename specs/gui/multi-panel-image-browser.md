@@ -445,17 +445,47 @@ column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails
      is current is resized from that file's level instead, read through the viewer's
      photograph cache, which turns a decode of the whole photograph into one of a file
      at most a photograph tile on a side; its row differs slightly from one of the
-     whole photograph and is for display only. One whose mipmap is not current is
-     decoded whole, since the open makes no mipmap. The function is
+     whole photograph and is for display only. One whose mipmap is not current gets
+     the grey placeholder and **awaits its mipmap** (below), since the open neither
+     makes a mipmap nor decodes such a photograph whole. The function is
      `sfmtool_core::reconstruction::thumbnail::display_thumbnail_row`, with
-     `NotCurrentMipmap::DecodeOriginal`.
+     `NotCurrentMipmap::Placeholder`, which answers such a row as
+     `ThumbnailSource::AwaitingMipmap`.
   3. **A flat placeholder**, the neutral mid-grey `PLACEHOLDER_GREY` (128), for an image
      neither source can supply; its path is logged.
 
-  When not one row comes from either source, the node has no display column: the
-  frustums draw their outlines without image quads, and the Image Browser and Track View
-  draw the placeholder rectangle. The build writes no Action Log line of its own; the
-  open's `thumbnails` stage says how many rows came from each source.
+  When not one row comes from either source or awaits a mipmap, the node has no display
+  column: the frustums draw their outlines without image quads, and the Image Browser and
+  Track View draw the placeholder rectangle. The build writes no Action Log line of its
+  own; the open's `thumbnails` stage says how many rows came from each source and how
+  many await their mipmaps.
+
+**A row awaiting its mipmap is filled in later.** The open puts each out-of-core
+photograph whose mipmap is not current on *Build mipmaps*' list
+([background-tasks.md](background-tasks.md) § "Build mipmaps"), and its row shows the
+grey placeholder until that task answers the photograph. Each frame,
+`AppState::drive_thumbnail_fills`
+([thumbnail_fills.rs](../../crates/sfm-explorer/src/state/thumbnail_fills.rs)) takes
+the photographs the task has answered, made or not, starts one read on the rayon pool
+for each whose row a node awaits, and gives each such node a new display column with
+the landed rows filled in (`DisplayThumbnails::with_rows`), sharing every other row.
+The new column copies nothing: its rows, names, awaiting rows and filled rows are shared
+with the old one behind an `Arc`, each filled row is written once into the shared store,
+and each value sees only the fills up to its own count, so the old value still draws
+what it drew.
+The read is `photograph_thumbnail_row` with `NotCurrentMipmap::DecodeOriginal`: from the
+coarsest mip level file when the mipmap is current, and from a whole decode of the
+original when it is still not (its build failed, or its levels could not be written and,
+under the cache's budget, were not kept), as for a photograph whose mipmap cannot be
+made or read; the grey placeholder stays only when neither can be read. A row is read
+once: nothing it reads makes or queues a mipmap, so no request or repaint follows it at
+any budget. A row whose mipmap the open's own patch bitmap render made (or another
+task's reads, before the open's `mipmaps` stage) is not on the list, so the open fills
+it in itself, on its worker, before the node appears. The GUI thread reads no
+photograph for any of this. A node closed before its rows landed gets none of them, and
+the rows of a node opened since are filled when the task answers its photographs. The
+filled rows are the node's like the rest of its column: no version is pushed, the node
+gains no unsaved changes, and a save writes no thumbnail.
 
 **Display thumbnails are the node's, not the value's.** They live on the scene node beside
 its history and never enter an `ImageSet`, so nothing the viewer builds can reach a save
@@ -466,9 +496,16 @@ one column built when the node opens serves every version: Delete Image renumber
 set and Undo renumbers it back, and a name still finds its row. An image the column was
 not built for falls back to the value's own column when it carries one.
 
-**Every row is final when the node appears**, so no panel ever draws a row that is still
-being built. The Image Browser, Track View and the frustum atlas each read the column once
-and keep what they read.
+**Every row is built when the node appears**, so no panel ever draws a row that is still
+being built; only a row awaiting its mipmap changes afterwards, from the placeholder to
+the photograph. The Image Browser and the frustum atlas each read the column once and
+keep what they read, and each compares the column's count of fills
+(`DisplayThumbnails::fills`) with the one it read, so a fill makes them read again only
+the rows filled since (`DisplayThumbnails::filled_after`): the Image Browser drops those
+rows' textures, which load again from the filled rows, and writes those images' columns
+of its barcode again (§ "Navigation minibar"), and the atlas writes those cells into the
+texture it has ([camera-views.md](camera-views.md)
+§ "Thumbnail loading").
 
 - Cache: `HashMap<usize, egui::TextureHandle>` in `ImageBrowser`. An image with no picture
   is not cached, and its cell draws the placeholder rectangle.
@@ -1749,17 +1786,25 @@ struct NavigationMinibar {
     /// Each column has 8 pixels representing the average color of each
     /// vertical eighth of the thumbnail.
     color_barcode: Option<egui::TextureHandle>,
+    /// The barcode's pixels, 8 rows of one pixel per image, kept so that a
+    /// fill writes again only the columns of the rows it filled.
+    barcode_pixels: Vec<egui::Color32>,
     /// Number of images when the barcode was last built (for invalidation).
     cached_image_count: usize,
 }
 ```
 
-- The color barcode texture is built once every display row is final. For each
-
+- The color barcode texture is built once every display row is loaded. For each
   image, the 128×128 thumbnail is divided into 8 horizontal bands (16 rows
   each), and the average color of each band becomes one pixel in the column.
 - The barcode texture is invalidated and rebuilt when the reconstruction
   changes (same trigger as `ImageBrowser::thumbnail_cache` invalidation).
+- When rows awaiting their mipmaps are filled in (§ "Thumbnail loading"),
+  `ImageBrowser::patch_barcode` computes the columns of those images alone,
+  from their filled rows, writes them into the kept pixels and updates the
+  texture with one `TextureHandle::set_partial` a column, so the barcode is
+  what a build of the whole of it would give while a fill reads only the rows
+  it filled.
 - egui stretches the texture to fill the bar rect, so rendering cost is
   independent of image count.
 
@@ -1775,7 +1820,8 @@ struct NavigationMinibar {
 ### Performance
 
 - The barcode is a single texture upload, built once all thumbnails are
-  loaded. No per-frame cost scales with image count.
+  loaded, and a fill afterwards uploads only its images' columns. No
+  per-frame cost scales with image count.
 - Navigation hit-testing is a simple `rect.contains(pointer_pos)` check.
 - Position-to-index mapping is O(1): `index = (x / width) * num_images`.
 

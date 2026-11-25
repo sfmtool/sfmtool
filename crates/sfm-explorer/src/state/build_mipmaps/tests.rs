@@ -45,7 +45,7 @@ pub(crate) fn out_of_core_workspace(n: usize) -> (tempfile::TempDir, Vec<PathBuf
 
 /// Write the workspace file of a workspace at `dir` whose `mipmap_options`
 /// is [`mipmap_options`].
-fn write_out_of_core_workspace_file(dir: &Path) {
+pub(crate) fn write_out_of_core_workspace_file(dir: &Path) {
     let o = mipmap_options();
     std::fs::write(
         dir.join(sfmtool_core::workspace::WORKSPACE_FILE_NAME),
@@ -472,7 +472,7 @@ fn a_run_wakes_the_viewer_once_for_each_coarsest_level_it_publishes() {
 /// PNGs with no mipmap, image 5 is in core (40 x 30), image 6 is out of
 /// core with a current mipmap, and image 7 has no file. Answers the
 /// workspace, the file and the paths of images 0 to 4.
-fn saved_out_of_core_recon() -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) {
+pub(crate) fn saved_out_of_core_recon() -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) {
     let dir = tempfile::tempdir().unwrap();
     let mut recon = SfmrReconstruction::demo(32);
     assert_eq!(recon.image_set.images.len(), 8);

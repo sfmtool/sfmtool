@@ -37,18 +37,27 @@ impl UploadedThumbnails {
         display: Option<&Arc<DisplayThumbnails>>,
         recon: &SfmrReconstruction,
     ) -> bool {
-        let same_display = match (&self.display, display) {
+        self.same_display(display) && self.same_images(recon)
+    }
+
+    /// Whether this atlas was built for `display`, by pointer.
+    fn same_display(&self, display: Option<&Arc<DisplayThumbnails>>) -> bool {
+        match (&self.display, display) {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
-        };
+        }
+    }
+
+    /// Whether this atlas was built for the value's own column and the
+    /// images of `recon`, in `recon`'s order.
+    fn same_images(&self, recon: &SfmrReconstruction) -> bool {
         let same_column = match (&self.column, &recon.image_set.thumbnails_y_x_rgb) {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
         };
-        same_display
-            && same_column
+        same_column
             && self.names.len() == recon.image_set.images.len()
             && self
                 .names
@@ -126,6 +135,9 @@ impl SceneRenderer {
             && bundle.thumbnail_view.is_some();
         if reusable {
             return Uploaded::Reused;
+        }
+        if let Some(written) = self.write_filled_cells(queue, id, recon, display) {
+            return Uploaded::Built(written);
         }
 
         // Compute atlas grid dimensions, respecting GPU texture size limits.
@@ -246,5 +258,88 @@ impl SceneRenderer {
             actual_rows_per_page,
         );
         Uploaded::Built(image_count_clamped as usize)
+    }
+
+    /// Whether node `id`'s atlas was built from another display column than
+    /// `display`: rows filled in after the open, or a node with no atlas
+    /// yet. Compares pointers only, so it costs nothing on a frame where
+    /// nothing changed.
+    pub(crate) fn thumbnails_changed(
+        &self,
+        id: ReconId,
+        display: Option<&Arc<DisplayThumbnails>>,
+    ) -> bool {
+        let uploaded = self
+            .recons
+            .get(&id)
+            .and_then(|bundle| bundle.uploaded_thumbnails.as_ref());
+        match uploaded {
+            Some(uploaded) => !uploaded.same_display(display),
+            None => display.is_some(),
+        }
+    }
+
+    /// Write again only the cells of the rows `display` filled in since the
+    /// column node `id`'s atlas was built from, when `display` is that
+    /// column with rows filled in and the images are the same, keeping the
+    /// texture; answers how many cells it wrote. `None` when the atlas has to
+    /// be built whole.
+    fn write_filled_cells(
+        &mut self,
+        queue: &wgpu::Queue,
+        id: ReconId,
+        recon: &SfmrReconstruction,
+        display: Option<&Arc<DisplayThumbnails>>,
+    ) -> Option<usize> {
+        let display = display?;
+        let bundle = self.recons.get_mut(&id)?;
+        let texture = bundle.thumbnail_texture.as_ref()?;
+        let uploaded = bundle.uploaded_thumbnails.as_mut()?;
+        let before = uploaded.display.as_ref()?;
+        if !before.same_build(display) || !uploaded.same_images(recon) {
+            return None;
+        }
+        let fills = before.fills();
+        let cols = bundle.atlas_cols;
+        let images_per_page = bundle.images_per_page;
+        let in_atlas = (images_per_page * texture.depth_or_array_layers()) as usize;
+        let placeholder = vec![PLACEHOLDER_GREY; (THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3) as usize];
+        let mut cell_band = Band::new(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
+        let mut written = 0;
+        for (i, image) in recon.image_set.images.iter().enumerate().take(in_atlas) {
+            if !display.filled_after(fills, &image.name) {
+                continue;
+            }
+            let tile = cell(Some(display), recon, i, &placeholder);
+            cell_band.place_rgb(0, &tile);
+            let i = i as u32;
+            let idx_in_page = i % images_per_page;
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: (idx_in_page % cols) * THUMBNAIL_SIZE,
+                        y: (idx_in_page / cols) * THUMBNAIL_SIZE,
+                        z: i / images_per_page,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                cell_band.bytes(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(cell_band.bytes_per_row()),
+                    rows_per_image: Some(THUMBNAIL_SIZE),
+                },
+                wgpu::Extent3d {
+                    width: THUMBNAIL_SIZE,
+                    height: THUMBNAIL_SIZE,
+                    depth_or_array_layers: 1,
+                },
+            );
+            written += 1;
+        }
+        uploaded.display = Some(Arc::clone(display));
+        Some(written)
     }
 }

@@ -425,6 +425,14 @@ once while it is there, and draws its waiting state; the code is in
   level (`COARSEST_PUBLISHED`), so Image Detail and the 3D background draw
   that level before the run ends, though a quiet task's progress wakes no
   one.
+- **The display thumbnails.** The list also records each photograph a run
+  answers, made or not, and once a frame `AppState::drive_thumbnail_fills`
+  takes them and starts one read on the rayon pool for each whose display
+  thumbnail row a node awaits, the open having left it as the grey
+  placeholder; the rows that land are filled in, and the read wakes the
+  viewer
+  ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
+  loading"). The read makes and queues no mipmap.
 - **Its line.** While a run is running, the quiet line says what it does
   and how far it has got, how many photographs have been answered of how
   many queued since the list was last empty, leaving out a photograph a
@@ -971,7 +979,7 @@ of the bar. Each file's stages sit under a phase `open` of its own:
 | Stage | Runs when | Reports |
 |-------|-----------|---------|
 | `read`, `derive`, `keypoints` | always | `SfmrReconstruction::load`'s own stages and notes; `keypoints` reads a `sift_files` file's `.sift` positions when it carries no inline keypoint column (a version 16 file written without it), with a count of `images`, and notes `not filled: {reason}` when a `.sift` is missing or does not match |
-| `thumbnails` | the file carries no thumbnail column | a count of `images`; note `{a} from .sift files, {b} from photographs, {c} placeholders` |
+| `thumbnails` | the file carries no thumbnail column | a count of `images`; note `{a} from .sift files, {b} from photographs, {c} placeholders`, with `, {w} awaiting their mipmaps` when any out-of-core photograph's mipmap is not current, whose row is the grey placeholder until *Build mipmaps* has answered it (§ "Build mipmaps") |
 | `patch bitmaps` > `decode photographs` | the file has patch frames and inline keypoints but no bitmaps | a count of `images`; note `{k} of {n} read`, with `, {r} reused from the cache` when the cache already held any and `, {m} mipmaps made` when the call made any |
 | `patch bitmaps` > `render` | the same | a count of `patches`; note `{P} patches at {R} px` |
 | `patch bitmaps` > `read regions` | the same | note `{a} region pyramids assembled, {u} reused, {t} reads on tiles`, the counts of the render's region pool |
@@ -980,7 +988,10 @@ of the bar. Each file's stages sit under a phase `open` of its own:
 The file's share of the bar splits 1 : 9 between the read and the rest, and the
 rest 1 : 8 : 0.5 between thumbnails, bitmaps and mipmaps, a stage the file does
 not need taking a weight of zero. The `mipmaps` stage runs after the
-bitmaps, whose reads make the mipmaps they need. The thumbnail rows come from
+bitmaps, whose reads make the mipmaps they need; a thumbnail row the
+`thumbnails` stage left awaiting a mipmap that the `mipmaps` stage then finds
+current is filled in by the open, read from the coarsest mip level file, since
+no run of *Build mipmaps* will answer it. The thumbnail rows come from
 each image's verified `.sift` first and its photograph second
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Thumbnail
 loading"). The bitmaps are the render `sfm xform --add-patch-bitmaps` runs,

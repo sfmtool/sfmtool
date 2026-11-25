@@ -735,7 +735,10 @@ fn thumbnail_rows(
         match source {
             ThumbnailSource::Sift => counts.sift += 1,
             ThumbnailSource::Photograph => counts.photographs += 1,
-            ThumbnailSource::Placeholder => counts.placeholders += 1,
+            // `Make` answers no row awaiting its mipmap.
+            ThumbnailSource::Placeholder | ThumbnailSource::AwaitingMipmap => {
+                counts.placeholders += 1
+            }
         }
     }
     if counts.placeholders == total {

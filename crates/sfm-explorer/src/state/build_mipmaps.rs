@@ -87,6 +87,10 @@ pub(crate) struct MipmapList {
     /// The paths answered since the list was last empty, what the quiet line
     /// counts as done.
     done: usize,
+    /// Every path a run has answered, made or not, since
+    /// [`Self::take_answered`] last took them: what fills in the display
+    /// thumbnail rows awaiting a mipmap ([`crate::state::thumbnail_fills`]).
+    answered_paths: Vec<PathBuf>,
 }
 
 impl MipmapList {
@@ -181,6 +185,7 @@ impl MipmapList {
     /// `path` was answered: it leaves the list's memory, counted as done
     /// unless it was dropped.
     fn answered(&mut self, path: &Path) {
+        self.answered_paths.push(path.to_path_buf());
         self.taken.remove(path);
         let dropped = self.dropped.remove(path);
         if self.queued.remove(path) && !dropped {
@@ -207,6 +212,12 @@ impl MipmapList {
         if self.queued.len() == self.dropped.len() {
             self.done = 0;
         }
+    }
+
+    /// Take every path a run has answered since the last call, in the order
+    /// answered.
+    pub(crate) fn take_answered(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.answered_paths)
     }
 
     /// The task's label, which its quiet line shows: how many photographs
