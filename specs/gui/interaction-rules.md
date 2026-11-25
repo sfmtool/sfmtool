@@ -91,7 +91,14 @@ the pixel is outside the middle 90% of the view and the view is not at fit
 **G6. The panel under the pointer owns the hover.** It sets the hover field it
 produces and clears the other; leaving a panel clears both. Hover never
 changes the selection, and every panel that draws the hovered thing
-highlights it.
+highlights it. A label the panel paints beside the pointer about what it
+hovers, such as a measurement's hover text or Image Detail's hover tooltip,
+stays inside the panel and never covers the pointer: it has a default side and
+gap, and where it does not fit there it takes the next side that does, in the
+order right, left, then below and above (the one the default leans towards
+first), the same gap away, and slides along that side into the panel. Only a
+panel too small for it on every side clamps it in place. egui's own tooltips
+(`on_hover_text`) are placed by egui and are not such labels.
 
 **G7. A mark or handle drawn over other content owns its press.** A click on
 it selects or moves what the mark stands for, never what lies underneath.
@@ -158,6 +165,10 @@ rule stays one code path (G8):
   `ImageDetail::what_to_show`, which keeps the previous photograph while the
   selected one loads, and the hover-only sense `ImageDetail::show` gives the
   panel meanwhile (G13).
+- [pointer_label.rs](../../crates/sfm-explorer/src/pointer_label.rs):
+  `place_beside_pointer`, where a label painted beside the pointer goes (G6),
+  called by `measurement_marks::draw_hover_text` and Image Detail's
+  `overlay::draw_tooltip`.
 - [image_menu.rs](../../crates/sfm-explorer/src/image_menu.rs): `image_menu::show`,
   the one image menu (G8); [scene-graph.md](scene-graph.md) § "Tree rows"
   describes it.

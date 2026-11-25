@@ -660,6 +660,11 @@ rim-distortion artefact.
 The intrinsics readout is suppressed entirely when the layer is off, so the
 feature tooltip is byte-for-byte what the panel draws without the layer.
 
+The tooltip sits right of the pointer with its first line just above it where
+that fits, and on another side of the pointer where it does not, inside the
+panel and off the pointer (G6 in
+[interaction-rules.md](interaction-rules.md)).
+
 ### What is drawn
 
 Everything below is computed in image pixel coordinates and mapped through the
