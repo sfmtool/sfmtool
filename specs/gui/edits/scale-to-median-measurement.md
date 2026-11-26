@@ -105,8 +105,8 @@ from `app/modals.rs`. From the top:
   *none for a single measurement*; the median absolute deviation as a
   percentage of the median, to two decimals, so measurements that agree to the
   `float32` they are stored in read `0.00%` rather than a factor's rounding
-  noise; the smallest and the largest factor; and the largest deviation, signed, naming its
-  measurement. Where that deviation exceeds the bar, a warning in the warning
+  noise; the smallest and the largest factor; and the largest deviation,
+  signed, naming its measurement. Where that deviation exceeds the bar, a warning in the warning
   colour says how many measurements are past it and asks for their endpoints
   to be checked before applying.
 - **A table**, one row per usable measurement: its title and label
@@ -155,7 +155,9 @@ centred on the median.
 
 **The axis is symmetric about the median.** It reaches the largest deviation
 on either side, and the ±5 bounds where those lie within a spread of the
-values, as far below the median as above it, so the median line is in the
+values past it; short of them, it reaches one spread past the largest
+deviation, as the Camera Intrinsics panel's reaches toward its bounds. It
+reaches as far below the median as above it, so the median line is in the
 middle of the axis even where every deviation is at or above it.
 
 Each deviation is rounded to a thousandth of a percent before it is binned. A
