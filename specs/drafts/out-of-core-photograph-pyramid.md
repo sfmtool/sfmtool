@@ -4321,6 +4321,81 @@ in core. Step 17 turns the tier on.
     a workspace without the object writes nothing (the checked-in `test-data`
     workspaces are such workspaces).
 
+    The step is four pull requests, 17a to 17d, each a writer of the object
+    or a line that names one, so that no part names a command that does not
+    exist yet: the new workspace's object first, then `--enable` with
+    `sfm ws upgrade`'s test, then the lines that name `--enable`. The
+    `.sfm-workspace.json` version stays 2 in every part: version 2 already
+    has the optional `mipmap_options` key, which the current reader reads and
+    validates
+    ([workspace.md § File Format](../workspace/workspace.md#file-format)),
+    and a reader that does not know the key, as sfmtool 0.4.1's
+    `load_workspace_config` does not, reads every photograph in core, which
+    misreads nothing the file holds.
+
+    - **17a, a new workspace has the object.** **Built**
+      ([marker.rs](../../crates/sfmtool-core/src/workspace/marker.rs),
+      [mipmap_options.rs](../../crates/sfmtool-core/src/workspace/mipmap_options.rs),
+      [_workspace.py](../../src/sfmtool/_workspace.py)), as planned here;
+      `sfm ws init` prints `mipmap_options: photographs with a side over
+      4096 px are read from mipmaps, JPEG quality 95 (95 at full
+      resolution)`. The one writer of a new
+      `sfmtool` workspace, `sfmtool_workspace_marker`, writes
+      `"mipmap_options"` after `feature_prefix_dir`, so `sfm ws init`,
+      `sfm pick-images --new-workspace` and the viewer's demo workspace get
+      it; `init_workspace` writes the same object for the `colmap` and
+      `opencv` tools, from the binding `new_workspace_mipmap_options()`; and
+      `sfm ws init` prints a line for it. `sfm ws init --force` writes a
+      fresh file, so it writes the object too. In `sfmtool_core::workspace`:
+
+      ```rust
+      /// The `mipmap_options` a new workspace records: 4096, 95 and 95.
+      pub const NEW_WORKSPACE_MIPMAP_OPTIONS: MipmapOptions;
+      /// The object as `.sfm-workspace.json` holds it, which
+      /// `read_mipmap_options` reads back to `options`.
+      pub fn mipmap_options_json(options: &MipmapOptions) -> serde_json::Value;
+      ```
+
+      and in Python `sfmtool.workspace.new_workspace_mipmap_options() ->
+      dict`, the object with its keys in the written order. Tests: the
+      default and custom markers end with the object, byte for byte as
+      `json.dump(..., indent=2)` writes it; `read_mipmap_options` reads a
+      new workspace's object back as `NEW_WORKSPACE_MIPMAP_OPTIONS`; a
+      workspace `sfm ws init` makes for each of the three tools has the
+      object with 4096, 95 and 95, and the command prints it.
+    - **17b, `sfm ws mipmaps --enable`.** `sfm ws mipmaps --enable PATH`
+      adds the object to the workspace at or above `PATH`, with
+      `--out-of-core-long-side`, `--jpeg-quality` and
+      `--full-resolution-jpeg-quality` defaulting to
+      `NEW_WORKSPACE_MIPMAP_OPTIONS`' values, and refuses a file that has
+      the object, naming it; it makes no mipmap, and says that
+      `sfm ws mipmaps PATH` makes them now and that every reader makes those
+      it needs. It keeps every other key of the file and its order. In Rust,
+      `enable_mipmap_options(root: &Path, options: &MipmapOptions) ->
+      Result<(), WorkspaceConfigError>`, with a variant for a file that has
+      the object, bound as `sfmtool.workspace.enable_mipmap_options`. Tests:
+      `--enable` writes the object with the defaults and with each option,
+      keeping the file's other keys; it refuses a file that has one and
+      leaves it as it is; `--enable` with `--check` or `--prune` is a usage
+      error; `sfm ws upgrade` of a workspace without the object writes none,
+      and of one with it keeps it.
+    - **17c, the recommendation names `--enable`.** The line
+      `photograph_cache_lines` prints for `sfm cluster-patches`,
+      `sfm embed-patches`, `sfm xform`, `sfm compare --strips` and
+      `sfm inspect --strips` names `sfm ws mipmaps --enable <workspace>` for
+      each workspace without the object, in place of the object to add by
+      hand. Tests: the line names the command and the workspace.
+    - **17d, the viewer's notice.** The first time in a session the
+      photograph cache's layout read finds a photograph with a side over
+      4096 px in a workspace without the object, the viewer says once, in
+      the place the draft's § "Mip level files" gives it, *This workspace
+      decodes large photographs whole. Run `sfm ws mipmaps --enable` to read
+      them a tile at a time.* Tests: the notice is given once for two such
+      photographs and not for a workspace with the object.
+      The docs site's pages that describe `sfm ws init`'s file and
+      `sfm ws mipmaps` change in a pull request to
+      `sfmtool/sfmtool.github.io` beside 17b.
+
 ## Measurements
 
 The scratch program behind the figures, kept out of the tree: a binary crate

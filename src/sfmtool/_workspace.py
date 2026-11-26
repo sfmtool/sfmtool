@@ -71,8 +71,10 @@ def init_workspace(
     Creates a version 2 .sfm-workspace.json file with feature extraction
     settings: the tool's default options, the given overrides, and the tool's
     ``image_to_gray`` object, with a new ``feature_prefix_dir`` named from
-    them. An existing file is replaced; its folder and the named image lists
-    file stay on disk. The ``sfmtool`` tool's file is written by
+    them, and the ``mipmap_options`` object of
+    ``sfmtool.workspace.new_workspace_mipmap_options``, which reads
+    photographs with a side over 4096 px from mipmaps. An existing file is
+    replaced; its folder and the named image lists file stay on disk. The ``sfmtool`` tool's file is written by
     ``sfmtool.workspace.write_sfmtool_workspace_marker``.
 
     Args:
@@ -104,6 +106,7 @@ def init_workspace(
     from sfmtool.workspace import feature_prefix_dir as named_feature_prefix_dir
     from sfmtool.workspace import (
         feature_type_for_tool,
+        new_workspace_mipmap_options,
         tool_image_to_gray,
         write_sfmtool_workspace_marker,
     )
@@ -160,6 +163,7 @@ def init_workspace(
         "feature_type": feature_type,
         "feature_options": feature_options,
         "feature_prefix_dir": feature_prefix_dir,
+        "mipmap_options": new_workspace_mipmap_options(),
     }
 
     config_path = workspace_dir / WORKSPACE_CONFIG_FILE

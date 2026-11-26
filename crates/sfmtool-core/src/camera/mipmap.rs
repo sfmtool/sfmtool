@@ -57,8 +57,9 @@ pub use tile::OriginalRegions;
 /// name, since the mip level files are JPEGs named after the photographs.
 pub const MIPMAP_DIR_NAME: &str = ".sfm-mipmaps";
 
-/// The `out_of_core_long_side` that `sfm ws init` is to write: a photograph
-/// with a side over this is out of core.
+/// The `out_of_core_long_side` that `sfm ws init` writes, in
+/// `NEW_WORKSPACE_MIPMAP_OPTIONS`: a photograph with a side over this is out
+/// of core.
 pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 4096;
 
 /// The largest side of a photograph any pyramid reader accepts, the largest

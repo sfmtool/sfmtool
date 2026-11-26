@@ -144,6 +144,32 @@ def test_init_writes_version_2(tmp_path: Path):
     assert f"feature_prefix_dir: {config['feature_prefix_dir']}" in result.output
 
 
+@pytest.mark.parametrize("tool", ["sfmtool", "colmap", "opencv"])
+def test_init_writes_the_mipmap_options(tmp_path: Path, tool):
+    """Every tool's new workspace reads photographs with a side over 4096 px
+    from mipmaps at quality 95, the object written after the folder's name,
+    and the command says so."""
+    from sfmtool.workspace import new_workspace_mipmap_options
+
+    result = CliRunner().invoke(
+        main, ["ws", "init", "--feature-tool", tool, str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    config = json.loads((tmp_path / ".sfm-workspace.json").read_text())
+    expected = {
+        "out_of_core_long_side": 4096,
+        "jpeg_quality": 95,
+        "full_resolution_jpeg_quality": 95,
+    }
+    assert list(config.items())[-1] == ("mipmap_options", expected)
+    assert list(config["mipmap_options"]) == list(expected)
+    assert new_workspace_mipmap_options() == expected
+    assert (
+        "  mipmap_options: photographs with a side over 4096 px are read from "
+        "mipmaps, JPEG quality 95 (95 at full resolution)" in result.output
+    )
+
+
 def test_init_image_to_gray_and_quantize_bits(tmp_path: Path):
     result = CliRunner().invoke(
         main,
@@ -194,7 +220,8 @@ def test_init_image_to_gray_errors(tmp_path: Path, args, message):
 def _python_written_marker(max_num_features=None, image_to_gray=None) -> dict:
     """The record ``init_workspace`` built for the sfmtool tool before its
     writer moved to Rust: the old ``get_default_sfmtool_feature_options``
-    literal and the record around it, keys in the order it wrote them."""
+    literal and the record around it, keys in the order it wrote them, with
+    the ``mipmap_options`` every new workspace records since after them."""
     from sfmtool.workspace import feature_prefix_dir, feature_type_for_tool
 
     options = {
@@ -226,6 +253,11 @@ def _python_written_marker(max_num_features=None, image_to_gray=None) -> dict:
         "feature_type": feature_type,
         "feature_options": options,
         "feature_prefix_dir": feature_prefix_dir("sfmtool", feature_type, options),
+        "mipmap_options": {
+            "out_of_core_long_side": 4096,
+            "jpeg_quality": 95,
+            "full_resolution_jpeg_quality": 95,
+        },
     }
 
 
