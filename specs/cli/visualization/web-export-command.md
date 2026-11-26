@@ -368,8 +368,8 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
   `PhotographCache` the bitmap render and the thumbnails read through, which
   makes the mipmaps they need; the caller makes it, so a caller that reads the
   same photographs in another call passes the cache that call reads through,
-  and a mipmap either makes is made once. `WebExportOptions` carries the options above, plus `source_name`,
-  `generator` and `max_page_size` (4096 unless a caller packs smaller pages).
+  and a mipmap either makes is made once. `WebExportOptions` carries the
+  options above, plus `source_name`, `generator` and `max_page_size` (4096 unless a caller packs smaller pages).
   The report lists each file with its size, the point, patch and camera counts,
   where the thumbnail rows came from, whether the bitmaps were rendered, the
   decoded atlas bytes and the warnings. Atlas packing is
@@ -383,11 +383,14 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
 
   ```rust
   let options = WebExportOptions { max_points: Some(50_000), ..Default::default() };
-  let photographs = PhotographCache::new(PhotographCacheOptions {
-      budget_bytes: 0,
-      ..Default::default()
-  });
-  let report = write_web_export(&recon, Path::new("site"), &options, &photographs, &Progress::none())?;
+  let photographs = PhotographCache::new(PhotographCacheOptions::default());
+  let report = write_web_export(
+      &recon,
+      Path::new("site"),
+      &options,
+      &photographs,
+      &Progress::none(),
+  )?;
   ```
 
 - **Binding**: `sfmtool.fileio.write_web_export(recon, out_dir, *, patches,
