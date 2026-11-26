@@ -183,10 +183,10 @@ names no unit, is left out too; a load refuses such a row, so only a value
 built by hand holds one. So is a reading whose endpoints are both finite but
 which holds no scene distance, which the resolver never gives. Last, a
 measurement whose stated and scene distances are each finite and positive is
-left out where their ratio is not: a scene distance near the smallest `f64`
-overflows the factor to infinity, and a tiny stated length (a `float32`
-subnormal is a valid stored distance) over a large scene distance underflows
-it to zero. Either would make the median or every deviation infinite or NaN.
+left out where their ratio is not: a scene distance near the smallest
+positive `f64` overflows the factor to infinity, and a tiny stated length (a
+`float32` subnormal is a valid stored distance) over a large scene distance
+underflows it to zero. Either would make the median or every deviation infinite or NaN.
 The mean divides each factor by the count before summing, so factors near the
 largest `f64` do not overflow it.
 
