@@ -184,7 +184,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 |------|-----|-------|------|
 | Session | — | Viewer | `SfM Explorer {version} started` |
 | Session | — | Viewer | `MCP endpoint listening on {url}` |
-| Session | — | Viewer | ``This workspace decodes large photographs whole. Run `sfm ws mipmaps --enable` to read them a tile at a time.`` -- once a session, the first time a panel's layout read finds a photograph with a side over 1536 px in a workspace whose file has no `mipmap_options` ([photograph-cache.md](../core/camera/photograph-cache.md) § "In the viewer"); not for a workspace whose object keeps the photograph in core, nor for a photograph in no workspace |
+| Session | — | Viewer | ``This workspace decodes large photographs whole. Run `sfm ws mipmaps --enable` to read them a tile at a time.`` -- once a session, the first time a read of the photograph cache (an open's render, a step's read, a panel's layout read) finds a photograph with a side over 1536 px in a workspace whose file has no `mipmap_options` ([photograph-cache.md](../core/camera/photograph-cache.md) § "In the viewer"); not for a workspace whose object keeps the photograph in core, nor for a photograph in no workspace |
 | File | — | User / MCP | `Opened {label} from {path}` |
 | File | — | User / MCP | `Failed to load {path}: {error}` — **failed** |
 | File | — | User / MCP | `Closed {label}` |
@@ -956,6 +956,8 @@ PNGs in a temporary workspace:
 - In a workspace whose file has no `mipmap_options`, the notice is one
   `Viewer` row of kind `Session`, however many frames ask after each read.
 - In a workspace whose file has the object, there is no such row.
+- After an open that renders the patch bitmaps from 1537 px photographs,
+  which leaves no layout for a panel to read, the row is there.
 
 Layout, in `dock/tests.rs`:
 

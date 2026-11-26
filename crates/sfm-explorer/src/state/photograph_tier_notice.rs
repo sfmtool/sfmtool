@@ -3,13 +3,14 @@
 
 //! The viewer's notice that a workspace decodes large photographs whole.
 //!
-//! The first time in a session a layout read of the photograph cache finds a
+//! The first time in a session a read of the photograph cache (an open's
+//! render of the patch bitmaps, a step's read, a panel's layout read) finds a
 //! photograph with a side over 1536 px in a workspace whose file has no
 //! `mipmap_options` ([`PhotographCache::large_photograph_without_mipmap_options`]),
 //! [`AppState::give_photograph_tier_notice`], once a frame, writes
 //! [`PHOTOGRAPH_TIER_NOTICE`] as one Action Log row of the viewer's, which the
-//! 3D view's status line then shows. The read runs on the rayon pool, as a
-//! panel's layout read does; the frame only reads what the cache noted,
+//! 3D view's status line then shows. The read runs off the GUI thread, on
+//! the open's worker or the rayon pool; the frame only reads what the cache noted,
 //! which takes no lock and reads no file. See `specs/gui/action-log.md` §
 //! "What gets logged".
 //!

@@ -4463,15 +4463,18 @@ in core. Step 17 turns the tier on. Every step is built.
       Action Log row of its own, kind `Session`, as it reports the system
       font search, so the 3D view's status line shows it until the next
       entry; nothing has to be dismissed. The cache notes the photograph:
-      `request_layout` and `read_layout` keep the first one they find with a
+      the one function every header read of the cache goes through, a
+      layout read's or a decode's or build's, keeps the first one it finds with a
       side over `DEFAULT_OUT_OF_CORE_LONG_SIDE` in a workspace whose file
       has no object, and `PhotographCache::large_photograph_without_mipmap_options`
       answers it, reading nothing and taking no lock, so the frame asks
       every time, before the MCP drain, and `AppState` remembers that the
       session has said it. A photograph in no workspace is not one, nor is
       one of a workspace whose object has a threshold that keeps it in core.
-      The notice comes when a panel first reads such a photograph's layout,
-      as when an image is selected, not at open. The plan as written: the
+      A layout read alone would miss a photograph an open decodes first, as
+      its render of the patch bitmaps does, since a panel's layout is then
+      answered from the cache; so the notice comes at such an open, and
+      otherwise when a panel first shows such a photograph. The plan as written: the
       first time in a session the
       photograph cache's layout read finds a photograph with a side over
       1536 px in a workspace without the object, the viewer says once, with

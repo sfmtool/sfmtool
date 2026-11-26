@@ -26,7 +26,7 @@ use rayon::prelude::*;
 
 use super::files::{cut_coarse, Checked, Failure, LevelSource, MipmapFiles, Tier};
 use super::{
-    file_stamp, header, whole_decode_bytes, Asked, CoarsestLevel, Found, GetError, Got, Making,
+    file_stamp, whole_decode_bytes, Asked, CoarsestLevel, Found, GetError, Got, Making,
     MipmapBuildReport, PeekedLayout, PhotographCache, Share, Slot, WorkspaceSetting,
     COARSEST_PUBLISHED,
 };
@@ -331,7 +331,7 @@ impl PhotographCache {
         make: Make,
         publish: Publish<'_>,
     ) -> Result<(Arc<MipmapFiles>, Vec<MipLevelFile>), GetError> {
-        let (width, height) = header(path, setting)?;
+        let (width, height) = self.header(path, setting)?;
         let not_out_of_core = || {
             GetError::Unreadable(format!(
                 "{} has no mipmap to make: it is not out of core",
@@ -605,7 +605,7 @@ impl PhotographCache {
                     return Ok(false);
                 }
                 let setting = self.setting_for(path);
-                let (width, height) = header(path, &setting)?;
+                let (width, height) = self.header(path, &setting)?;
                 let options = setting.options.ok().flatten();
                 Ok(
                     PyramidLayout::for_size(width, height, options.as_ref(), tile_size)

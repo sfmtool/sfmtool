@@ -235,3 +235,26 @@ fn a_layout_read_notes_the_first_large_photograph_of_a_workspace_without_mipmap_
     }
     assert_eq!(cache.large_photograph_without_mipmap_options(), None);
 }
+
+#[test]
+fn a_decode_alone_notes_a_large_photograph_of_a_workspace_without_mipmap_options() {
+    let long = DEFAULT_OUT_OF_CORE_LONG_SIDE;
+    let dir = tempfile::tempdir().unwrap();
+    write_workspace(dir.path(), "{}", 1);
+    let a = write_png(dir.path(), "a.png", long + 1, 1);
+    let b = write_png(dir.path(), "b.png", long + 1, 1);
+
+    let by_get = PhotographCache::new(with_budget(GIB));
+    by_get.get(&a, &Progress::none()).unwrap();
+    assert_eq!(
+        by_get.large_photograph_without_mipmap_options(),
+        Some(a.as_path())
+    );
+    let by_get_many = PhotographCache::new(with_budget(GIB));
+    let (got, _) = by_get_many.get_many(&[&b], &Progress::none()).unwrap();
+    assert!(got[0].is_some());
+    assert_eq!(
+        by_get_many.large_photograph_without_mipmap_options(),
+        Some(b.as_path())
+    );
+}

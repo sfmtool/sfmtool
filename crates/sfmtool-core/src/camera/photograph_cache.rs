@@ -441,26 +441,6 @@ fn unreadable(path: &Path, e: ::image::ImageError) -> GetError {
     }
 }
 
-/// The photograph's size from its header, refused as [`GetError::Workspace`]
-/// while `setting`, its workspace's, cannot be read, and as
-/// [`GetError::TooLarge`] with a side over [`MAX_JPEG_SIDE`]: the header and
-/// the setting decide the refusal, so a photograph is never decoded only to
-/// be refused.
-fn header(path: &Path, setting: &WorkspaceSetting) -> Result<(u32, u32), GetError> {
-    let (width, height) = image_dimensions(path).map_err(|e| unreadable(path, e))?;
-    if let Err(e) = &setting.options {
-        return Err(GetError::Workspace(e.clone()));
-    }
-    if width > MAX_JPEG_SIDE || height > MAX_JPEG_SIDE {
-        return Err(GetError::TooLarge {
-            path: path.to_path_buf(),
-            width,
-            height,
-        });
-    }
-    Ok((width, height))
-}
-
 /// The workspace setting a photograph is read under: its workspace root and
 /// that root's `mipmap_options`, which decide how each of its photographs is
 /// read. A slot records the setting it was made under and is made again when
@@ -1602,17 +1582,43 @@ impl PhotographCache {
         lock_ignoring_poison(&self.shared.not_written).clear();
     }
 
-    /// The first photograph a layout read of this cache
-    /// ([`Self::request_layout`] or [`Self::read_layout`]) found with a side
-    /// over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in a workspace whose file has
+    /// The first photograph a read of this cache found, from its header,
+    /// with a side over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in a workspace whose file has
     /// no `mipmap_options`, so that it is decoded whole where a new
     /// workspace would read it a tile at a time; `None` until a read finds
-    /// one. A photograph in no workspace is not one, since there is no
+    /// one. Every header the cache reads is looked at: a layout read
+    /// ([`Self::request_layout`], [`Self::read_layout`]) and the decode or
+    /// build of [`Self::get`], [`Self::get_many`], the tile requests and
+    /// [`Self::build_mipmaps`], so a photograph decoded before any layout is
+    /// asked for is found too. A photograph in no workspace is not one, since there is no
     /// workspace file to add the object to. Reads nothing and takes no lock,
     /// so the viewer asks every frame; neither [`Self::forget`] nor
     /// [`Self::clear`] drops it.
     pub fn large_photograph_without_mipmap_options(&self) -> Option<&Path> {
         self.shared.large_in_core.get().map(PathBuf::as_path)
+    }
+
+    /// The photograph's size from its header, refused as [`GetError::Workspace`]
+    /// while `setting`, its workspace's, cannot be read, and as
+    /// [`GetError::TooLarge`] with a side over [`MAX_JPEG_SIDE`]: the header and
+    /// the setting decide the refusal, so a photograph is never decoded only to
+    /// be refused. Every read of a header in the cache comes through here, so
+    /// it is where [`Self::large_photograph_without_mipmap_options`]' note is
+    /// taken, whichever read, decode or build first meets the photograph.
+    fn header(&self, path: &Path, setting: &WorkspaceSetting) -> Result<(u32, u32), GetError> {
+        let (width, height) = image_dimensions(path).map_err(|e| unreadable(path, e))?;
+        if let Err(e) = &setting.options {
+            return Err(GetError::Workspace(e.clone()));
+        }
+        if width > MAX_JPEG_SIDE || height > MAX_JPEG_SIDE {
+            return Err(GetError::TooLarge {
+                path: path.to_path_buf(),
+                width,
+                height,
+            });
+        }
+        self.note_large_in_core(path, setting, width, height);
+        Ok((width, height))
     }
 
     /// Keep `path` as [`Self::large_photograph_without_mipmap_options`]'
@@ -1754,7 +1760,7 @@ impl PhotographCache {
         share: &mut Share<'r>,
         setting: &WorkspaceSetting,
     ) -> Result<CutImage, GetError> {
-        let (width, height) = header(path, setting)?;
+        let (width, height) = self.header(path, setting)?;
         if let Share::None = share {
             *share = Share::Own(self.reserve_builds(whole_decode_bytes(width, height), 1));
         }

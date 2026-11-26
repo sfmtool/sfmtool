@@ -17,7 +17,7 @@ use std::sync::Arc;
 use super::build::Make;
 use super::files::Checked;
 use super::tiles::check_keys;
-use super::{header, Found, GetError, PhotographCache, Share, TileError};
+use super::{Found, GetError, PhotographCache, Share, TileError};
 use crate::camera::image::ImageU8;
 use crate::camera::mipmap::{region_layout, PyramidLayout};
 use crate::camera::sampler::LevelRect;
@@ -63,8 +63,7 @@ impl PhotographCache {
     /// `mipmap_options`, and [`GetError::TooLarge`].
     pub fn read_layout(&self, path: &Path) -> Result<PhotographLayout, GetError> {
         let setting = self.setting_for(path);
-        let (width, height) = header(path, &setting)?;
-        self.note_large_in_core(path, &setting, width, height);
+        let (width, height) = self.header(path, &setting)?;
         let layout = match self.check_files(path, &setting) {
             Checked::InCore => PhotographLayout {
                 layout: Arc::new(self.layout_for(width, height)),

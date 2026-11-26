@@ -25,8 +25,8 @@ use std::sync::Arc;
 use super::build::Make;
 use super::files::{is_out_of_core, Failure, Tier, Unmapped};
 use super::{
-    answer_of, has_key, header, whole_decode_bytes, Asked, GetError, Got, Making, PhotographCache,
-    Share, Slot,
+    answer_of, has_key, whole_decode_bytes, Asked, GetError, Got, Making, PhotographCache, Share,
+    Slot,
 };
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
 use crate::camera::mipmap::PyramidLayout;
@@ -358,10 +358,9 @@ impl PhotographCache {
     /// it from a decode in core ([`Self::try_decode_tiles`]).
     pub fn request_layout(&self, path: &Path) {
         let setting = self.setting_for(path);
-        let layout = match header(path, &setting) {
+        let layout = match self.header(path, &setting) {
             Err(e) => PeekedLayout::Unreadable(e),
             Ok((width, height)) => {
-                self.note_large_in_core(path, &setting, width, height);
                 let in_core = || PeekedLayout::Known(Arc::new(self.layout_for(width, height)));
                 if !is_out_of_core(&setting, width, height) {
                     in_core()
@@ -540,7 +539,7 @@ impl PhotographCache {
         let Ok(Some(options)) = &setting.options else {
             return Ok(None);
         };
-        let Ok((width, height)) = header(path, &setting) else {
+        let Ok((width, height)) = self.header(path, &setting) else {
             return Ok(None);
         };
         let tile_size = self.shared.options.tile_size;
@@ -722,7 +721,7 @@ impl PhotographCache {
         }
         // A file whose header cannot be read, or whose workspace file cannot,
         // is made at once, as the failure remembered in its slot.
-        let size = header(path, setting);
+        let size = self.header(path, setting);
         let mut share = Share::None;
         if let Ok((width, height)) = size {
             check_keys(path, &self.layout_for(width, height), keys)?;
