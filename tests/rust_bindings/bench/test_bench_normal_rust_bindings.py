@@ -1072,27 +1072,33 @@ class TestPairwiseFlowNormal:
             pairwise_flow_normal(track, edited, images)
 
 
-def test_repeated_grown_plane_passes_settle_on_a_ground_truth_point():
+def test_repeated_grown_plane_passes_stay_within_sigma_on_a_ground_truth_point():
     """seoul_bull v02 point 255 straddles a canopy edge, seen by three views
-    within 4.1 degrees of each other. On one grid laid on the starting square
-    the step turned it 69.6, 15.6, 3.9, 4.4 and 3.5 degrees on five passes;
-    with the grid laid at each stage's plane and its two other views grown
-    jointly, the second and third passes turn it 5.3 and 8.2 degrees, under
-    the bar of 10. Later passes do not settle further: eight passes turn it
-    between 1 and 8 degrees each after the first, within its weakest sigma
-    of 15 to 21 degrees."""
+    within 4.1 degrees of each other, and its plane is poorly determined. The
+    first pass from the stored normal turns it far (69.6 degrees measured;
+    62.4 with the two-view ladder). Later passes do not settle: each turns it
+    again by less than the weakest sigma it reports (5.3 and 8.2 degrees
+    against 21.0 and 18.1 measured; eight passes turn it 1.2 to 8.2 degrees
+    after the first, at sigma 15 to 21), and every pass reports low
+    confidence. With its two other views grown jointly the point is not one
+    the step settles on, where the two-view ladder's later passes turned it
+    0.1 to 4.4 degrees."""
     path = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr"
     recon = SfmrReconstruction.load(str(path))
     edited = EditedReconstruction(recon)
     images = [read_image_rgb(SEOUL_BULL_DIR / name) for name in recon.image_names]
     _, track = create_track(Bench(), edited, 255)
-    turns = []
+    passes = []
     for _ in range(3):
         track, report = grown_plane_normal(track, edited, images)
-        assert report["estimate"]["outcome"] == "turned"
-        turns.append(report["tilt"]["degrees"])
-    assert turns[0] > 30.0, turns
-    assert turns[1] < 10.0 and turns[2] < 10.0, turns
+        estimate = report["estimate"]
+        assert estimate["outcome"] == "turned"
+        precision = estimate["precision"]
+        assert precision["low_confidence"], precision
+        passes.append((report["tilt"]["degrees"], precision["sigma_weak_deg"]))
+    assert passes[0][0] > 30.0, passes
+    for turn, sigma in passes[1:]:
+        assert turn < sigma, passes
 
 
 # A point of seoul_bull v02 seen in two images, images 6 and 7.

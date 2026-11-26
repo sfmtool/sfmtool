@@ -485,6 +485,53 @@ fn a_view_whose_own_plane_disagrees_is_left_out() {
     );
 }
 
+/// A known weakness of the three-way ladder, recorded so that a change to it
+/// shows: on the full disagreeing-view scene the view at 38 degrees, which
+/// sees a plane turned 25 degrees from the others', is grown jointly with its
+/// rung's other view, at 25 degrees, and the joint growth is taken. A joint
+/// growth is one estimate to the distance test, so the view is not left out:
+/// it joins well within the agreement distance, the final normal ends about
+/// 5 degrees off the others' plane, and the reported precision is high
+/// enough that the report does not say low confidence. The two-view ladder
+/// left the view out as too far and ended within a degree.
+/// `specs/drafts/grown-plane-normal-open-questions.md` § "The three-way
+/// ladder's first choices", *A disagreeing partner*, describes it.
+#[test]
+fn known_weakness_a_disagreeing_view_with_a_partner_is_not_left_out() {
+    let scene = disagreeing_scene();
+    let edited = edited_of(&scene);
+    let track = tilted_track(&edited, Vector3::y(), 10.0);
+    let (odd, partner) = (row_of(&track, 4), row_of(&track, 3));
+    let (turned, report) = run(&scene, &edited, &track, &every_view());
+    let sequence = sequence_of(&report);
+    let joint = sequence
+        .trace
+        .iter()
+        .find(|t| t.observation == odd || t.partner.is_some_and(|p| p.observation == odd))
+        .expect("the disagreeing view is tried");
+    let pair = [
+        joint.observation,
+        joint.partner.expect("a partner").observation,
+    ];
+    assert!(pair.contains(&odd) && pair.contains(&partner), "{joint:#?}");
+    assert_eq!(joint.outcome, GrownPlaneTryOutcome::Matched, "{joint:#?}");
+    match &sequence.views[odd] {
+        // 1.6 measured, under the 3.0 that leaves an estimate out.
+        GrownPlaneView::Joined { distance, .. } => {
+            let d = distance.expect("a combined plane");
+            assert!((1.0..3.0).contains(&d), "{d}: {report}");
+        }
+        other => panic!("joined, not {other:?}: {report}"),
+    }
+    // 5.27 degrees measured, where the two-view ladder ended within one.
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!((3.0..8.0).contains(&after), "{after:.3} deg off: {report}");
+    // 0.89 degrees measured: the error is not flagged.
+    let precision = sequence.precision.expect("views joined");
+    assert!(precision.sigma_weak_deg < 1.5, "{report}");
+    assert!(!precision.low_confidence, "{report}");
+}
+
 /// A checker four image px a square, so that a 7×7 window matches equally
 /// one period of eight px apart.
 fn checker(x: f64, y: f64) -> f64 {
@@ -1029,7 +1076,7 @@ fn disagreeing_scene() -> Scene {
 /// with no sink, with a sink at the overview level and with a detailed one.
 /// The overview level records the step and one phase per try; the detailed
 /// one adds every stage under them, here including a view left out by the
-/// means, the pairs, the picks and the shift-only fits. A view whose keypoint
+/// means (the disagreeing one, grown alone with six picks), the pairs, the picks and the shift-only fits. A view whose keypoint
 /// is removed is left out with no try. No joint fit is recorded.
 #[test]
 fn the_grown_plane_normals_detail_phases_change_nothing() {
@@ -1223,6 +1270,30 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
         assert_eq!(depth_of("pair fit"), depth_of("pairs") + 1);
         if shift_only > 0 {
             assert_eq!(depth_of("shift-only fit"), step + 1);
+        }
+        if max_selected_views == 6 {
+            // Every view with a keypoint is matched. With the 8-degree view
+            // left without a keypoint, the disagreeing view is grown alone,
+            // and the means leave it out as too far.
+            let refused = detailed_phases
+                .iter()
+                .filter(|(n, _, note)| {
+                    let note = note.as_deref().unwrap_or("");
+                    let words: Vec<&str> = note.split_whitespace().collect();
+                    *n == "mean" && words.len() > 2 && words[0] != words[2]
+                })
+                .count();
+            assert!(refused >= 1, "{detailed_phases:#?}");
+            assert!(
+                matches!(
+                    sequence.views[row_of(&track, 4)],
+                    GrownPlaneView::LeftOut {
+                        reason: GrownPlaneRefusal::TooFar,
+                        ..
+                    }
+                ),
+                "{sequence:#?}"
+            );
         }
     }
 }

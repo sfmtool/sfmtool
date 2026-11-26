@@ -1633,7 +1633,11 @@ the scenes with up to six views that need every view picked set a target σ of
   25° from the others', with views at 8°, 15° and 25°, one a rung so every view
   is grown alone, passes the floor on its own and is left out as `TooFar` at
   more than 3σ, with one try and no kept pair holding it; the normal ends
-  within a degree of the others' plane.
+  within a degree of the others' plane. **The same view with a partner,** on
+  the scene with a 50° view as well, where it is grown jointly with the 25°
+  view, records a known weakness: the joint growth is taken, the view joins
+  at a distance between 1 and 3 (1.6 measured), the normal ends 3° to 8° off
+  (5.3° measured) and the report does not say low confidence (σ 0.89°).
 - **Repeating texture under the spot:** a checker of 8 px period, with three
   views' poses turned so the photograph's content sits more than 5 px from where
   the pose projects the point and each keypoint on the content. Every view joins
@@ -1747,8 +1751,9 @@ the scenes with up to six views that need every view picked set a target σ of
   ([test_bench_normal_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_normal_rust_bindings.py)):
   on `seoul_bull_sculpture_ground_truth_v02` point 255, three passes from the
   stored normal, the first turning it more than 30°, the second and third
-  under 10° (5.3° and 8.2° measured; its two other views are grown
-  jointly).
+  each by less than the weakest σ the pass reports (5.3° and 8.2° against
+  21.0° and 18.1° measured; its two other views are grown jointly), every
+  pass reporting low confidence. The passes do not settle on this point.
 - **The analytic Jacobian,** on renders of a textured plane through a pinhole, a
   radial lens and a fisheye, from a reference facing it and views 25° and 35°
   off: with the bilinear read's own derivative, every column of a view fit over
