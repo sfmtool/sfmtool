@@ -360,7 +360,8 @@ pub enum GrownPlaneRefusal {
     UnderFloor,
     /// Its own plane is further than
     /// [`GrownPlaneNormalOptions::max_agreement_distance`] from the combined
-    /// plane.
+    /// plane; for a joint growth's attempt, one of its views' own planes is
+    /// that far from the plane kept before it.
     TooFar,
     /// At the combined plane, at its shift moved there, its robust grid score
     /// is under [`GrownPlaneNormalOptions::min_held_zncc`].
@@ -405,7 +406,9 @@ pub struct GrownPlaneAttempt {
     /// frame; `NaN` for a growth that stopped early.
     pub sigma_deg: f64,
     /// Why it was refused, [`GrownPlaneRefusal::UnderFloor`] or
-    /// [`GrownPlaneRefusal::StoppedEarly`]; `None` when it was taken. Whether a
+    /// [`GrownPlaneRefusal::StoppedEarly`], or for a joint growth
+    /// [`GrownPlaneRefusal::TooFar`] when a view's own plane is too far from
+    /// the plane kept before it; `None` when it was taken. Whether a
     /// taken one is kept is the combination's verdict, in
     /// [`GrownPlaneSequence::views`].
     pub refusal: Option<GrownPlaneRefusal>,
@@ -423,6 +426,12 @@ pub struct GrownPlaneAttempt {
     /// score at the growth's plane, the pick's first: the joint growth is
     /// taken only when both reach the floor. `None` otherwise.
     pub view_zncc: Option<[f64; 2]>,
+    /// For a joint growth both of whose views reached the floor, where the
+    /// views kept before it had a combined plane, each view's own plane's
+    /// Mahalanobis distance from that plane, the pick's first: the joint
+    /// growth is refused ([`GrownPlaneRefusal::TooFar`]) when either is over
+    /// [`GrownPlaneNormalOptions::max_agreement_distance`]. `None` otherwise.
+    pub view_distance: Option<[f64; 2]>,
 }
 
 /// The second view of a joint growth: the view of the pick's rung grown
@@ -844,7 +853,11 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// view that most constrains the tilt along the axis the pick leaves weak:
 /// one plane for the two views, each with its own shift and compared with the
 /// reference only, taken when its mean score and each view's own score reach
-/// the floor; otherwise the view that reaches it is grown alone. A pick whose
+/// the floor and, where the views kept before it have a combined plane, each
+/// view's own plane lies within
+/// [`GrownPlaneNormalOptions::max_agreement_distance`] of it; otherwise the
+/// view that reaches the floor is grown alone, or both where a view is too
+/// far. A pick whose
 /// rung holds no other view, as on a track of two views, is grown alone. A
 /// rung waits until one of its views is kept. The selection stops when the
 /// combined plane's weakest `σ` reaches
@@ -1836,6 +1849,7 @@ impl<'a> Sequence<'_, 'a> {
                         grid_rounds: Vec::new(),
                         partner_shift: None,
                         view_zncc: None,
+                        view_distance: None,
                     },
                 });
             }
@@ -1896,6 +1910,7 @@ impl<'a> Sequence<'_, 'a> {
                 grid_rounds,
                 partner_shift: None,
                 view_zncc: None,
+                view_distance: None,
             },
         })
     }

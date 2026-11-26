@@ -485,19 +485,16 @@ fn a_view_whose_own_plane_disagrees_is_left_out() {
     );
 }
 
-/// A known weakness of the three-way ladder, recorded so that a change to it
-/// shows: on the full disagreeing-view scene the view at 38 degrees, which
-/// sees a plane turned 25 degrees from the others', is grown jointly with its
-/// rung's other view, at 25 degrees, and the joint growth is taken. A joint
-/// growth is one estimate to the distance test, so the view is not left out:
-/// it joins well within the agreement distance, the final normal ends about
-/// 5 degrees off the others' plane, and the reported precision is high
-/// enough that the report does not say low confidence. The two-view ladder
-/// left the view out as too far and ended within a degree.
-/// `specs/drafts/grown-plane-normal-open-questions.md` § "The three-way
-/// ladder's first choices", *A disagreeing partner*, describes it.
+/// On the full disagreeing-view scene the view at 38 degrees, which sees a
+/// plane turned 25 degrees from the others', is grown jointly with its rung's
+/// other view, at 25 degrees. Its own plane lies too far from the plane kept
+/// before the joint growth, so the joint growth is refused as too far, with
+/// no first-window or floor test failing, and both views are grown alone; the
+/// combination leaves the disagreeing view out as too far, and the normal
+/// ends on the others' plane (0.08 degrees off measured; without the test the
+/// joint growth was taken and the normal ended 5.3 degrees off).
 #[test]
-fn known_weakness_a_disagreeing_view_with_a_partner_is_not_left_out() {
+fn a_disagreeing_view_with_a_partner_is_left_out_as_too_far() {
     let scene = disagreeing_scene();
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::y(), 10.0);
@@ -507,29 +504,53 @@ fn known_weakness_a_disagreeing_view_with_a_partner_is_not_left_out() {
     let joint = sequence
         .trace
         .iter()
-        .find(|t| t.observation == odd || t.partner.is_some_and(|p| p.observation == odd))
-        .expect("the disagreeing view is tried");
+        .find(|t| t.partner.is_some())
+        .expect("a joint growth");
     let pair = [
         joint.observation,
         joint.partner.expect("a partner").observation,
     ];
     assert!(pair.contains(&odd) && pair.contains(&partner), "{joint:#?}");
-    assert_eq!(joint.outcome, GrownPlaneTryOutcome::Matched, "{joint:#?}");
-    match &sequence.views[odd] {
-        // 1.6 measured, under the 3.0 that leaves an estimate out.
-        GrownPlaneView::Joined { distance, .. } => {
-            let d = distance.expect("a combined plane");
-            assert!((1.0..3.0).contains(&d), "{d}: {report}");
-        }
-        other => panic!("joined, not {other:?}: {report}"),
+    assert_eq!(joint.outcome, GrownPlaneTryOutcome::LeftOut, "{joint:#?}");
+    let attempt = joint.attempts.last().expect("a growth");
+    assert_eq!(
+        attempt.refusal,
+        Some(GrownPlaneRefusal::TooFar),
+        "{attempt:#?}"
+    );
+    let [za, zb] = attempt.view_zncc.expect("both views scored");
+    assert!(za >= 0.5 && zb >= 0.5, "{attempt:#?}");
+    let distances = attempt.view_distance.expect("a plane kept before it");
+    let at = |row: usize| if joint.observation == row { 0 } else { 1 };
+    assert!(distances[at(odd)] > 3.0, "{distances:?}");
+    assert!(distances[at(partner)] <= 3.0, "{distances:?}");
+    // Both views are grown alone after it.
+    for row in [odd, partner] {
+        assert!(
+            sequence
+                .trace
+                .iter()
+                .any(|t| t.observation == row && t.partner.is_none()),
+            "{sequence:#?}"
+        );
     }
-    // 5.27 degrees measured, where the two-view ladder ended within one.
+    assert!(
+        matches!(
+            sequence.views[odd],
+            GrownPlaneView::LeftOut {
+                reason: GrownPlaneRefusal::TooFar,
+                ..
+            }
+        ),
+        "{:?}",
+        sequence.views[odd]
+    );
+    assert!(matches!(
+        sequence.views[partner],
+        GrownPlaneView::Joined { .. }
+    ));
     let after = degrees(patch_frame_of(&turned).normal(), truth());
-    assert!((3.0..8.0).contains(&after), "{after:.3} deg off: {report}");
-    // 0.89 degrees measured: the error is not flagged.
-    let precision = sequence.precision.expect("views joined");
-    assert!(precision.sigma_weak_deg < 1.5, "{report}");
-    assert!(!precision.low_confidence, "{report}");
+    assert!(after < 0.25, "{after:.3} deg off: {report}");
 }
 
 /// A checker four image px a square, so that a 7×7 window matches equally
@@ -1736,6 +1757,51 @@ fn a_track_of_two_views_grows_its_one_view_alone() {
     assert!(pick.partner.is_none() && pick.matched, "{pick:#?}");
     assert_eq!(sequence.joined(), 1);
     assert_eq!(sequence.outcome, GrownPlaneOutcome::Turned);
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3}: {report}");
+}
+
+/// Four views 20 degrees from a reference that faces the plane, on opposite
+/// sides of it, grown as two joint growths.
+fn four_opposite_views() -> (EditableTrack, EditableTrack, NormalReport) {
+    let views = [(20.0, 0.0), (20.0, 180.0), (20.0, 90.0), (20.0, 270.0)];
+    let scene = ladder_scene(&views, &[]);
+    run_ladder(&scene)
+}
+
+/// The first rung's joint growth has no plane kept before it, so its views'
+/// own planes are not held to the distance test: it records no distances and
+/// is taken on its scores alone.
+#[test]
+fn the_first_rungs_joint_growth_is_not_held_to_the_distance_test() {
+    let (_, _, report) = four_opposite_views();
+    let sequence = sequence_of(&report);
+    let first = &sequence.trace[0];
+    assert!(first.partner.is_some(), "{first:#?}");
+    assert_eq!(first.attempts[0].tilt_start, GrownPlaneTiltStart::Starting);
+    assert!(
+        first.attempts.iter().all(|a| a.view_distance.is_none()),
+        "{first:#?}"
+    );
+    assert!(first.attempts[0].view_zncc.is_some(), "{first:#?}");
+    assert_eq!(first.outcome, GrownPlaneTryOutcome::Matched, "{first:#?}");
+}
+
+/// A later joint growth whose two views agree with the plane kept before it
+/// is held to the distance test, both views within the cutoff, and taken.
+#[test]
+fn a_joint_growth_whose_views_agree_with_the_kept_plane_is_taken() {
+    let (_, turned, report) = four_opposite_views();
+    let sequence = sequence_of(&report);
+    let second = &sequence.trace[1];
+    assert!(second.partner.is_some(), "{second:#?}");
+    let attempt = &second.attempts[0];
+    assert_eq!(attempt.tilt_start, GrownPlaneTiltStart::Combined);
+    let distances = attempt.view_distance.expect("a plane kept before it");
+    assert!(distances.iter().all(|&d| d <= 3.0), "{distances:?}");
+    assert!(attempt.refusal.is_none(), "{attempt:#?}");
+    assert_eq!(second.outcome, GrownPlaneTryOutcome::Matched, "{second:#?}");
+    assert_eq!(sequence.joined(), 4, "{report}");
     let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3}: {report}");
 }

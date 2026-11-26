@@ -32,7 +32,7 @@
 
 use nalgebra::{Matrix2, Vector2};
 
-use super::combine::{sigmas_deg_at, Combined, Estimate, PairEstimate};
+use super::combine::{distance, sigmas_deg_at, Combined, Estimate, PairEstimate};
 use super::render::ViewRender;
 use super::solve::{
     carried_information, maximise, schur_tilt, score_and_normal_matrix, tilt_information,
@@ -691,10 +691,14 @@ impl Sequence<'_, '_> {
     /// a view has been kept, from the starting plane otherwise or, on a rung
     /// under [`STARTING_PLANE_RETRY_RUNGS`], where that is refused.
     ///
-    /// The joint growth is taken when its mean score reaches the floor and
-    /// so does each view's own robust score at its plane: its plane is then
-    /// one estimate, combined with the picks before it, with the information
-    /// of both views. When it reaches the floor but one view does not, that
+    /// The joint growth is taken when its mean score reaches the floor, so
+    /// does each view's own robust score at its plane, and, where the views
+    /// kept before it have a combined plane, each view's own plane (one
+    /// Gauss–Newton step of that view's residual alone from the joint plane)
+    /// lies within `max_agreement_distance` of that plane by the
+    /// combination's distance: its plane is then one estimate, combined with
+    /// the picks before it, with the information of both views. A view too
+    /// far refuses it (`TooFar`), and both views are grown alone. When it reaches the floor but one view does not, that
     /// view is left out under the floor and the other is grown alone, as
     /// [`Self::take`] grows a pick; when it does not reach the floor, both
     /// are grown alone. Each estimate is combined in turn. Whether the
@@ -751,7 +755,27 @@ impl Sequence<'_, '_> {
             last.attempt.view_zncc = Some([za, zb]);
             let floor = options.min_held_zncc;
             match (za >= floor, zb >= floor) {
-                (true, true) => taken = Some(last.estimate.clone()),
+                // Each view's own plane is held to the combination's
+                // distance test against the plane kept before this growth,
+                // where there is one; a view too far refuses the joint
+                // growth, and both views are grown alone.
+                (true, true) => match (last.own, from) {
+                    (Some(own), Some(prior)) => {
+                        let tau = options.zncc_tolerance;
+                        let d = own.map(|(t, info)| {
+                            distance(t, &info, prior, &state.kept_information, tau)
+                        });
+                        last.attempt.view_distance = Some(d);
+                        let far = |d: f64| d.is_nan() || d > options.max_agreement_distance;
+                        if far(d[0]) || far(d[1]) {
+                            last.attempt.refusal = Some(GrownPlaneRefusal::TooFar);
+                            alone.extend([i, j]);
+                        } else {
+                            taken = Some(last.estimate.clone());
+                        }
+                    }
+                    _ => taken = Some(last.estimate.clone()),
+                },
                 (ok_a, ok_b) => {
                     for (k, ok) in [(i, ok_a), (j, ok_b)] {
                         if ok {

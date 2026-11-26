@@ -394,13 +394,27 @@ class TestGrownPlaneNormal:
                 assert attempt["stage_zncc"].dtype == np.float64
                 assert attempt["shift"].shape == (2,)
                 assert np.linalg.norm(attempt["normal"]) == pytest.approx(1.0)
-                assert attempt["refusal"] in {None, "under_floor", "stopped_early"}
+                assert attempt["refusal"] in {
+                    None,
+                    "under_floor",
+                    "stopped_early",
+                    "too_far",
+                }
                 assert attempt["tilt_start"] in {"starting", "combined"}
                 # A joint growth's attempts carry its partner's shift.
                 joint = entry["partner"] is not None
                 assert (attempt["partner_shift"] is not None) == joint
                 if attempt["view_zncc"] is not None:
                     assert joint and attempt["view_zncc"].shape == (2,)
+                # Each view's distance from the plane kept before a joint
+                # growth whose views reached the floor; too far refuses it.
+                if attempt["view_distance"] is not None:
+                    assert attempt["view_zncc"] is not None
+                    assert attempt["view_distance"].shape == (2,)
+                    far = bool(np.any(attempt["view_distance"] > 3.0))
+                    assert far == (attempt["refusal"] == "too_far")
+                else:
+                    assert attempt["refusal"] != "too_far"
                 stopped = attempt["refusal"] == "stopped_early"
                 assert attempt["stage_turn_deg"].dtype == np.float64
                 # One turn per fitted window stage, as far as the growth ran.

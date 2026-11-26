@@ -868,6 +868,53 @@ impl JointFit<'_, '_, '_> {
     }
 }
 
+/// One view's normal matrix over `[a, b, sx, sy]` and gradient of its own
+/// residual, in a joint fit.
+pub(super) type ViewEquations = (DMatrix<f64>, DVector<f64>);
+
+impl JointFit<'_, '_, '_> {
+    /// The score at `p` and the normal matrix of the residual frozen there,
+    /// as [`score_and_normal_matrix`] reads them, and from the same render and
+    /// Jacobian each view's own normal matrix `JᵥᵀJᵥ` over `[a, b, sᵥx, sᵥy]`
+    /// and gradient `Jᵥᵀrᵥ` of its own residual, read through the Sobel
+    /// gradient; the last two `None` where nothing can be read.
+    pub(super) fn score_and_normal_matrices(
+        &self,
+        p: &[f64],
+    ) -> (f64, Option<DMatrix<f64>>, Option<Vec<ViewEquations>>) {
+        let (score, frozen) = self.freeze(p);
+        let Some((fz, r0)) = frozen else {
+            return (score, None, None);
+        };
+        if r0.is_empty() {
+            return (score, None, None);
+        }
+        let j = self.jacobian(&fz, p, &r0, GradientRead::Sobel);
+        let normal = j.tr_mul(&j);
+        let k = self.views.len();
+        let mut out = vec![(DMatrix::zeros(4, 4), DVector::zeros(4)); k];
+        let mut row = 0;
+        let mut scratch = Vec::new();
+        for (q, block) in &fz.blocks {
+            scratch.clear();
+            block.residuals(&fz.samples[*q], &mut scratch);
+            let m = scratch.len();
+            let cols = [0, 1, 2 + 2 * q, 3 + 2 * q];
+            let (n, g) = &mut out[*q];
+            for r in row..row + m {
+                for (a, &ca) in cols.iter().enumerate() {
+                    g[a] += j[(r, ca)] * r0[r];
+                    for (b, &cb) in cols.iter().enumerate() {
+                        n[(a, b)] += j[(r, ca)] * j[(r, cb)];
+                    }
+                }
+            }
+            row += m;
+        }
+        (score, Some(normal), Some(out))
+    }
+}
+
 impl Objective for JointFit<'_, '_, '_> {
     type Frozen = JointFrozen;
 

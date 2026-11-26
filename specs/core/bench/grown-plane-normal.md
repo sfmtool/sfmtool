@@ -229,11 +229,12 @@ pub struct GrownPlaneAttempt {
     pub normal: [f64; 3],       // the view's own plane
     pub grid_zncc: f64,         // on the grid laid at that plane; NaN when it stopped early
     pub sigma_deg: f64,         // its own weakest σ; NaN when it stopped early
-    pub refusal: Option<GrownPlaneRefusal>, // UnderFloor or StoppedEarly
+    pub refusal: Option<GrownPlaneRefusal>, // UnderFloor or StoppedEarly; TooFar for a joint growth the too-far check refused
     pub stage_turn_deg: Vec<f64>, // each fitted window stage's turn, as far as the growth ran
     pub grid_rounds: Vec<GrownPlaneGridRound>, // empty when it stopped early; one with turned_support off
     pub partner_shift: Option<[f64; 2]>, // a joint growth's partner's shift
     pub view_zncc: Option<[f64; 2]>,     // a joint growth that reached the floor: each view's own score at its plane
+    pub view_distance: Option<[f64; 2]>, // the too-far check where made: each view's own plane's distance from the plane kept before
 }
 
 /// One pair of kept views matched against each other.
@@ -1194,8 +1195,23 @@ read on the grid laid at its plane, is under `min_held_zncc` is refused; on
 the second rung it is grown once more from the starting plane, as a single
 pick is. One that passes is scored again, each view on its own at the
 growth's plane and its own shift (`view_zncc`). When both views reach the
-floor the joint growth is taken: its plane is one estimate, with both views'
-information, combined with the estimates before it. When only one view does,
+floor and the views kept before the joint growth have a combined plane, each
+view is then held to the robust combination's distance test against that
+plane (the **too-far check**): the view's own plane is one Gauss–Newton step
+of that view's residual alone, over the tilt and its own shift, from the
+joint plane, with that view's own information (its own normal matrix with its
+shift eliminated), both carried into the starting frame; its distance is the
+combination's Mahalanobis distance from the plane kept before, the two
+covariances added (`view_distance`). Both views' steps and information come
+from the read that judges the growth, so the check costs no render. When
+either distance is over `max_agreement_distance`, or not a number, the joint
+growth is refused (`TooFar`) and both views are grown alone, so the
+combination judges each as it judges any single view. On the first rung, and
+wherever no view has been kept before, there is no plane to hold the views
+to, and the check is not made. When both views reach the floor and pass the
+check where it is made, the joint growth is taken: its plane is one estimate,
+with both views' information, combined with the estimates before it. When
+only one view reaches the floor,
 the other is left out under the floor and the one that reaches it is grown
 alone, as a pick is; when the joint growth is refused, both are grown alone,
 the pick first. A view grown alone after a joint growth starts from the plane
@@ -1213,9 +1229,10 @@ turn.
 - The robust combination keeps or leaves out the two views together. Its held
   check scores both views at the mean, each at its own shift moved there by
   the joint normal matrix, and leaves both out when either is under the floor.
-  A joint growth is one estimate to the distance test, so a partner whose own
-  plane disagrees with the others is not left out on its own: it moves the
-  joint plane instead.
+  A taken joint growth is one estimate to the distance test; a view whose own
+  plane disagrees with the plane kept before is caught by the too-far check
+  before the growth is taken, except on the first rung, where no plane is
+  kept yet.
 - The wide pairs are taken among the kept estimates by their picks' views: a
   joint growth's partner is in no pair.
 - In the report, a joint try is one `GrownPlaneTry` with `partner` set, whose
@@ -1635,9 +1652,11 @@ the scenes with up to six views that need every view picked set a target σ of
   more than 3σ, with one try and no kept pair holding it; the normal ends
   within a degree of the others' plane. **The same view with a partner,** on
   the scene with a 50° view as well, where it is grown jointly with the 25°
-  view, records a known weakness: the joint growth is taken, the view joins
-  at a distance between 1 and 3 (1.6 measured), the normal ends 3° to 8° off
-  (5.3° measured) and the report does not say low confidence (σ 0.89°).
+  view: both views reach the floor at the joint plane, the too-far check puts
+  the disagreeing view's own plane over 3 from the plane kept before and the
+  partner's within it, the joint growth is refused as `TooFar`, both views
+  are grown alone, the combination leaves the disagreeing view out as
+  `TooFar`, and the normal ends within 0.25° of the plane (0.08° measured).
 - **Repeating texture under the spot:** a checker of 8 px period, with three
   views' poses turned so the photograph's content sits more than 5 px from where
   the pose projects the point and each keypoint on the content. Every view joins
@@ -1674,7 +1693,11 @@ the scenes with up to six views that need every view picked set a target σ of
   rung of a view seeing unrelated texture and a good view grows them jointly,
   does not take the joint growth, leaves the unrelated view out and grows the
   good one alone after it, which joins; a track of two views grows its one
-  view alone, with no partner in the trace or the picks.
+  view alone, with no partner in the trace or the picks. On four views 20°
+  from the reference on opposite sides, grown as two joint growths, the first
+  rung's records no distance and is taken on its scores, and the second,
+  grown from the combined plane, has both views within 3 of it and is
+  taken.
   [jacobian_tests.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/jacobian_tests.rs)
   checks that a joint fit's score and normal matrix are its two views' added,
   and the binding's tests that on `seoul_bull_sculpture_ground_truth_v02`
@@ -1809,7 +1832,7 @@ proposes them.
 
 The questions still open about the step's settings and rules (the calibration
 of σ, the agreement numbers, the weak-turn thresholds, the ladder, the
-three-way ladder's partner, model, pairs and disagreeing partners, the pairs,
+three-way ladder's partner, model, pairs and first-rung joint growths, the pairs,
 the selection's model, the window schedule, the cheaper growths' constants, the
 optimiser, points where every view is weak or narrow, blur matching, the
 report's fields, and the turned support's score, side, pyramid levels,

@@ -19,13 +19,11 @@
 
 use std::rc::Rc;
 
-use nalgebra::{Matrix2, Vector3};
+use nalgebra::{DVector, Matrix2, Vector3};
 
 use super::combine::{sigmas_deg_at, Estimate};
 use super::render::ViewRender;
-use super::solve::{
-    carried_information, maximise, schur_tilt, score_and_normal_matrix, JointFit, Reading,
-};
+use super::solve::{carried_information, maximise, schur_tilt, JointFit, Reading, ViewEquations};
 use super::{
     reached, tilt_start_word, verdict_words, GrownPlaneAttempt, GrownPlaneGridRound,
     GrownPlaneRefusal, GrownPlaneTiltStart, NormalError, Sequence, EARLY_REFUSAL_FROM_STAGE,
@@ -44,6 +42,11 @@ pub(super) struct JointGrown {
     /// The estimate it gives, the pick's index and the partner's, with the
     /// joint normal matrix; information zero for a growth that stopped early.
     pub(super) estimate: Estimate,
+    /// Each view's own plane, the pick's first: one Gauss–Newton step of that
+    /// view's residual alone from the joint plane and its own shift, as a
+    /// tilt of the starting frame, with that view's own information about
+    /// the tilt there; `None` unless the growth reached the floor.
+    pub(super) own: Option<[([f64; 2], Matrix2<f64>); 2]>,
 }
 
 impl<'a> Sequence<'_, 'a> {
@@ -150,6 +153,7 @@ impl<'a> Sequence<'_, 'a> {
                 grid_rounds: Vec::new(),
                 partner_shift: Some(s1),
                 view_zncc: None,
+                view_distance: None,
             };
             let mut judge = growth.detail_phase("judge");
             progress_note!(judge, "{}", verdict_words(attempt.refusal));
@@ -173,6 +177,7 @@ impl<'a> Sequence<'_, 'a> {
                 tilt,
                 attempt,
                 estimate,
+                own: None,
             });
         }
         growth.check_cancel()?;
@@ -245,7 +250,7 @@ impl<'a> Sequence<'_, 'a> {
         let mut q = p.clone();
         q[0] = own[0];
         q[1] = own[1];
-        let (score_sum, matrix) = score_and_normal_matrix(&fit, &q);
+        let (score_sum, matrix, per_view) = fit.score_and_normal_matrices(&q);
         let local = matrix.as_ref().map_or_else(Matrix2::zeros, schur_tilt);
         let (information, frame) = if turned {
             (
@@ -285,6 +290,38 @@ impl<'a> Sequence<'_, 'a> {
             grid_rounds,
             partner_shift: Some(s1),
             view_zncc: None,
+            view_distance: None,
+        };
+        // Each view's own plane, from the same read: the Gauss–Newton step
+        // of its residual alone over its tilt and shift, with a floor on the
+        // diagonal so a parameter the residual does not see stays put.
+        let own = match (&per_view, attempt.refusal) {
+            (Some(views), None) => {
+                let one = |(n, g): &ViewEquations| {
+                    let scale = (0..4).map(|k| n[(k, k)]).fold(0.0, f64::max).max(1e-12);
+                    let mut m = n.clone();
+                    for k in 0..4 {
+                        m[(k, k)] += 1e-9 * scale;
+                    }
+                    let step = m
+                        .cholesky()
+                        .map(|c| c.solve(&(-g)))
+                        .unwrap_or_else(|| DVector::zeros(4));
+                    let t = [q[0] + step[0], q[1] + step[1]];
+                    let info = schur_tilt(n);
+                    if turned {
+                        let normal = laid.grid.plane_normal(t);
+                        (
+                            self.start_tilt(normal),
+                            carried_information(&info, &laid.grid.start_chart_jacobian()),
+                        )
+                    } else {
+                        (t, info)
+                    }
+                };
+                Some([one(&views[0]), one(&views[1])])
+            }
+            _ => None,
         };
         note_growth(
             &mut growth,
@@ -305,6 +342,7 @@ impl<'a> Sequence<'_, 'a> {
             tilt,
             attempt,
             estimate,
+            own,
         })
     }
 }
