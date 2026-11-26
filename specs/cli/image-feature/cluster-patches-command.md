@@ -142,11 +142,15 @@ consumer reads the cells.
    when it is under the 1536 `--enable` writes by default. For a workspace
    whose object has a higher threshold, which `--enable` refuses since the
    file has the object, the line names the threshold to set in its
-   `.sfm-workspace.json` and the one the file holds. A workspace is shown
+   `.sfm-workspace.json` and the one the file holds. A photograph in no
+   workspace has no threshold to change and is named in no step, so when
+   none of them is in a workspace the line ends after the decodes. A
+   workspace is shown
    as the `sfm ws` commands show a path, relative to the current directory
    when it is under it. The Seoul bull's 17 photographs of 270 x 480 px, in
    a workspace `ws` that `sfm ws init` made, read with a 4 MB budget
-   (`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=4`), give
+   (`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=4`), give a line such as (the count
+   of decodes differs from run to run)
    `The cache decoded 17 photographs whole 1161 times, since their tiles are
    more than its budget. To read them from mipmaps instead, a tile at a
    time, set "out_of_core_long_side" in ws/.sfm-workspace.json to 479 or

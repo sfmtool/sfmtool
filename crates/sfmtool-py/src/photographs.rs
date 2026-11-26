@@ -109,8 +109,7 @@ impl PyPhotographLayout {
     }
 
     /// Whether the photograph is read from its mipmap: its workspace has
-    /// ``mipmap_options``, a side is over their ``out_of_core_long_side``,
-    /// and it is large enough to store a reduced level.
+    /// ``mipmap_options`` and a side is over their ``out_of_core_long_side``.
     #[getter]
     fn out_of_core(&self) -> bool {
         self.inner.layout.is_out_of_core()

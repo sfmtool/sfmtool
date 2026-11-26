@@ -116,3 +116,28 @@ def test_a_workspace_whose_threshold_keeps_them_in_core_is_given_a_lower_one(
         '"out_of_core_long_side" in with/.sfm-workspace.json to 4031 or less '
         "(it is 8192) and run 'sfm ws mipmaps --enable without'."
     )
+
+
+def test_photographs_in_no_workspace_are_named_in_no_step(tmp_path, monkeypatch):
+    """A photograph outside every workspace has no threshold to change: the
+    line names only the workspace of the others, and ends after the decodes
+    when no photograph is in one."""
+    monkeypatch.chdir(tmp_path)
+    ws = _workspace(tmp_path / "photos")
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    sizes = {ws / "a.jpg": (6000, 4000), loose / "b.jpg": (800, 600)}
+
+    lines = photograph_cache_lines(_Cache(5, sizes), sizes)
+
+    assert lines[1].endswith(
+        "a tile at a time, run 'sfm ws mipmaps --enable photos'."
+    )
+
+    loose_only = {loose / "b.jpg": (800, 600)}
+    lines = photograph_cache_lines(_Cache(5, loose_only), loose_only)
+
+    assert lines[1] == (
+        "The cache decoded 1 photographs whole 5 times, since their tiles are "
+        "more than its budget."
+    )

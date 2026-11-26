@@ -66,10 +66,15 @@ def _out_of_core_advice(in_core: dict[Path, int]) -> str:
     )
 
     # By workspace root; the roots are named in sorted order, since a caller
-    # may pass its paths as a set.
+    # may pass its paths as a set. A photograph is in its directory's
+    # workspace, so the search runs once for each directory. A photograph in
+    # no workspace has no threshold to change, and is left out.
+    roots: dict[Path, Path | None] = {}
     shortest: dict[Path, int] = {}
     for path, side in in_core.items():
-        root = find_workspace_for_path(path)
+        if path.parent not in roots:
+            roots[path.parent] = find_workspace_for_path(path.parent)
+        root = roots[path.parent]
         if root is not None:
             shortest[root] = min(side, shortest.get(root, side))
     default = new_workspace_mipmap_options()["out_of_core_long_side"]
