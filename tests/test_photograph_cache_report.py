@@ -130,9 +130,7 @@ def test_photographs_in_no_workspace_are_named_in_no_step(tmp_path, monkeypatch)
 
     lines = photograph_cache_lines(_Cache(5, sizes), sizes)
 
-    assert lines[1].endswith(
-        "a tile at a time, run 'sfm ws mipmaps --enable photos'."
-    )
+    assert lines[1].endswith("a tile at a time, run 'sfm ws mipmaps --enable photos'.")
 
     loose_only = {loose / "b.jpg": (800, 600)}
     lines = photograph_cache_lines(_Cache(5, loose_only), loose_only)
