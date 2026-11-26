@@ -342,9 +342,9 @@ and `sfm sift` decodes the original again once the files are written. Quality
 95 re-encodes a JPEG original's full-resolution copy closest to the original
 among the qualities measured (0.07 to 0.09 grey levels), and no quality
 depends on the original's format; a workspace of PNG or TIFF photographs can
-set `full_resolution_jpeg_quality` higher itself. Each workspace keeps the values
-in its own file, so a later change of these defaults does not change which
-pixels an existing workspace's kernels read.
+set `full_resolution_jpeg_quality` higher itself. Each workspace keeps the
+values in its own file, so a later change of these defaults does not change
+which pixels an existing workspace's kernels read.
 
 ## How a mipmap is made
 

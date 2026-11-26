@@ -5048,8 +5048,9 @@ decisions.
     `double_image_below_long_side` stays 4096, so a new workspace's
     photograph whose longer side is 1537 to 4095 px is out of core and
     doubled for SIFT; nothing relies on the two agreeing (§ "Which
-    photographs are out of core"). A workspace already made with 4096 keeps it, as every workspace
-    keeps its own value. Scripts that make a new workspace of
+    photographs are out of core"). A workspace already made with 4096
+    keeps it, as every workspace keeps its own value. Scripts that make a
+    new workspace of
     `dino_dog_toy`'s 2040 x 1536 photographs, `scripts/solve_crossval.py
     --datasets dino` and the setup `scripts/benchmark_flow_matching.py`
     describes, now have them out of core, so the extraction also makes their
