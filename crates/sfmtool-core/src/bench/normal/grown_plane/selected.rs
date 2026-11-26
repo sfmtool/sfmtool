@@ -12,14 +12,18 @@
 //! keypoint-implied shift; a pick of the second rung refused there is grown
 //! again from the starting plane, at the same shift, and a pick of a later
 //! rung is not. Every growth starts from the keypoint-implied shift, and none
-//! searches for another. A pick counts when a growth passes the floor on its
-//! own. The robust combination (`combine`) then keeps the planes that agree.
+//! searches for another. Each pick is grown jointly with a partner from its
+//! rung (the three-way ladder, `joint`), or alone where no other view is left
+//! in its rung. A growth counts when it passes the floor, a joint growth only
+//! when each of its views does too. The robust combination (`combine`) then
+//! keeps the planes that agree.
 //!
-//! The pairs are the widest among the kept views, each view in one pair at
-//! most; each is fitted from the combined plane with the two views' shifts
-//! held, and its plane joins the combination. When the step turns the patch,
-//! every view not picked has its shift alone fitted at the final plane, over
-//! a mid-size window and then for two iterations over the whole grid.
+//! The pairs are the widest among the kept estimates, by each estimate's
+//! pick, each view in one pair at most; each is fitted from the combined
+//! plane with the two views' shifts held, and its plane joins the
+//! combination. When the step turns the patch, every view not picked has its
+//! shift alone fitted at the final plane, over a mid-size window and then for
+//! two iterations over the whole grid.
 //!
 //! With the turned support a pair's fit runs as whole-grid rounds, each on
 //! the grid laid at the plane the pair has reached, and its information and
@@ -36,8 +40,9 @@ use super::solve::{
 };
 use super::{
     reached, verdict_words, Fate, GrownPlaneAttempt, GrownPlaneGridRound, GrownPlanePair,
-    GrownPlanePick, GrownPlaneRefusal, GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome,
-    Laid, NormalError, Outcome, Sequence, SHIFT_ONLY_GRID_ITERATIONS, SHIFT_ONLY_WINDOW,
+    GrownPlanePartner, GrownPlanePick, GrownPlaneRefusal, GrownPlaneTiltStart, GrownPlaneTry,
+    GrownPlaneTryOutcome, Laid, NormalError, Outcome, Sequence, SHIFT_ONLY_GRID_ITERATIONS,
+    SHIFT_ONLY_WINDOW,
 };
 use crate::progress::Progress;
 use crate::progress_note;
@@ -98,19 +103,26 @@ impl Sequence<'_, '_> {
             }
         }
         for (e, verdict) in estimates.iter().zip(&combined.views) {
-            fates[e.index] = match verdict.refusal {
-                None => Fate::Joined {
-                    estimate: Box::new(e.clone()),
-                    distance: verdict.distance,
-                    held: verdict.held,
-                    final_shift: None,
-                },
-                Some(reason) => Fate::LeftOut {
-                    reason,
-                    distance: verdict.distance,
-                    held: verdict.held,
-                },
-            };
+            // A joint growth's two views share its verdict, each with its own
+            // held score.
+            let views = std::iter::once((e.index, false, verdict.held))
+                .chain(e.partner.map(|(p, _)| (p, true, verdict.partner_held)));
+            for (index, partner, held) in views {
+                fates[index] = match verdict.refusal {
+                    None => Fate::Joined {
+                        estimate: Box::new(e.clone()),
+                        partner,
+                        distance: verdict.distance,
+                        held,
+                        final_shift: None,
+                    },
+                    Some(reason) => Fate::LeftOut {
+                        reason,
+                        distance: verdict.distance,
+                        held,
+                    },
+                };
+            }
         }
         Ok(Outcome {
             tilt: combined.tilt,
@@ -190,6 +202,7 @@ impl Sequence<'_, '_> {
             observation: candidate.row,
             image: candidate.image_index,
             angle_deg: candidate.angle_deg,
+            partner: None,
             attempts: judged.into_iter().map(|j| j.grown.attempt).collect(),
             outcome,
             combined_normal: None,
@@ -198,8 +211,10 @@ impl Sequence<'_, '_> {
         Ok(result)
     }
 
-    /// The widest pairs among the views `combined` kept, each view in one
-    /// pair at most, up to `max_pairs`, each fitted from the combined plane
+    /// The widest pairs among the views `combined` kept, each kept estimate
+    /// standing for its pick's view alone, so a joint growth's partner is in
+    /// no pair, each view in one pair at most, up to `max_pairs`, each fitted
+    /// from the combined plane
     /// `tilt` in a `pair fit` phase under one `pairs` phase.
     ///
     /// The pairs are taken greedily: every pair of kept views in order of
@@ -429,7 +444,9 @@ impl Sequence<'_, '_> {
     /// ([`STARTING_PLANE_RETRY_RUNGS`]). A rung stays until one of
     /// its views is kept, so a refused pick is followed by another view in
     /// the same range. A candidate whose angle is not finite is never
-    /// picked.
+    /// picked. Each pick is grown jointly with a partner from the range it
+    /// was taken from ([`Selection::partner_of`], [`Self::take_joint`]),
+    /// or alone ([`Self::take`]) where no other view is left in that range.
     fn select(
         &self,
         progress: &Progress<'_>,
@@ -471,13 +488,19 @@ impl Sequence<'_, '_> {
                     .then(a.cmp(b))
             };
             let first_rung = state.widest_kept.is_none();
+            // The range of angles the pick was taken from, which its partner
+            // is taken from too.
+            let mut range = (f64::NEG_INFINITY, f64::INFINITY);
             let (pick, predicted_weak) = if first_rung {
-                let range = options.first_rung_min_deg..=options.first_rung_max_deg;
-                let pick = (0..n)
+                let first = options.first_rung_min_deg..=options.first_rung_max_deg;
+                let in_range = (0..n)
                     .filter(left)
-                    .filter(|&i| range.contains(&angle(i)))
-                    .min_by(nearer)
-                    .or_else(|| (0..n).filter(left).min_by(nearer));
+                    .filter(|&i| first.contains(&angle(i)))
+                    .min_by(nearer);
+                if in_range.is_some() {
+                    range = (options.first_rung_min_deg, options.first_rung_max_deg);
+                }
+                let pick = in_range.or_else(|| (0..n).filter(left).min_by(nearer));
                 (pick, f64::NAN)
             } else {
                 let model = state.prediction.model(&state.estimates);
@@ -500,6 +523,7 @@ impl Sequence<'_, '_> {
                             .filter(|&i| (lo..=hi).contains(&angle(i))),
                     );
                     if pick.is_some() {
+                        range = (lo, hi);
                         break pick;
                     }
                     match last {
@@ -534,16 +558,31 @@ impl Sequence<'_, '_> {
                 break;
             };
             let widest_before = state.widest_kept;
-            if self.take(
-                state,
-                i,
-                rung,
-                predicted_weak,
-                progress,
-                matched,
-                trace,
-                picks,
-            )? {
+            let reached = match state.partner_of(self, i, range) {
+                Some(j) => self.take_joint(
+                    state,
+                    (i, j),
+                    rung,
+                    predicted_weak,
+                    progress,
+                    matched,
+                    trace,
+                    picks,
+                )?,
+                // No other view left in the pick's range, as on a track of
+                // two views: the pick is grown alone.
+                None => self.take(
+                    state,
+                    i,
+                    rung,
+                    predicted_weak,
+                    progress,
+                    matched,
+                    trace,
+                    picks,
+                )?,
+            };
+            if reached {
                 break;
             }
             // The rung is passed once the widest kept view widens; the next
@@ -594,28 +633,7 @@ impl Sequence<'_, '_> {
         let ok = result.is_ok();
         let mut sigma_after = f64::NAN;
         if let Ok(e) = &result {
-            state.estimates.push(e.clone());
-            state.passed += 1;
-            let combined = self.combine(&state.estimates, &[], progress);
-            let kept: Vec<&Estimate> = state
-                .estimates
-                .iter()
-                .zip(&combined.views)
-                .filter(|(_, v)| v.refusal.is_none())
-                .map(|(e, _)| e)
-                .collect();
-            state.kept_information = kept.iter().map(|e| e.information).sum();
-            state.widest_kept = kept
-                .iter()
-                .map(|e| self.candidates[e.index].angle_deg)
-                .filter(|a| a.is_finite())
-                .reduce(f64::max);
-            state.kept_tilt = combined.tilt;
-            sigma_after = combined.sigma_weak_deg(&self.start.grid.start, options.zncc_tolerance);
-            if let (Some(t), Some(last)) = (combined.tilt, trace.last_mut()) {
-                last.combined_normal = Some(self.start.grid.plane_normal(t).into());
-                last.combined_sigma_deg = sigma_after;
-            }
+            sigma_after = self.add_kept(state, e, trace.len() - 1, trace, progress);
         }
         matched[i] = Some(result);
         picks.push(GrownPlanePick {
@@ -627,8 +645,215 @@ impl Sequence<'_, '_> {
             predicted_weak,
             matched: ok,
             rung,
+            partner: None,
             sigma_after_deg: sigma_after,
         });
+        Ok(sigma_after <= options.target_sigma_deg)
+    }
+
+    /// Add `estimate`, a pick that passed the floor, to what the selection
+    /// has measured: combine it with the picks before it by the robust
+    /// combination, and record the combined plane after it in the try at
+    /// `try_index`. A joint growth counts as two views towards
+    /// `max_selected_views`. The combined plane's weakest `σ` after it.
+    fn add_kept(
+        &self,
+        state: &mut Selection,
+        estimate: &Estimate,
+        try_index: usize,
+        trace: &mut [GrownPlaneTry],
+        progress: &Progress<'_>,
+    ) -> f64 {
+        state.estimates.push(estimate.clone());
+        state.passed += if estimate.partner.is_some() { 2 } else { 1 };
+        let combined = self.combine(&state.estimates, &[], progress);
+        let kept: Vec<&Estimate> = state
+            .estimates
+            .iter()
+            .zip(&combined.views)
+            .filter(|(_, v)| v.refusal.is_none())
+            .map(|(e, _)| e)
+            .collect();
+        state.kept_information = kept.iter().map(|e| e.information).sum();
+        state.widest_kept = Selection::widest_of(self, &kept);
+        state.kept_tilt = combined.tilt;
+        let sigma = combined.sigma_weak_deg(&self.start.grid.start, self.options.zncc_tolerance);
+        if let (Some(t), Some(entry)) = (combined.tilt, trace.get_mut(try_index)) {
+            entry.combined_normal = Some(self.start.grid.plane_normal(t).into());
+            entry.combined_sigma_deg = sigma;
+        }
+        sigma
+    }
+
+    /// Grow pick `i`, of rung `rung`, jointly with its partner `j` from the
+    /// same rung, in a `selection` phase and one `grown plane view` phase,
+    /// and record it: from the combined plane of the views kept so far where
+    /// a view has been kept, from the starting plane otherwise or, on a rung
+    /// under [`STARTING_PLANE_RETRY_RUNGS`], where that is refused.
+    ///
+    /// The joint growth is taken when its mean score reaches the floor and
+    /// so does each view's own robust score at its plane: its plane is then
+    /// one estimate, combined with the picks before it, with the information
+    /// of both views. When it reaches the floor but one view does not, that
+    /// view is left out under the floor and the other is grown alone, as
+    /// [`Self::take`] grows a pick; when it does not reach the floor, both
+    /// are grown alone. Each estimate is combined in turn. Whether the
+    /// combined plane's weakest `σ` has reached `target_sigma_deg`.
+    #[allow(clippy::too_many_arguments)]
+    fn take_joint(
+        &self,
+        state: &mut Selection,
+        (i, j): (usize, usize),
+        rung: u32,
+        predicted_weak: f64,
+        progress: &Progress<'_>,
+        matched: &mut [Option<Matched>],
+        trace: &mut Vec<GrownPlaneTry>,
+        picks: &mut Vec<GrownPlanePick>,
+    ) -> Result<bool, NormalError> {
+        let options = self.options;
+        state.tried[i] = true;
+        state.tried[j] = true;
+        let (ci, cj) = (&self.candidates[i], &self.candidates[j]);
+        let mut phase = progress.detail_phase("selection");
+        progress_note!(
+            phase,
+            "images {} and {}, {:.1}\u{b0} and {:.1}\u{b0} from the reference, rung {rung}, grown jointly: predicted weakest information {predicted_weak:.3}",
+            ci.image_index,
+            cj.image_index,
+            ci.angle_deg,
+            cj.angle_deg
+        );
+        drop(phase);
+        let retry = rung < STARTING_PLANE_RETRY_RUNGS;
+        let from = state.kept_tilt;
+        progress.check_cancel()?;
+        let mut view = progress.phase("grown plane view");
+        let starting = (GrownPlaneTiltStart::Starting, [0.0; 2]);
+        let first = match from {
+            Some(tilt) => (GrownPlaneTiltStart::Combined, tilt),
+            None => starting,
+        };
+        let mut grown = vec![self.joint_growth((i, j), first, &view)?];
+        if from.is_some() && retry && grown[0].attempt.refusal.is_some() {
+            grown.push(self.joint_growth((i, j), starting, &view)?);
+        }
+        let last = grown.last_mut().expect("one growth at least");
+        // Which views are grown alone after it, and the joint estimate when
+        // it is taken.
+        let mut alone = Vec::new();
+        let mut under_floor = Vec::new();
+        let mut taken = None;
+        if last.attempt.refusal.is_none() {
+            let partner_shift = last.estimate.partner.map_or(last.attempt.shift, |(_, s)| s);
+            let za = self.score_at(i, last.tilt, last.attempt.shift);
+            let zb = self.score_at(j, last.tilt, partner_shift);
+            last.attempt.view_zncc = Some([za, zb]);
+            let floor = options.min_held_zncc;
+            match (za >= floor, zb >= floor) {
+                (true, true) => taken = Some(last.estimate.clone()),
+                (ok_a, ok_b) => {
+                    for (k, ok) in [(i, ok_a), (j, ok_b)] {
+                        if ok {
+                            alone.push(k);
+                        } else {
+                            under_floor.push(k);
+                        }
+                    }
+                }
+            }
+        } else {
+            alone.extend([i, j]);
+        }
+        let joint_attempt = last.attempt.clone();
+        let outcome = if taken.is_some() {
+            GrownPlaneTryOutcome::Matched
+        } else {
+            GrownPlaneTryOutcome::LeftOut
+        };
+        progress_note!(
+            view,
+            "images {} and {}, jointly: {}",
+            ci.image_index,
+            cj.image_index,
+            if taken.is_some() {
+                "matched"
+            } else {
+                "left out"
+            }
+        );
+        drop(view);
+        trace.push(GrownPlaneTry {
+            observation: ci.row,
+            image: ci.image_index,
+            angle_deg: ci.angle_deg,
+            partner: Some(GrownPlanePartner {
+                observation: cj.row,
+                image: cj.image_index,
+                angle_deg: cj.angle_deg,
+            }),
+            attempts: grown.into_iter().map(|g| g.attempt).collect(),
+            outcome,
+            combined_normal: None,
+            combined_sigma_deg: f64::NAN,
+        });
+        let joint_try = trace.len() - 1;
+
+        // Each view's result, the pick's first, and the try it was recorded
+        // in.
+        let mut results: Vec<(usize, Matched, usize)> = Vec::new();
+        if let Some(estimate) = taken {
+            results.push((i, Ok(estimate), joint_try));
+        } else {
+            let mut grown_alone = Vec::new();
+            for &k in &alone {
+                let result = self.match_view(k, from, retry, progress, trace)?;
+                grown_alone.push((k, result, trace.len() - 1));
+            }
+            for k in [i, j] {
+                if let Some(at) = grown_alone.iter().position(|(x, _, _)| *x == k) {
+                    results.push(grown_alone.swap_remove(at));
+                } else if under_floor.contains(&k) {
+                    let attempt = GrownPlaneAttempt {
+                        refusal: Some(GrownPlaneRefusal::UnderFloor),
+                        ..joint_attempt.clone()
+                    };
+                    results.push((k, Err(attempt), joint_try));
+                }
+            }
+        }
+        let mut sigma_after = f64::NAN;
+        for (k, result, try_index) in results {
+            let mut sigma = f64::NAN;
+            if let Ok(e) = &result {
+                sigma = self.add_kept(state, e, try_index, trace, progress);
+                sigma_after = sigma;
+            }
+            let joint = result.as_ref().is_ok_and(|e| e.partner.is_some());
+            let ok = result.is_ok();
+            let views: &[usize] = if joint {
+                &[i, j]
+            } else {
+                std::slice::from_ref(&k)
+            };
+            for &v in views {
+                let c = &self.candidates[v];
+                let other = if v == i { cj } else { ci };
+                picks.push(GrownPlanePick {
+                    observation: c.row,
+                    image: c.image_index,
+                    angle_deg: c.angle_deg,
+                    offset_direction: c.offset_direction,
+                    scale_px: c.scale_px,
+                    predicted_weak,
+                    matched: ok,
+                    rung,
+                    partner: Some(other.row),
+                    sigma_after_deg: sigma,
+                });
+            }
+            matched[k] = Some(result);
+        }
         Ok(sigma_after <= options.target_sigma_deg)
     }
 
@@ -705,6 +930,46 @@ struct Selection {
 }
 
 impl Selection {
+    /// The partner of pick `i`: among the candidates not yet picked, other
+    /// than `i`, whose angle is finite and within `range` (inclusive), the one
+    /// whose geometric prediction along its offset, `g·d dᵀ`, added to `i`'s
+    /// gives the largest smaller eigenvalue, so the one that most constrains
+    /// the tilt along the axis `i` leaves weakest; ties by the larger summed
+    /// gain `gᵢ + gⱼ`, then by the earlier candidate. `None` when no other
+    /// candidate is in the range.
+    fn partner_of(
+        &self,
+        sequence: &Sequence<'_, '_>,
+        i: usize,
+        range: (f64, f64),
+    ) -> Option<usize> {
+        let p = &self.prediction;
+        let own = p.along[i] * p.along[i].transpose() * p.gain[i];
+        let mut best: Option<((f64, f64), usize)> = None;
+        for j in 0..sequence.candidates.len() {
+            let a = sequence.candidates[j].angle_deg;
+            if j == i || self.tried[j] || !a.is_finite() || a < range.0 || a > range.1 {
+                continue;
+            }
+            let m = own + p.along[j] * p.along[j].transpose() * p.gain[j];
+            let key = (m.symmetric_eigen().eigenvalues.min(), p.gain[i] + p.gain[j]);
+            if best.is_none_or(|(b, _)| key > b) {
+                best = Some((key, j));
+            }
+        }
+        best.map(|(_, j)| j)
+    }
+
+    /// The widest angle from the reference among the views of `kept`, a
+    /// joint growth's partner among them.
+    fn widest_of(sequence: &Sequence<'_, '_>, kept: &[&Estimate]) -> Option<f64> {
+        kept.iter()
+            .flat_map(|e| std::iter::once(e.index).chain(e.partner.map(|(p, _)| p)))
+            .map(|x| sequence.candidates[x].angle_deg)
+            .filter(|a| a.is_finite())
+            .reduce(f64::max)
+    }
+
     /// The smallest and largest eigenvalue of the kept information with
     /// candidate `i`'s prediction under the model `m` added.
     fn weakest_with(&self, i: usize, m: (f64, f64)) -> (f64, f64) {

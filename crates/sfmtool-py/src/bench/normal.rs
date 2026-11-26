@@ -486,7 +486,8 @@ pub(super) fn maybe_vector<'py, const N: usize>(
     value.map(|v| PyArray1::from_vec(py, v.to_vec()))
 }
 
-/// The dict form of one growth of one view.
+/// The dict form of one growth of one view, or of a pick and its partner
+/// grown jointly.
 fn attempt_dict<'py>(py: Python<'py>, attempt: &GrownPlaneAttempt) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("tilt_start", tilt_start_name(attempt.tilt_start))?;
@@ -504,6 +505,8 @@ fn attempt_dict<'py>(py: Python<'py>, attempt: &GrownPlaneAttempt) -> PyResult<B
         PyArray1::from_vec(py, attempt.stage_turn_deg.clone()),
     )?;
     d.set_item("grid_rounds", grid_rounds_list(py, &attempt.grid_rounds)?)?;
+    d.set_item("partner_shift", maybe_vector(py, attempt.partner_shift))?;
+    d.set_item("view_zncc", maybe_vector(py, attempt.view_zncc))?;
     Ok(d)
 }
 
@@ -596,6 +599,7 @@ fn pick_dict<'py>(py: Python<'py>, pick: &GrownPlanePick) -> PyResult<Bound<'py,
     d.set_item("predicted_weak", pick.predicted_weak)?;
     d.set_item("matched", pick.matched)?;
     d.set_item("rung", pick.rung)?;
+    d.set_item("partner", pick.partner)?;
     d.set_item("sigma_after_deg", pick.sigma_after_deg)?;
     Ok(d)
 }
@@ -621,6 +625,17 @@ fn sequence_dict<'py>(
         t.set_item("observation", entry.observation)?;
         t.set_item("image", entry.image)?;
         t.set_item("angle_deg", entry.angle_deg)?;
+        let partner = match &entry.partner {
+            Some(p) => {
+                let q = PyDict::new(py);
+                q.set_item("observation", p.observation)?;
+                q.set_item("image", p.image)?;
+                q.set_item("angle_deg", p.angle_deg)?;
+                Some(q)
+            }
+            None => None,
+        };
+        t.set_item("partner", partner)?;
         let attempts = PyList::empty(py);
         for attempt in &entry.attempts {
             attempts.append(attempt_dict(py, attempt)?)?;
@@ -1035,11 +1050,19 @@ fn grid_plane_normal(
 /// plane; each later rung aims at ``rung_ratio`` (default 1.6) times the
 /// widest angle kept, out to the widest views, and within a rung the pick is
 /// the view whose information, predicted from its geometry, most raises the
-/// weakest measured so far. Each later pick is grown from the combined plane
+/// weakest measured so far. Where another view is left in the pick's range,
+/// the pick is grown jointly with a partner from it, the view that most
+/// constrains the tilt along the axis the pick leaves weakest, one plane and
+/// a shift for each view, each view compared with the reference only; the
+/// joint growth is taken when its mean score and each view's own score reach
+/// ``min_held_zncc``, and otherwise the view that does is grown alone. With no
+/// other view in the range, as on a track of two views, the pick is grown
+/// alone. A joint growth counts as two views towards ``max_selected_views``.
+/// Each later pick is grown from the combined plane
 /// so far; a pick of the second rung refused there is grown again from the
 /// starting plane, at the same keypoint-implied shift, and a pick of a later
 /// rung is not. Their planes are combined by a robust
-/// information-weighted mean, never by fitting the views together, leaving
+/// information-weighted mean, a joint growth's plane as one estimate, leaving
 /// out the furthest estimate past ``max_agreement_distance`` (default 3.0)
 /// by the Mahalanobis distance until none is, and then any view under
 /// ``min_held_zncc`` at the mean. Up to ``max_pairs`` (default 3) of the
@@ -1131,7 +1154,9 @@ fn grid_plane_normal(
 /// and ``held_zncc``; or
 /// ``"not_attempted"``. ``trace`` has one dict per try in the order made:
 /// ``observation``, ``image``, ``angle_deg`` (from the reference, seen from
-/// the patch centre), ``outcome`` (``"matched"`` or ``"left_out"``),
+/// the patch centre), ``partner`` (for a joint growth, a dict with the
+/// partner's ``observation``, ``image`` and ``angle_deg``; ``None`` for a view
+/// grown alone), ``outcome`` (``"matched"`` or ``"left_out"``),
 /// ``combined_normal`` (the plane of the views picked so far, this one among
 /// them, or ``None`` for a try that left the view out),
 /// ``combined_sigma_deg`` (``NaN`` then) and ``attempts``, each
@@ -1149,14 +1174,20 @@ fn grid_plane_normal(
 /// as far as the growth ran) and ``grid_rounds`` (a list with one dict per
 /// whole-grid round, with ``cap_deg``, the cap it was fitted under, infinite
 /// with no cap, ``turn_deg`` and ``zncc``; empty for a growth that stopped
-/// early, one round without ``turned_support``). ``picks`` has one dict per pick of
+/// early, one round without ``turned_support``), ``partner_shift`` (``(2,)``,
+/// a joint growth's partner's shift, ``shift`` being the pick's; ``None``
+/// for a view grown alone) and ``view_zncc`` (``(2,)``, each view's own
+/// robust score at a joint growth's plane where its mean reached the floor,
+/// else ``None``); a joint growth's scores are the means of its two views'.
+/// ``picks`` has one dict per pick of
 /// the selection: ``observation``, ``image``,
 /// ``angle_deg``, ``offset_direction`` (``(2,)``, in the starting patch frame),
 /// ``scale_px``, ``predicted_weak`` (the smallest eigenvalue of the
 /// information predicted with it added, ``NaN`` for a pick made by angle
 /// alone, in the first rung), ``matched``, ``rung`` (the rung it was picked
-/// for, from 0) and ``sigma_after_deg`` (``NaN`` when it was not
-/// matched).
+/// for, from 0), ``partner`` (the observation of the other view of its joint
+/// growth, or ``None``) and ``sigma_after_deg`` (``NaN`` when it was not
+/// matched). A joint growth's two views are both in ``picks``.
 /// ``pairs`` has one dict per pair: ``observations``, ``images``,
 /// ``angle_deg`` (between the two views), ``normal``, ``relative_shift``,
 /// ``zncc``, ``sigma_deg``, ``distance``, ``kept``, ``refusal`` (a

@@ -29,11 +29,12 @@
 //! shift to start from and is left out without a growth.
 //!
 //! A selection of views, picked near to far by their angle from the
-//! reference, is grown against the reference, the first from the starting
-//! plane and each later one from the plane of the views kept before it,
-//! and again from the starting plane where a second-rung pick is refused
-//! there; their planes are combined by a robust information-weighted mean,
-//! with no fit of the views together
+//! reference, is grown against the reference, the first rung's from the
+//! starting plane and each later one from the plane of the views kept before
+//! it, and again from the starting plane where a second-rung pick is refused
+//! there. Each pick is grown jointly with a partner from its rung, one plane
+//! for both views (`joint`), or alone where its rung holds no other view;
+//! the growths' planes are combined by a robust information-weighted mean
 //! (`combine`); the widest pairs of kept views are then matched against each
 //! other and their planes added to the mean (`selected`). The patch is turned
 //! to the combined plane whenever a view joined, unless the turn is large and
@@ -71,6 +72,7 @@ use super::{
 };
 
 mod combine;
+mod joint;
 mod render;
 mod selected;
 mod solve;
@@ -158,7 +160,7 @@ pub struct GrownPlaneNormalOptions {
     /// `σ` is at most this, degrees. 2.75.
     pub target_sigma_deg: f64,
     /// The selection stops matching views once this many have passed the
-    /// floor. 6.
+    /// floor, a joint growth counting two. 6.
     pub max_selected_views: usize,
     /// The selection's first rung, degrees from the reference: its first
     /// pick is the view nearest this angle within [`Self::first_rung_min_deg`]
@@ -375,7 +377,10 @@ pub enum GrownPlaneRefusal {
     NoKeypoint,
 }
 
-/// One growth of one view against the reference, and how it was judged.
+/// One growth of one view against the reference, or of a pick and its
+/// partner jointly against it, and how it was judged. For a joint growth
+/// each score in `stage_zncc`, `grid_rounds` and `grid_zncc` is the mean of
+/// the two views' scores against the reference.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrownPlaneAttempt {
     /// Which plane the windows started from.
@@ -410,6 +415,24 @@ pub struct GrownPlaneAttempt {
     /// Each whole-grid round, in order: empty for a growth that stopped
     /// early, one round with [`GrownPlaneNormalOptions::turned_support`] off.
     pub grid_rounds: Vec<GrownPlaneGridRound>,
+    /// For a joint growth of a pick and its partner
+    /// ([`GrownPlaneTry::partner`]), the partner's shift; `shift` is the
+    /// pick's. `None` for a view grown alone.
+    pub partner_shift: Option<[f64; 2]>,
+    /// For a joint growth that reached the floor, each view's own robust grid
+    /// score at the growth's plane, the pick's first: the joint growth is
+    /// taken only when both reach the floor. `None` otherwise.
+    pub view_zncc: Option<[f64; 2]>,
+}
+
+/// The second view of a joint growth: the view of the pick's rung grown
+/// together with it against the reference.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GrownPlanePartner {
+    pub observation: usize,
+    pub image: u32,
+    /// Its angle from the reference as seen from the patch centre, degrees.
+    pub angle_deg: f64,
 }
 
 /// One whole-grid round of a growth or a pair.
@@ -434,20 +457,27 @@ pub enum GrownPlaneTryOutcome {
     LeftOut,
 }
 
-/// One try of one view, and the combined plane after it.
+/// One try of one view, or of a pick and its partner grown jointly, and the
+/// combined plane after it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrownPlaneTry {
-    /// The observation tried.
+    /// The observation tried; the pick's for a joint growth.
     pub observation: usize,
     /// Its image.
     pub image: u32,
     /// Its angle from the reference as seen from the patch centre, degrees.
     pub angle_deg: f64,
+    /// The view grown jointly with it, from the same rung; `None` for a view
+    /// grown alone.
+    pub partner: Option<GrownPlanePartner>,
     /// Its growths, in the order made, each from the keypoint-implied shift:
     /// from the combined plane first where a view had been kept before it;
     /// then, where none had been kept or a pick of the second rung was
     /// refused there, from the starting plane. One or two growths.
     pub attempts: Vec<GrownPlaneAttempt>,
+    /// [`GrownPlaneTryOutcome::Matched`] for a joint growth only when a
+    /// growth reached the floor and so did each view's own score at its
+    /// plane.
     pub outcome: GrownPlaneTryOutcome,
     /// The combined plane's outward normal after the try, world frame: the
     /// plane of the views picked so far, this one among them. `None` for a
@@ -513,6 +543,10 @@ pub struct GrownPlanePick {
     /// The selection's rung it was picked for, the first `0`, counting every
     /// rung the selection aimed at, those with no view in range among them.
     pub rung: u32,
+    /// The observation of the other view it was grown jointly with, the
+    /// partner of a pick or the pick of a partner; `None` for a view grown
+    /// alone.
+    pub partner: Option<usize>,
     /// The combined plane's weakest `σ` after it, degrees; `NaN` when it was
     /// not matched.
     pub sigma_after_deg: f64,
@@ -634,11 +668,11 @@ impl GrownPlaneSequence {
     }
 
     /// How many views were grown against the reference: every view with a
-    /// try.
+    /// try, a joint growth's partner among them.
     pub fn matched(&self) -> usize {
         self.trace
             .iter()
-            .map(|t| t.observation)
+            .flat_map(|t| std::iter::once(t.observation).chain(t.partner.map(|p| p.observation)))
             .collect::<BTreeSet<_>>()
             .len()
     }
@@ -806,13 +840,19 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// grown from the combined plane of the views kept so far, from its
 /// keypoint-implied shift; a pick of the second rung refused there is grown
 /// again from the starting plane, at the same shift, and a pick of a later
-/// rung is not. A rung
-/// waits until one of its views is kept. The selection stops when the combined plane's weakest `σ`
-/// reaches
+/// rung is not. Each pick is grown jointly with a partner from its rung, the
+/// view that most constrains the tilt along the axis the pick leaves weak:
+/// one plane for the two views, each with its own shift and compared with the
+/// reference only, taken when its mean score and each view's own score reach
+/// the floor; otherwise the view that reaches it is grown alone. A pick whose
+/// rung holds no other view, as on a track of two views, is grown alone. A
+/// rung waits until one of its views is kept. The selection stops when the
+/// combined plane's weakest `σ` reaches
 /// [`GrownPlaneNormalOptions::target_sigma_deg`] or
 /// [`GrownPlaneNormalOptions::max_selected_views`] views have passed the
-/// floor. Their planes are combined by a robust information-weighted mean,
-/// never by fitting the views together: an estimate more than
+/// floor, a joint growth counting two. The growths' planes are combined by a
+/// robust information-weighted mean, a joint growth's as one estimate: an
+/// estimate more than
 /// [`GrownPlaneNormalOptions::max_agreement_distance`] from the mean by the
 /// Mahalanobis distance is left out, worst first, the mean read again, and
 /// every kept view must still score the floor at the final plane at its shift
@@ -1173,11 +1213,15 @@ fn record_views(
         views[candidate.row] = match fate {
             Fate::Joined {
                 estimate,
+                partner,
                 distance,
                 held,
                 final_shift,
             } => GrownPlaneView::Joined {
-                shift: final_shift.unwrap_or(estimate.shift),
+                shift: final_shift.unwrap_or(match (partner, estimate.partner) {
+                    (true, Some((_, shift))) => shift,
+                    _ => estimate.shift,
+                }),
                 grid_zncc: held.unwrap_or(f64::NAN),
                 distance: *distance,
                 held_zncc: *held,
@@ -1348,9 +1392,11 @@ struct Judged {
 enum Fate {
     /// Its plane is in the final plane; `held` is its score there, from the
     /// combination's last held check, and `final_shift` its shift there,
-    /// filled in once the final plane is known.
+    /// filled in once the final plane is known. `partner` says the candidate
+    /// is the partner of `estimate`, a joint growth, rather than its pick.
     Joined {
         estimate: Box<Estimate>,
+        partner: bool,
         distance: Option<f64>,
         held: Option<f64>,
         final_shift: Option<[f64; 2]>,
@@ -1507,6 +1553,7 @@ impl<'a> Sequence<'_, 'a> {
                 information,
                 normal,
                 frame: None,
+                partner: None,
             };
             return (estimate, None);
         }
@@ -1522,6 +1569,7 @@ impl<'a> Sequence<'_, 'a> {
             information: carried_information(&own, &laid.grid.start_chart_jacobian()),
             normal,
             frame: Some(laid.grid.frame),
+            partner: None,
         };
         (estimate, Some(score))
     }
@@ -1534,8 +1582,16 @@ impl<'a> Sequence<'_, 'a> {
     /// at the target plane less at the estimate's own. A target at or past
     /// 90° from that grid's normal leaves the shift unmoved.
     fn moved_shift(&self, estimate: &Estimate, tilt: [f64; 2]) -> [f64; 2] {
+        self.moved_shifts(estimate, tilt).0
+    }
+
+    /// [`Self::moved_shift`] for the estimate's view and, for a joint
+    /// growth, its partner's shift moved the same way by the same normal
+    /// matrix, whose shift rows are the two views' in turn.
+    fn moved_shifts(&self, estimate: &Estimate, tilt: [f64; 2]) -> ([f64; 2], Option<[f64; 2]>) {
+        let partner = estimate.partner.map(|(_, shift)| shift);
         let Some(n) = &estimate.normal else {
-            return estimate.shift;
+            return (estimate.shift, partner);
         };
         let dt = match &estimate.frame {
             None => [tilt[0] - estimate.tilt[0], tilt[1] - estimate.tilt[1]],
@@ -1543,12 +1599,19 @@ impl<'a> Sequence<'_, 'a> {
                 let target = self.start.grid.plane_normal(tilt);
                 match frame.tilt_step(frame.normal, target) {
                     Some(step) => step,
-                    None => return estimate.shift,
+                    None => return (estimate.shift, partner),
                 }
             }
         };
         let ds = shift_response(n, dt);
-        [estimate.shift[0] + ds[0], estimate.shift[1] + ds[1]]
+        let moved = |s: [f64; 2], k: usize| match ds.get(k..k + 2) {
+            Some(d) => [s[0] + d[0], s[1] + d[1]],
+            None => s,
+        };
+        (
+            moved(estimate.shift, 0),
+            partner.map(|shift| moved(shift, 2)),
+        )
     }
 
     /// Candidate `i`'s robust grid score at the plane `tilt` of the starting
@@ -1571,15 +1634,20 @@ impl<'a> Sequence<'_, 'a> {
             .map(|fate| match fate {
                 Fate::Joined {
                     estimate,
+                    partner,
                     distance,
                     held,
                     ..
-                } => Fate::Joined {
-                    estimate: estimate.clone(),
-                    distance: *distance,
-                    held: *held,
-                    final_shift: Some(self.moved_shift(estimate, tilt)),
-                },
+                } => {
+                    let (own, second) = self.moved_shifts(estimate, tilt);
+                    Fate::Joined {
+                        estimate: estimate.clone(),
+                        partner: *partner,
+                        distance: *distance,
+                        held: *held,
+                        final_shift: Some(if *partner { second.unwrap_or(own) } else { own }),
+                    }
+                }
                 Fate::ShiftOnly { shift, grid_zncc } => Fate::ShiftOnly {
                     shift: *shift,
                     grid_zncc: *grid_zncc,
@@ -1655,6 +1723,7 @@ impl<'a> Sequence<'_, 'a> {
                 information: Matrix2::zeros(),
                 normal: None,
                 frame: None,
+                partner: None,
             };
             return Judged { grown, estimate };
         }
@@ -1765,6 +1834,8 @@ impl<'a> Sequence<'_, 'a> {
                         refusal: Some(GrownPlaneRefusal::StoppedEarly),
                         stage_turn_deg,
                         grid_rounds: Vec::new(),
+                        partner_shift: None,
+                        view_zncc: None,
                     },
                 });
             }
@@ -1823,6 +1894,8 @@ impl<'a> Sequence<'_, 'a> {
                 refusal: None,
                 stage_turn_deg,
                 grid_rounds,
+                partner_shift: None,
+                view_zncc: None,
             },
         })
     }

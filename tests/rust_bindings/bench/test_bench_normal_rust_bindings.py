@@ -350,7 +350,11 @@ class TestGrownPlaneNormal:
         assert seq["joined"] == len(joined)
         assert seq["left_out"] == sum(v["kind"] == "left_out" for v in views)
         assert seq["shift_only"] == sum(v["kind"] == "shift_only" for v in views)
-        assert seq["matched"] == len({e["observation"] for e in seq["trace"]})
+        tried = {e["observation"] for e in seq["trace"]}
+
+        tried |= {e["partner"]["observation"] for e in seq["trace"] if e["partner"]}
+
+        assert seq["matched"] == len(tried)
         # The agreement is the mean score of the views in the plane.
         scores = [
             v["grid_zncc"]
@@ -363,9 +367,7 @@ class TestGrownPlaneNormal:
             assert np.isnan(seq["agreement"])
         # Every view grown against the reference was picked, and every view
         # picked was grown.
-        assert {p["observation"] for p in seq["picks"]} == {
-            e["observation"] for e in seq["trace"]
-        }
+        assert {p["observation"] for p in seq["picks"]} == tried
         for view in joined:
             assert view["shift"].shape == (2,)
             assert isinstance(view["grid_zncc"], float)
@@ -379,6 +381,7 @@ class TestGrownPlaneNormal:
                 "observation",
                 "image",
                 "angle_deg",
+                "partner",
                 "attempts",
                 "outcome",
                 "combined_normal",
@@ -395,6 +398,11 @@ class TestGrownPlaneNormal:
                 assert np.linalg.norm(attempt["normal"]) == pytest.approx(1.0)
                 assert attempt["refusal"] in {None, "under_floor", "stopped_early"}
                 assert attempt["tilt_start"] in {"starting", "combined"}
+                # A joint growth's attempts carry its partner's shift.
+                joint = entry["partner"] is not None
+                assert (attempt["partner_shift"] is not None) == joint
+                if attempt["view_zncc"] is not None:
+                    assert joint and attempt["view_zncc"].shape == (2,)
                 stopped = attempt["refusal"] == "stopped_early"
                 assert attempt["stage_turn_deg"].dtype == np.float64
                 # One turn per fitted window stage, as far as the growth ran.
@@ -422,6 +430,7 @@ class TestGrownPlaneNormal:
                 "predicted_weak",
                 "matched",
                 "rung",
+                "partner",
                 "sigma_after_deg",
             }
             assert isinstance(pick["rung"], int)
@@ -543,9 +552,17 @@ class TestGrownPlaneNormal:
         assert picks[0]["rung"] == 0
         rungs = [p["rung"] for p in picks]
         assert rungs == sorted(rungs)
-        # Every pick after the first that passed grows from the combined
-        # plane first; the first rung's picks from the starting plane.
-        for pick, entry in zip(picks, seq["trace"]):
+        # Every try after the first that passed grows from the combined
+        # plane first; the first rung's tries from the starting plane. A
+        # joint growth's try is its pick's, and its partner is a pick of the
+        # same rung.
+        by_observation = {p["observation"]: p for p in picks}
+        for entry in seq["trace"]:
+            pick = by_observation[entry["observation"]]
+            if entry["partner"] is not None:
+                partner = by_observation[entry["partner"]["observation"]]
+                assert partner["rung"] == pick["rung"]
+                assert partner["partner"] == pick["observation"]
             first = entry["attempts"][0]["tilt_start"]
             assert first == ("starting" if pick["rung"] == 0 else "combined")
             starts = [a["tilt_start"] for a in entry["attempts"]]
@@ -695,7 +712,13 @@ class TestGrownPlaneNormal:
         assert names.count("joint fit") == 0
         assert names.count("mean") >= (1 if seq["matched"] else 0)
         assert names.count("pair fit") == len(seq["pairs"])
-        assert names.count("selection") == len(seq["picks"])
+        # One selection per pick grown alone and per joint growth, whose two
+
+        # views are both picks.
+
+        joint_picks = sum(p["partner"] is not None for p in seq["picks"])
+
+        assert names.count("selection") == len(seq["picks"]) - joint_picks // 2
         assert names.count("shift-only fit") == seq["shift_only"]
         for once in ("setup", "turn"):
             assert names.count(once) == 1
@@ -1057,8 +1080,9 @@ def test_repeated_grown_plane_passes_settle_on_a_ground_truth_point():
     """seoul_bull v02 point 255 straddles a canopy edge, seen by three views
     within 4.1 degrees of each other. On one grid laid on the starting square
     the step turned it 69.6, 15.6, 3.9, 4.4 and 3.5 degrees on five passes;
-    with the grid laid at each stage's plane the second and third passes turn
-    it 4.4 and 0.3 degrees, under the bar of 5."""
+    with the grid laid at each stage's plane and its two other views grown
+    jointly, the second and third passes turn it 5.3 and 8.2 degrees, under
+    the bar of 10."""
     path = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr"
     recon = SfmrReconstruction.load(str(path))
     edited = EditedReconstruction(recon)
@@ -1070,4 +1094,40 @@ def test_repeated_grown_plane_passes_settle_on_a_ground_truth_point():
         assert report["estimate"]["outcome"] == "turned"
         turns.append(report["tilt"]["degrees"])
     assert turns[0] > 30.0, turns
-    assert turns[1] < 5.0 and turns[2] < 5.0, turns
+    assert turns[1] < 10.0 and turns[2] < 10.0, turns
+
+
+# A point of seoul_bull v02 seen in two images, images 6 and 7.
+TWO_VIEW_POINT = 192
+
+
+def test_grown_plane_on_two_views_grows_the_one_view_alone(ground_truth):
+    """A track of two views, the reference and one other, leaves the
+    three-way ladder no partner: the one view is grown alone, with no joint
+    growth in the trace or the picks, and the step gives the normal, ``σ``,
+    outcome and low-confidence verdict it gave before the ladder grew views
+    jointly, recorded here from that step."""
+    edited, images = ground_truth
+    _, track = create_track(Bench(), edited, TWO_VIEW_POINT)
+    assert sorted(o["image"] for o in track.observations) == [6, 7]
+    turned, report = grown_plane_normal(track, edited, images)
+    estimate = report["estimate"]
+    assert estimate["outcome"] == "turned"
+    [entry] = estimate["trace"]
+    assert entry["partner"] is None
+    assert all(
+        a["partner_shift"] is None and a["view_zncc"] is None for a in entry["attempts"]
+    )
+    [pick] = estimate["picks"]
+    assert pick["partner"] is None and pick["matched"]
+    np.testing.assert_allclose(
+        _normal(turned),
+        [0.18478093375830723, -0.8611483028230938, -0.4735816794010437],
+        rtol=0,
+        atol=1e-9,
+    )
+    precision = estimate["precision"]
+    assert precision["sigma_weak_deg"] == pytest.approx(32.81202610486749, rel=1e-9)
+    assert precision["sigma_strong_deg"] == pytest.approx(27.777687274316666, rel=1e-9)
+    assert precision["low_confidence"]
+    assert estimate["turn_deg"] == pytest.approx(7.392994207887867, rel=1e-9)

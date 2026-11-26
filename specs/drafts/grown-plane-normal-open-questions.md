@@ -60,6 +60,30 @@ answer folded into the spec.
   whether a model that reads the view's texture as well as its geometry, or the
   reference's information along each direction, picks better, and what the
   target σ and the budget (`max_selected_views`) should be once τ is settled.
+- **The three-way ladder's first choices.** Four rules of the joint growth are
+  the ones the evaluated prototype used, not designs:
+  - *The partner.* The pick is the one the two-view ladder chose, and the
+    partner the view of the same range whose geometric prediction `g·d dᵀ`
+    added to the pick's has the largest smaller eigenvalue; whether the pair
+    should instead be the best pair over the rung, read the model's `α` and
+    `β`, or read the views' texture.
+  - *The selection's model.* A joint growth's information is read as the
+    pick's own when `α` and `β` are taken, divided by the pick's gain alone,
+    though it holds both views'; whether to split it, or to divide by the two
+    gains summed.
+  - *The wide pairs.* A joint growth is in a pair by its pick only, so on the
+    wide pairs' test scene, four views on opposite sides of the reference, one
+    pair is matched where the two-view ladder matched two.
+  - *A disagreeing partner.* A joint growth is one estimate to the distance
+    test, so a view whose own plane disagrees with the others is not left out
+    on its own when it has a partner: on the disagreeing-view test scene
+    (`wide_centres`, the 38° view seeing a plane turned 25°) that view is
+    grown jointly with the 25° view, the joint growth is taken, and the final
+    normal ends 5.3° off the others' plane, where the 38° view still scores 0.62,
+    over the floor. On that scene the two-view ladder left the view out as
+    too far and ended within a degree.
+    Whether to test each view's own plane, or each view's distance, before a
+    joint growth is taken.
 - **The pairs' rules.** Whether the widest pairs, each view in one pair, up to
   three, are the right pairs, or whether a pair should lie on opposite sides of
   the reference or be wider than the widest view's angle from the reference;

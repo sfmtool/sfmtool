@@ -33,25 +33,30 @@ use crate::progress_note;
 /// of the estimates' tilts rather than leaving it undetermined.
 const MEAN_REGULARISATION: f64 = 1e-6;
 
-/// One view's own plane, grown against the reference.
+/// One view's own plane grown against the reference, or the plane of a view
+/// and its partner grown jointly against it.
 #[derive(Clone)]
 pub(super) struct Estimate {
-    /// Its index among the candidates.
+    /// Its index among the candidates; the pick's for a joint growth.
     pub(super) index: usize,
     /// Its own plane, as a tilt of the starting frame, and its shift.
     pub(super) tilt: [f64; 2],
     pub(super) shift: [f64; 2],
-    /// Its information about the starting frame's tilt with the shift
-    /// eliminated.
+    /// Its information about the starting frame's tilt with the shift, or
+    /// both shifts, eliminated.
     pub(super) information: Matrix2<f64>,
-    /// The normal matrix over `[a, b, sx, sy]` that information came from,
-    /// in the tilt of `frame`, which moves its shift to another plane; `None`
-    /// where nothing could be read.
+    /// The normal matrix over `[a, b, sx, sy]`, or over
+    /// `[a, b, sx, sy, s′x, s′y]` for a joint growth, that information came
+    /// from, in the tilt of `frame`, which moves its shifts to another plane;
+    /// `None` where nothing could be read.
     pub(super) normal: Option<DMatrix<f64>>,
     /// The frame of the grid the normal matrix was read on, laid at the
     /// estimate's own plane; `None` for the starting frame, the grid of a
     /// step without the turned support.
     pub(super) frame: Option<Frame>,
+    /// For a joint growth, the partner's index among the candidates and its
+    /// shift `s′`; `None` for a view grown alone.
+    pub(super) partner: Option<(usize, [f64; 2])>,
 }
 
 /// One pair of views' own plane, matched against each other.
@@ -73,6 +78,8 @@ pub(super) struct Verdict {
     pub(super) distance: Option<f64>,
     /// A view's score at the combined plane, at its shift moved there.
     pub(super) held: Option<f64>,
+    /// A joint growth's partner's score there, at its own shift moved there.
+    pub(super) partner_held: Option<f64>,
 }
 
 /// What a combination ended at.
@@ -205,8 +212,10 @@ impl Sequence<'_, '_> {
     /// from the mean of the kept ones, the furthest is left out (`TooFar`),
     /// with any pair holding a view left out (`ViewLeftOut`), and the mean is
     /// read again. Then each kept view is scored at the mean, at its shift
-    /// moved there by its own normal matrix, one render each; a view under
-    /// [`min_held_zncc`](super::GrownPlaneNormalOptions::min_held_zncc) is
+    /// moved there by its own normal matrix, one render each, and a joint
+    /// growth's partner the same way; a view under
+    /// [`min_held_zncc`](super::GrownPlaneNormalOptions::min_held_zncc), or a
+    /// joint growth either of whose views is, is
     /// left out (`HeldUnderFloor`) and the whole is repeated, until no view
     /// is left out. Leaving out one at a time, the furthest first, makes the
     /// result independent of the order the estimates are given in and keeps
@@ -227,6 +236,7 @@ impl Sequence<'_, '_> {
                 refusal: None,
                 distance: None,
                 held: None,
+                partner_held: None,
             })
             .collect();
         let mut p_verdict: Vec<Verdict> = pairs
@@ -235,6 +245,7 @@ impl Sequence<'_, '_> {
                 refusal: p.refused,
                 distance: None,
                 held: None,
+                partner_held: None,
             })
             .collect();
         let mean_of = |v: &[Verdict], p: &[Verdict]| {
@@ -310,10 +321,18 @@ impl Sequence<'_, '_> {
                 if v_verdict[k].refusal.is_some() {
                     continue;
                 }
-                let shift = self.moved_shift(e, mean);
+                let (shift, partner_shift) = self.moved_shifts(e, mean);
                 let z = self.score_at(e.index, mean, shift);
                 v_verdict[k].held = Some(z);
-                if z.is_nan() || z < options.min_held_zncc {
+                let under = |z: f64| z.is_nan() || z < options.min_held_zncc;
+                let mut dropped_here = under(z);
+                if let (Some((p, _)), Some(ps)) = (e.partner, partner_shift) {
+                    // A joint growth is held by both its views.
+                    let zp = self.score_at(p, mean, ps);
+                    v_verdict[k].partner_held = Some(zp);
+                    dropped_here |= under(zp);
+                }
+                if dropped_here {
                     v_verdict[k].refusal = Some(GrownPlaneRefusal::HeldUnderFloor);
                     leave_out_pairs_of(k, &mut p_verdict);
                     dropped = true;
