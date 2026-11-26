@@ -260,7 +260,11 @@ def test_enable_refuses_a_file_that_has_the_object(tmp_path, monkeypatch, object
             "101",
             "mipmap_options.jpeg_quality is 101; it must be an integer from 1 to 100",
         ),
-        (str(2**64), "int too big to convert while processing 'jpeg_quality'"),
+        (str(2**64), f"--jpeg-quality {2**64} is outside the 64-bit range."),
+        (
+            str(-(2**63) - 1),
+            f"--jpeg-quality {-(2**63) - 1} is outside the 64-bit range.",
+        ),
     ],
 )
 def test_enable_refuses_a_value_out_of_range_and_writes_nothing(

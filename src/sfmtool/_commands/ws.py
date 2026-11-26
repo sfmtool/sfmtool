@@ -342,16 +342,18 @@ def _enable(path: str, values: dict) -> None:
             f"No workspace file .sfm-workspace.json was found in {path} or any "
             "directory above it."
         )
+    given = {k: v for k, v in values.items() if v is not None}
+    for name, value in given.items():
+        # The binding takes 64-bit integers, and Python's own OverflowError
+        # for one past that range is worded differently on each platform.
+        if not -(2**63) <= value < 2**63:
+            raise click.ClickException(
+                f"--{name.replace('_', '-')} {value} is outside the 64-bit range."
+            )
     try:
-        written = enable_mipmap_options(
-            root, **{k: v for k, v in values.items() if v is not None}
-        )
+        written = enable_mipmap_options(root, **given)
     except (ValueError, OSError) as e:
         raise click.ClickException(str(e))
-    except OverflowError as e:
-        # A value outside the 64-bit range the binding takes; its note names
-        # the argument.
-        raise click.ClickException(" ".join([str(e), *getattr(e, "__notes__", [])]))
     click.echo(
         f"Added mipmap_options to {_shown(root / '.sfm-workspace.json')}: "
         f"{describe_mipmap_options(written)}."
