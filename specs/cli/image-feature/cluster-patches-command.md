@@ -131,10 +131,27 @@ consumer reads the cells.
    cache evicted a photograph's tiles while the refinement still read it and
    decoded it again, which can make the command several times slower; it
    then prints a line saying how many photographs were decoded how many
-   times, and recommending a `mipmap_options` object in the workspace's
-   `.sfm-workspace.json`, naming the file and giving the object with an
-   `out_of_core_long_side` of 1536 and both JPEG qualities 95, so the
-   photographs are read from their mipmaps a tile at a time.
+   times, and what puts them out of core, so they are read from their
+   mipmaps a tile at a time, in each workspace the in-core photographs are
+   in. A photograph is out of core when a side is over the workspace's
+   `out_of_core_long_side`, so the threshold that puts a workspace's
+   photographs out of core is one less than the shortest of their longer
+   sides. For a workspace without `mipmap_options` the line names
+   [`sfm ws mipmaps --enable`](../workspace/ws-mipmaps-command.md#turning-the-tier-on)
+   with the workspace, adding `--out-of-core-long-side` with that threshold
+   when it is under the 1536 `--enable` writes by default. For a workspace
+   whose object has a higher threshold, which `--enable` refuses since the
+   file has the object, the line names the threshold to set in its
+   `.sfm-workspace.json` and the one the file holds. A workspace is shown
+   as the `sfm ws` commands show a path, relative to the current directory
+   when it is under it. The Seoul bull's 17 photographs of 270 x 480 px, in
+   a workspace `ws` that `sfm ws init` made, read with a 4 MB budget
+   (`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=4`), give
+   `The cache decoded 17 photographs whole 1161 times, since their tiles are
+   more than its budget. To read them from mipmaps instead, a tile at a
+   time, set "out_of_core_long_side" in ws/.sfm-workspace.json to 479 or
+   less (it is 1536).`, and in a workspace without the object the line ends
+   `run 'sfm ws mipmaps --enable --out-of-core-long-side 479 ws'.` instead.
    Present the seed geometry from step 2 in images-section order, and call
    `sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member self-similarity gate,

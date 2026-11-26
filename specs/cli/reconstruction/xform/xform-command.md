@@ -61,7 +61,7 @@ photograph however the workspace stores its mipmaps.
 
 After the steps, a run that read photographs prints the cache's whole decodes,
 mipmaps made and budget, and, when it decoded the in-core photographs more
-times than there are of them, the line recommending `mipmap_options`, both as
+times than there are of them, the line saying how to read them out of core, both as
 [`sfm cluster-patches`](../../image-feature/cluster-patches-command.md#process)
 prints them:
 

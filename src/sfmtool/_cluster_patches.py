@@ -221,7 +221,7 @@ def _run_cluster_patches(
     ):
         if result[key] is not None:
             out_data[key] = result[key]
-    for line in photograph_cache_lines(cache, photograph_paths, workspace_dir):
+    for line in photograph_cache_lines(cache, photograph_paths):
         click.echo(line)
     click.echo(f"Writing {out}...")
     write_matches(out, out_data)

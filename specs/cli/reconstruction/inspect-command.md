@@ -167,8 +167,8 @@ mipmap, made first when it is missing or stale
 `sfmtool.fileio.read_image_rgb`, so the montage is the one rendered from whole
 decoded arrays, byte for byte. Once the strips are rendered the command prints
 the cache's whole decodes, mipmaps made and budget, and, when it decoded the
-in-core photographs more times than there are of them, the line recommending
-`mipmap_options`, both as
+in-core photographs more times than there are of them, the line saying how to
+read them out of core, both as
 [`sfm cluster-patches`](../image-feature/cluster-patches-command.md#process)
 prints them, after `--strips: ` (`--strips: Photographs: 17 whole decodes, 0
 mipmaps made, cache budget 15.9 GiB`).

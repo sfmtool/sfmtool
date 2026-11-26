@@ -42,3 +42,15 @@ def timed_command(f=None, *, stderr_when=None):
     if f is None:
         return decorate
     return decorate(f)
+
+
+def shown_path(path) -> str:
+    """`path` as a command's output shows it: relative to the current
+    directory when it is under it, and with `/` as the separator."""
+    from pathlib import Path
+
+    path = Path(path)
+    try:
+        return path.absolute().relative_to(Path.cwd()).as_posix()
+    except ValueError:
+        return path.as_posix()

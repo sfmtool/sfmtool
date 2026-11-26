@@ -4422,7 +4422,33 @@ in core. Step 17 turns the tier on.
       `NEW_WORKSPACE_MIPMAP_OPTIONS` writes that object, and from one
       without writes none; `undistort-command.md` § "Workspace config" shows
       the key.
-    - **17c, the recommendation names `--enable`.** The line
+    - **17c, the recommendation names `--enable`.** **Built**
+      ([_photograph_cache_report.py](../../src/sfmtool/_photograph_cache_report.py),
+      [cluster-patches-command.md § Process](../cli/image-feature/cluster-patches-command.md#process)),
+      with these choices the plan left open. The line names each workspace
+      the in-core photographs are in, found from each photograph by
+      `find_workspace_for_path`, the photograph cache's own rule, so
+      `photograph_cache_lines` no longer takes the callers' workspace
+      directories; the workspaces are named in sorted order, since `xform`
+      and `compare` pass their paths as a set. A photograph is out of core
+      when a side is over the threshold, so the threshold that puts a
+      workspace's photographs out of core is one less than the shortest of
+      their longer sides. For a workspace without the object the line names
+      `sfm ws mipmaps --enable <workspace>`, with
+      `--out-of-core-long-side <threshold>` when that threshold is under
+      the default 1536, which would leave such a photograph in core: the
+      Seoul bull's 270 x 480 photographs get
+      `--out-of-core-long-side 479`. For a workspace whose object has a
+      threshold that keeps the photographs in core, which `--enable`
+      refuses since the file has the object, it says to set
+      `"out_of_core_long_side"` in the workspace's `.sfm-workspace.json` to
+      that threshold or less, and names the value the file holds. This is
+      the case of every workspace `sfm ws init` makes since 17a whose
+      photographs are 1536 px or smaller, such as the tests' Seoul bull
+      workspaces. A workspace is shown as the `sfm ws` commands show a
+      path, relative to the current directory when it is under it, by
+      `shown_path` in [_cli_utils.py](../../src/sfmtool/_cli_utils.py),
+      moved there from `sfm ws`. The plan as written: the line
       `photograph_cache_lines` prints for `sfm cluster-patches`,
       `sfm embed-patches`, `sfm xform`, `sfm compare --strips` and
       `sfm inspect --strips` names `sfm ws mipmaps --enable <workspace>` for

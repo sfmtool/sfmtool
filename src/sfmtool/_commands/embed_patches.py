@@ -311,7 +311,6 @@ def embed_patches_command(
         for line in photograph_cache_lines(
             cache,
             [Path(recon.workspace_dir) / name for name in recon.image_names],
-            recon.workspace_dir,
         ):
             click.echo(line)
 

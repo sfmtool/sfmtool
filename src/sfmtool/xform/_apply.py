@@ -51,7 +51,7 @@ def apply_transforms(
     if cache is not None:
         from .._photograph_cache_report import photograph_cache_lines
 
-        for line in photograph_cache_lines(cache, photograph_paths, workspace_dir):
+        for line in photograph_cache_lines(cache, photograph_paths):
             print(f"  {line}")
     print(f"  Images: {recon.image_count}")
     print(f"  Points: {recon.point_count}")

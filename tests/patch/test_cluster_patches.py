@@ -492,7 +492,7 @@ def test_cluster_patches_through_the_photograph_cache_writes_the_file_the_arrays
     assert through_cache.exit_code == 0, through_cache.output
     assert "Photographs: 17 whole decodes, 0 mipmaps made" in through_cache.output
     # Each photograph decoded once: no recommendation of the tier.
-    assert "mipmap_options" not in through_cache.output
+    assert "The cache decoded" not in through_cache.output
 
     class _Arrays:
         """The photographs as the command read them before: whole arrays."""
@@ -551,8 +551,9 @@ def test_cluster_patches_recommends_mipmaps_when_it_decodes_photographs_again(
     seoul_bull_workspace: Path, monkeypatch
 ):
     """A cache budget smaller than the photographs' tiles decodes them whole
-    again, and the command then recommends `mipmap_options`, naming the
-    workspace file."""
+    again. The workspace has the `mipmap_options` a new workspace records,
+    whose threshold of 1536 keeps the 270 x 480 photographs in core, so the
+    command recommends a threshold under their 480 px in its file."""
     workspace_dir = seoul_bull_workspace.parent
     # 4 MB holds about half of the tiles of the 17 270 x 480 photographs.
     monkeypatch.setenv("SFM_EXPLORER_PHOTOGRAPH_CACHE_MB", "4")
@@ -576,8 +577,9 @@ def test_cluster_patches_recommends_mipmaps_when_it_decodes_photographs_again(
     assert decodes > 17
     hint = f"The cache decoded 17 photographs whole {decodes} times"
     assert hint in result.output
-    assert str(workspace_dir / ".sfm-workspace.json") in result.output
+    marker = (workspace_dir / ".sfm-workspace.json").as_posix()
     assert (
-        '"mipmap_options": {"out_of_core_long_side": 1536, "jpeg_quality": 95, '
-        '"full_resolution_jpeg_quality": 95}.' in result.output
+        "To read them from mipmaps instead, a tile at a time, set "
+        f'"out_of_core_long_side" in {marker} to 479 or less (it is 1536).'
+        in result.output
     )

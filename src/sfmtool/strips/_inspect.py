@@ -237,7 +237,7 @@ def render_inspect_strips(
 
     paths = engine.photograph_paths()
     if paths:
-        for line in photograph_cache_lines(cache, paths, prepared.workspace_dir):
+        for line in photograph_cache_lines(cache, paths):
             print(f"  --strips: {line}")
     if skipped:
         print(f"  --strips: skipped {len(skipped)} point(s) with no observations")

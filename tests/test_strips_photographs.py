@@ -170,12 +170,18 @@ def test_compare_strips_recommend_mipmaps_in_each_reconstructions_workspace(
     seoul_bull_workspace, tmp_path, monkeypatch
 ):
     """Two reconstructions in two workspaces, with a cache too small for their
-    photographs: the recommendation names both workspaces' files."""
+    photographs: the recommendation names each workspace, the threshold to set
+    in the one whose `mipmap_options` keeps the photographs in core, and
+    `sfm ws mipmaps --enable` for the one without the object."""
     import shutil
 
     other_workspace = tmp_path / "other"
     shutil.copytree(seoul_bull_workspace.parent, other_workspace)
     other = other_workspace / seoul_bull_workspace.name
+    marker = other_workspace / ".sfm-workspace.json"
+    config = json.loads(marker.read_text())
+    del config["mipmap_options"]
+    marker.write_text(json.dumps(config))
     # 4 MB holds about half of the tiles of the 17 270 x 480 photographs.
     monkeypatch.setenv("SFM_EXPLORER_PHOTOGRAPH_CACHE_MB", "4")
 
@@ -192,6 +198,14 @@ def test_compare_strips_recommend_mipmaps_in_each_reconstructions_workspace(
     )
 
     assert "--strips: The cache decoded 34 photographs whole" in output
-    first = seoul_bull_workspace.parent / ".sfm-workspace.json"
-    second = other_workspace / ".sfm-workspace.json"
-    assert f"object to {first} and {second}, such as" in output
+    first = (seoul_bull_workspace.parent / ".sfm-workspace.json").as_posix()
+    set_first = f'set "out_of_core_long_side" in {first} to 479 or less (it is 1536)'
+    enable_other = (
+        "run 'sfm ws mipmaps --enable --out-of-core-long-side 479 "
+        f"{other_workspace.as_posix()}'"
+    )
+    # The workspaces are named in sorted order.
+    pair = sorted(
+        [(seoul_bull_workspace.parent, set_first), (other_workspace, enable_other)]
+    )
+    assert f"a tile at a time, {pair[0][1]} and {pair[1][1]}." in output
