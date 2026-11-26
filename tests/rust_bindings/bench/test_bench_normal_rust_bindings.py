@@ -1091,8 +1091,8 @@ def test_repeated_grown_plane_passes_stay_within_sigma_on_a_ground_truth_point()
     within 4.1 degrees of each other, and its plane is poorly determined. The
     first pass from the stored normal turns it far (69.6 degrees measured;
     62.4 with the two-view ladder). Later passes do not settle: each turns it
-    again by less than the weakest sigma it reports (5.3 and 8.2 degrees
-    against 21.0 and 18.1 measured; eight passes turn it 1.2 to 8.2 degrees
+    again by less than the weakest sigma it reports and by under 10 degrees
+    (5.3 and 8.2 degrees against 21.0 and 18.1 measured; eight passes turn it 1.2 to 8.2 degrees
     after the first, at sigma 15 to 21), and every pass reports low
     confidence. With its two other views grown jointly the point is not one
     the step settles on, where the two-view ladder's later passes turned it
@@ -1112,7 +1112,7 @@ def test_repeated_grown_plane_passes_stay_within_sigma_on_a_ground_truth_point()
         passes.append((report["tilt"]["degrees"], precision["sigma_weak_deg"]))
     assert passes[0][0] > 30.0, passes
     for turn, sigma in passes[1:]:
-        assert turn < sigma, passes
+        assert turn < sigma and turn < 10.0, passes
 
 
 # A point of seoul_bull v02 seen in two images, images 6 and 7.

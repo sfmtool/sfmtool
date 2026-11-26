@@ -1060,9 +1060,8 @@ fn grid_plane_normal(
 /// the views kept before it have a combined plane, each view's own plane, one
 /// Gauss-Newton step of its residual alone from the joint plane, must also lie
 /// within ``max_agreement_distance`` of that plane, or both views are grown
-/// alone. With no
-/// other view in the range, as on a track of two views, the pick is grown
-/// alone. A joint growth counts as two views towards ``max_selected_views``.
+/// alone. With no other view in the range, as on a track of two views, the
+/// pick is grown alone. A joint growth counts as two views towards ``max_selected_views``.
 /// Each later pick is grown from the combined plane
 /// so far; a pick of the second rung refused there is grown again from the
 /// starting plane, at the same keypoint-implied shift, and a pick of a later
@@ -1174,8 +1173,8 @@ fn grid_plane_normal(
 /// ``turned_support``, and can differ slightly from the last ``stage_zncc``,
 /// ``refusal`` (``None`` when it was taken, else ``"under_floor"`` or
 /// ``"stopped_early"``, or ``"too_far"`` for a joint growth one of whose
-/// views' own planes is too far from the plane kept before it), ``tilt_start`` (``"starting"`` or
-/// ``"combined"``, the plane its windows started from), ``stage_turn_deg``
+/// views' own planes is too far from the plane kept before it),
+/// ``tilt_start`` (``"starting"`` or ``"combined"``, the plane its windows started from), ``stage_turn_deg``
 /// (a float64 array, the degrees each fitted window stage turned the plane,
 /// as far as the growth ran) and ``grid_rounds`` (a list with one dict per
 /// whole-grid round, with ``cap_deg``, the cap it was fitted under, infinite

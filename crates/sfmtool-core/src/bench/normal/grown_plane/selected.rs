@@ -698,8 +698,9 @@ impl Sequence<'_, '_> {
     /// lies within `max_agreement_distance` of that plane by the
     /// combination's distance: its plane is then one estimate, combined with
     /// the picks before it, with the information of both views. A view too
-    /// far refuses it (`TooFar`), and both views are grown alone. When it reaches the floor but one view does not, that
-    /// view is left out under the floor and the other is grown alone, as
+    /// far refuses it (`TooFar`), and both views are grown alone. When it
+    /// reaches the floor but one view does not, that view is left out under
+    /// the floor and the other is grown alone, as
     /// [`Self::take`] grows a pick; when it does not reach the floor, both
     /// are grown alone. Each estimate is combined in turn. Whether the
     /// combined plane's weakest `σ` has reached `target_sigma_deg`.

@@ -1097,8 +1097,9 @@ fn disagreeing_scene() -> Scene {
 /// with no sink, with a sink at the overview level and with a detailed one.
 /// The overview level records the step and one phase per try; the detailed
 /// one adds every stage under them, here including a view left out by the
-/// means (the disagreeing one, grown alone with six picks), the pairs, the picks and the shift-only fits. A view whose keypoint
-/// is removed is left out with no try. No joint fit is recorded.
+/// means (the disagreeing one, grown alone with six picks), the pairs, the
+/// picks and the shift-only fits. A view whose keypoint is removed is left
+/// out with no try. No joint fit is recorded.
 #[test]
 fn the_grown_plane_normals_detail_phases_change_nothing() {
     use crate::progress::Event;
