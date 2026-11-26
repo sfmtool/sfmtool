@@ -32,9 +32,8 @@ _spec.loader.exec_module(_bench_bars)
 BENCH_BARS = _bench_bars.DATASETS
 DATASETS_DIR = _bench_bars.DATASETS_DIR
 REPO = _bench_bars.REPO
-read_image = _bench_bars.read_image
 
-__all__ = ["DATASETS", "DATASETS_DIR", "REPO", "read_image", "resolve"]
+__all__ = ["DATASETS", "DATASETS_DIR", "REPO", "resolve"]
 
 _OMNI = "sfmr/20260823-01-solve-rigcfg-frame_1-{}x12-clean-3-ba-embedded.sfmr"
 

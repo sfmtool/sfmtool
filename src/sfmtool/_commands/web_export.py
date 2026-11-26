@@ -114,6 +114,7 @@ def web_export(
         sfm web-export scene.sfmr -o small/ --single-file
     """
     from .._sfmtool.reconstruction import SfmrReconstruction
+    from ..photographs import PhotographCache
     from ..web_export import WebExportError, export_reconstruction
 
     reconstruction_path = Path(reconstruction_path)
@@ -141,6 +142,10 @@ def web_export(
             jpeg_quality=jpeg_quality,
             max_points=max_points,
             start_image=start_image,
+            # A cache of the default budget: under budget 0 an out-of-core
+            # photograph's tiles are not kept, and the render decodes each
+            # tile it reads from its mip level file again.
+            cache=PhotographCache(),
         )
     except WebExportError as e:
         raise click.UsageError(str(e))

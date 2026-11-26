@@ -4,7 +4,8 @@
 """What a track-at-pixel candidate is allowed to read.
 
 :class:`DatasetContext` is built once per dataset: the reconstruction, the
-decoded photographs as a shared pyramid set, the lazy descriptor index, every
+photographs as a pyramid set read through a photograph cache, as the viewer
+reads them, the lazy descriptor index, every
 image's ``.sift`` keypoints, the per-point patch frames laid out as arrays
 with 2D (per image) and 3D spatial indexes over them, and the clusters of a
 cluster-patches ``.matches`` file with a 2D index over their members.
@@ -28,6 +29,7 @@ neighbours to take its normal, depth or size from.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 import numpy as np
@@ -150,6 +152,16 @@ def texel_scale(
 class DatasetContext:
     """Everything loaded once per dataset."""
 
+    @cached_property
+    def images(self) -> list[np.ndarray]:
+        """The photographs decoded whole, for a candidate that reads arrays;
+        decoded the first time one asks."""
+        from sfmtool.fileio import read_image_rgb
+
+        return [
+            read_image_rgb(Path(self.recon.workspace_dir) / n) for n in self.image_names
+        ]
+
     def __init__(self, prepared: PreparedDataset):
         from sfmtool.patches import ImagePyramidSet
         from sfmtool.reconstruction import (
@@ -157,17 +169,13 @@ class DatasetContext:
             SfmrReconstruction,
         )
         from sfmtool.spatial import KdTree2d, KdTree3d, LazyKdForest
-        from sfmtool.fileio import read_image_rgb
 
         self.prepared = prepared
         self.recon = SfmrReconstruction.load(prepared.sfmr)
         recon = self.recon
         self.image_names = list(recon.image_names)
         self.image_stems = [Path(n).stem for n in self.image_names]
-        self.images = [
-            read_image_rgb(Path(recon.workspace_dir) / n) for n in self.image_names
-        ]
-        self.pyramids = ImagePyramidSet(recon, self.images)
+        self.pyramids = ImagePyramidSet.read(recon)
         self.forest = LazyKdForest(str(prepared.kdf))
         self.keypoints = [
             read_keypoints(prepared.workspace, n)[:2] for n in self.image_names

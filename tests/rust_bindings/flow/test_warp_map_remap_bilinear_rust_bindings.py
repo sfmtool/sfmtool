@@ -99,11 +99,13 @@ def test_an_index_is_given_with_a_set_and_only_with_a_set(tmp_path):
 def test_a_photograph_changed_after_the_read_fails_naming_it(tmp_path):
     path = _photograph(tmp_path / "first.png", 64, 48)
     second = _photograph(tmp_path / "second.png", 64, 48)
-    # A budget of one byte keeps no tile of the first photograph once the
-    # second is read, so the sampling decodes the file again.
-    pyramids = ImagePyramidSet.read(
-        [path, second], cache=PhotographCache(budget_bytes=1)
-    )
+    # A budget of one byte keeps only the photograph decoded last, so reading
+    # the second after the first leaves no tile of the first, and the
+    # sampling decodes its file again. One read of both would decode them in
+    # parallel, and the first would stay whenever its decode ended last.
+    cache = PhotographCache(budget_bytes=1)
+    pyramids = ImagePyramidSet.read([path], cache=cache)
+    ImagePyramidSet.read([second], cache=cache)
     _photograph(path, 70, 50)
     later = os.stat(path).st_mtime + 10
     os.utime(path, (later, later))

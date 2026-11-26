@@ -13,6 +13,7 @@
 //! data.
 //!
 //! ```no_run
+//! use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
 //! use sfmtool_core::progress::Progress;
 //! use sfmtool_core::web_export::{write_web_export, WebExportOptions};
 //! use sfmtool_core::SfmrReconstruction;
@@ -22,7 +23,14 @@
 //!     max_points: Some(50_000),
 //!     ..WebExportOptions::default()
 //! };
-//! let report = write_web_export(&recon, "site".as_ref(), &options, &Progress::none())?;
+//! let photographs = PhotographCache::new(PhotographCacheOptions::default());
+//! let report = write_web_export(
+//!     &recon,
+//!     "site".as_ref(),
+//!     &options,
+//!     &photographs,
+//!     &Progress::none(),
+//! )?;
 //! for (name, bytes) in &report.files {
 //!     println!("{name}: {bytes} bytes");
 //! }
@@ -43,7 +51,7 @@ use crate::analysis::scene_scale::{
     compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds, length_scale,
 };
 use crate::camera::frustum::compute_distorted_frustum_grid;
-use crate::camera::{PhotographCache, PhotographCacheOptions, PhotographReadError};
+use crate::camera::{PhotographCache, PhotographReadError};
 use crate::numeric::quantile_in_place;
 use crate::patch::display_bitmaps::render_display_patch_bitmaps;
 use crate::progress::{Cancelled, Progress};
@@ -264,6 +272,11 @@ impl From<PhotographReadError> for WebExportError {
 /// bitmap or an all-zero bitmap is drawn as a splat; a point at infinity with
 /// a patch keeps it, as SfM Explorer draws it.
 ///
+/// Both read the photographs through `photographs`, making the mipmaps they
+/// need in it. A caller that reads the same photographs again, such as a
+/// script that also reads an `ImagePyramidSet` through the same cache, passes
+/// that cache, so a mipmap either makes is made once.
+///
 /// # Errors
 ///
 /// [`WebExportError::UnknownStartImage`] and
@@ -284,6 +297,7 @@ impl From<PhotographReadError> for WebExportError {
 pub fn build_web_export(
     recon: &SfmrReconstruction,
     options: &WebExportOptions,
+    photographs: &PhotographCache,
     progress: &Progress<'_>,
 ) -> Result<WebExport, WebExportError> {
     if options.jpeg_quality == 0 || options.jpeg_quality > 100 {
@@ -340,13 +354,6 @@ pub fn build_web_export(
     };
     let [thumb_progress, bitmap_progress, rest] = progress.split([1.0, 4.0, 1.0]);
     let mut report = WebExportReport::default();
-    // The bitmap render and the thumbnails read each photograph once, so a
-    // cache that keeps nothing: each pyramid is dropped once its reader is
-    // done. Both make the mipmaps they need through it.
-    let photographs = PhotographCache::new(PhotographCacheOptions {
-        budget_bytes: 0,
-        ..Default::default()
-    });
 
     // The points kept, in their order in the file.
     let points = &recon.point_set.points;
@@ -372,7 +379,7 @@ pub fn build_web_export(
         let mut phase = bitmap_progress.phase("patch bitmaps");
         rendered_bitmaps = render_display_patch_bitmaps(
             recon,
-            &photographs,
+            photographs,
             &crate::camera::sampler::RegionPool::for_kernel_call(),
             &phase,
         )?;
@@ -403,7 +410,7 @@ pub fn build_web_export(
     // Thumbnail rows.
     let thumbnail_rows = if options.thumbnails && !images.is_empty() {
         let mut phase = thumb_progress.phase("thumbnails");
-        let rows = thumbnail_rows(recon, &photographs, &mut report.thumbnails, &phase)?;
+        let rows = thumbnail_rows(recon, photographs, &mut report.thumbnails, &phase)?;
         progress_note!(
             phase,
             "{} from the file, {} from .sift files, {} from photographs, {} placeholders",
@@ -639,9 +646,10 @@ pub fn write_web_export(
     recon: &SfmrReconstruction,
     out_dir: &Path,
     options: &WebExportOptions,
+    photographs: &PhotographCache,
     progress: &Progress<'_>,
 ) -> Result<WebExportReport, WebExportError> {
-    let export = build_web_export(recon, options, progress)?;
+    let export = build_web_export(recon, options, photographs, progress)?;
     std::fs::create_dir_all(out_dir).map_err(WebExportError::Io)?;
     for file in &export.files {
         std::fs::write(out_dir.join(&file.name), &file.bytes).map_err(WebExportError::Io)?;

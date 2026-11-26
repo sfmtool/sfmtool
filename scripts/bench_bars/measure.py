@@ -88,6 +88,9 @@ def run(name: str, sfmr: Path, n_tracks: int, seed: int, out_dir: Path) -> None:
 
     r = SfmrReconstruction.load(str(sfmr)).clone_with_changes(patch_bitmaps=None)
     t0 = time.time()
+    # Every set here is built from these arrays, the unmodified one and those
+    # with rows planted into them, so a track's readings before and after a
+    # plant differ only by the plant, never by where the pixels came from.
     imgs = [read_image(r.workspace_dir, n) for n in r.image_names]
     pyr0 = ImagePyramidSet(r, imgs)
     print(name, "images loaded", round(time.time() - t0, 1), "s", flush=True)

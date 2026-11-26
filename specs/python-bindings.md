@@ -389,7 +389,7 @@ Paths in the *Source* column are relative to
 | [fileio/camrig.rs](../crates/sfmtool-py/src/fileio/camrig.rs) | `read_camrig`, `read_camrig_metadata`, `write_camrig`, `verify_camrig`, and the image-pattern helpers `validate_camrig_pattern`, `camrig_pattern_to_glob`, `camrig_pattern_matches`, `camrig_pattern_matches_any_padding`, `camrig_pattern_frame_index` | [camrig-file-format.md](formats/camrig-file-format.md) |
 | [fileio/colmap_binary.rs](../crates/sfmtool-py/src/fileio/colmap_binary.rs), [colmap_db.rs](../crates/sfmtool-py/src/fileio/colmap_db.rs) | `read_colmap_binary`, `write_colmap_binary`, `write_colmap_db`, `read_colmap_db_matches` | [colmap-interop.md](formats/colmap-interop.md) |
 | [fileio/image.rs](../crates/sfmtool-py/src/fileio/image.rs) | `image_dimensions`, `image_has_alpha`, `read_image_rgb`, `read_image_rgba`, `write_image_rgb`, `write_image_rgba` | `image_dimensions` none; the others in [reading-and-writing-images.md](core/camera/reading-and-writing-images.md) |
-| [fileio/web_export.rs](../crates/sfmtool-py/src/fileio/web_export.rs) | `write_web_export` | [web-export-command.md](cli/visualization/web-export-command.md) |
+| [fileio/web_export.rs](../crates/sfmtool-py/src/fileio/web_export.rs) | `write_web_export(recon, out_dir, *, …, cache=None)`, reading the photographs through the `PhotographCache` it is given, or a cache of the default budget it makes for the call | [web-export-command.md](cli/visualization/web-export-command.md) |
 
 ### `sift`
 

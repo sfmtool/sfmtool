@@ -66,11 +66,20 @@ render; a read of one the render was handed that fails ends the export with
 `WebExportError::Photograph`, which the binding raises as a `RuntimeError`
 and the command reports as its failure with exit status 1, the message
 naming the photograph (a refusal is a usage error, exit status 2). The
-render reads the photographs through a
-photograph cache that keeps nothing, so each photograph it answers holds the
-tiles of its decode while the render reads it, is decoded once, and is not
-read from its file again
-([photograph-cache.md](../../core/camera/photograph-cache.md)).
+command reads the photographs through a
+photograph cache of the default budget, made for the run
+([photograph-cache.md](../../core/camera/photograph-cache.md)), so a tile
+of an out-of-core photograph that the render reads again is kept rather
+than decoded from its mip level file again. On 8 photographs of 16320 x
+12240 with current mipmaps that takes about 1.2 s, where a cache that keeps
+nothing took 41 to 64 s; in core the cache holds the photographs' tiles
+while the thumbnails decode them whole again, which raised the peak from
+10.0 to 14.9 GB on the same 8
+([out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
+open question 23). The cache keeps at most its budget, a quarter of
+physical memory clamped to between 1 and 16 GiB unless
+`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` sets it, so the peak rises by at most
+that.
 A point with no
 frame (an all-zero `u` row) or an all-zero bitmap row is drawn as a splat
 either way, by the rule SfM Explorer's surfels follow
@@ -355,11 +364,16 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
 ## Code
 
 - **Core**: [`sfmtool_core::web_export`](../../../crates/sfmtool-core/src/web_export.rs)
-  builds everything scene-specific. `build_web_export(recon, &options, progress)`
-  returns the files in memory with a `WebExportReport`;
-  `write_web_export(recon, out_dir, &options, progress)` writes them and returns
-  the report. `WebExportOptions` carries the options above, plus `source_name`,
-  `generator` and `max_page_size` (4096 unless a caller packs smaller pages).
+  builds everything scene-specific. `build_web_export(recon, &options,
+  &photographs, progress)` returns the files in memory with a
+  `WebExportReport`; `write_web_export(recon, out_dir, &options, &photographs,
+  progress)` writes them and returns the report. `photographs` is the
+  `PhotographCache` the bitmap render and the thumbnails read through, which
+  makes the mipmaps they need; the caller makes it, so a caller that reads the
+  same photographs in another call passes the cache that call reads through,
+  and a mipmap either makes is made once. `WebExportOptions` carries the
+  options above, plus `source_name`, `generator` and `max_page_size` (4096
+  unless a caller packs smaller pages).
   The report lists each file with its size, the point, patch and camera counts,
   where the thumbnail rows came from, whether the bitmaps were rendered, the
   decoded atlas bytes and the warnings. Atlas packing is
@@ -373,14 +387,28 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
 
   ```rust
   let options = WebExportOptions { max_points: Some(50_000), ..Default::default() };
-  let report = write_web_export(&recon, Path::new("site"), &options, &Progress::none())?;
+  let photographs = PhotographCache::new(PhotographCacheOptions::default());
+  let report = write_web_export(
+      &recon,
+      Path::new("site"),
+      &options,
+      &photographs,
+      &Progress::none(),
+  )?;
   ```
 
 - **Binding**: `sfmtool.fileio.write_web_export(recon, out_dir, *, patches,
   thumbnails, patch_size, jpeg_quality, max_points, start_image, source_name,
-  generator)`, returning the report as a dict.
+  generator, cache=None)`, returning the report as a dict. `cache` is the
+  `sfmtool.photographs.PhotographCache` to read the photographs through; `None`
+  makes a cache of the default budget for the call, as
+  `ImagePyramidSet.read` does
+  ([python-bindings.md](../../python-bindings.md)).
+  `sfmtool.web_export.export_reconstruction` takes the same `cache` and
+  passes it on.
 - **Python**: the command in
-  [`_commands/web_export.py`](../../../src/sfmtool/_commands/web_export.py), and
+  [`_commands/web_export.py`](../../../src/sfmtool/_commands/web_export.py),
+  which passes a `PhotographCache()` of the default budget, and
   in [`sfmtool.web_export`](../../../src/sfmtool/web_export/__init__.py) the
   directory checks, the copy of the two static files and the single-file page.
 
@@ -400,10 +428,15 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
   plane, a fisheye grid on the frustum sphere, byte-block offsets and the
   origin shift back to `f64`, a point at infinity exported with its patch and
   one without a patch as a splat, `--max-points` selection, patch resampling,
-  the start view and an unknown start image.
+  the start view and an unknown start image, and an export making the
+  missing mipmaps of out-of-core photographs through the cache it is given,
+  counted in that cache, with a second export through it making none.
 - Python, in [`tests/test_web_export.py`](../../../tests/test_web_export.py),
   on the Seoul bull ground truth into a temporary directory: `scene.json`
   against the files written and the `.sfmr`, page sizes, the non-empty
   directory refusal and `--overwrite`, leaving out atlases, the start image,
-  the single-file page and its 16 MB refusal, and a `RuntimeError` from
-  `write_web_export` reported as the command's failure.
+  the single-file page and its 16 MB refusal, a `RuntimeError` from
+  `write_web_export` reported as the command's failure, and, with
+  `mipmap_options` in a copy of the workspace, the mipmaps the export makes
+  counted in the cache passed to `write_web_export`, and
+  `ImagePyramidSet.read` through that cache making none.

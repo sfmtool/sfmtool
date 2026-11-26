@@ -328,7 +328,7 @@ Why it is shaped this way:
   that answered it was dropped still reads: it keeps the cache's tiles alive
   until it is dropped, and decodes again what was evicted. `get` and
   `get_many` keep their `&self` signatures, so the viewer's
-  `Arc<PhotographCache>`, the web export's cache on its stack and the
+  `Arc<PhotographCache>`, a binding's cache on its stack and the
   examples' caches call them as before, and a photograph can never find its
   cache gone. The other ways considered were `get` taking `self: &Arc<Self>`,
   which changes every caller's signature and forces the web export and the
@@ -339,9 +339,11 @@ Why it is shaped this way:
   keeps nothing cannot answer a later tile read without decoding the whole
   photograph again, so `get` and `get_many` hand back every tile of the
   decode that made the answer, held until the answer is dropped, as
-  `TryDecode::Decoded` does for a panel. `sfm web-export` and the viewer with
-  `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0` then decode a photograph once per
-  answer rather than once per render.
+  `TryDecode::Decoded` does for a panel. The viewer with
+  `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0` then decodes a photograph once per
+  answer rather than once per render. An out-of-core photograph's answer
+  holds no tile, so under a budget of 0 each tile it reads is decoded from
+  its file again.
 - **`get_many` returns one entry per path, in order, and opens no phase.** The
   patch kernels index their view slice by image index, and the caller builds
   that slice from the entries; a `None` entry is an unreadable file. The
@@ -1015,7 +1017,8 @@ reconstruction's photographs goes through it except the ones under
   `render_display_patch_bitmaps`, which reads every photograph with `get_many`,
   so the panels and later steps find them decoded
   ([open.rs](../../../crates/sfm-explorer/src/state/open.rs)). `sfm web-export`
-  calls the same function with a cache of budget 0.
+  calls the same function with a cache of the default budget it makes for
+  its run.
 - **Each of these renders** reads its photographs' tiles through the cache
   (§ "Reads through the cache"), so a photograph whose tiles were evicted
   while the operation ran is decoded again, and one whose file is gone or

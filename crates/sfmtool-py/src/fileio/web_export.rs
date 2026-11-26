@@ -9,9 +9,11 @@ use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use sfmtool_core::camera::{PhotographCache, PhotographCacheOptions};
 use sfmtool_core::progress::Progress;
 use sfmtool_core::web_export::{write_web_export as core_write, WebExportError, WebExportOptions};
 
+use crate::photographs::PyPhotographCache;
 use crate::PySfmrReconstruction;
 
 /// Write the data files of a web export of ``recon`` into ``out_dir``:
@@ -33,6 +35,11 @@ use crate::PySfmrReconstruction;
 ///     start_image: Name of the image whose camera the page opens through.
 ///     source_name: The file name ``scene.json`` records as its source.
 ///     generator: What ``scene.json`` records as having written it.
+///     cache: The ``sfmtool.photographs.PhotographCache`` the patch bitmap
+///         render and the thumbnails read the photographs through, making
+///         the mipmaps they need in it; pass the cache another call reads
+///         the same photographs through to make each mipmap once. ``None``
+///         makes a cache of the default budget for this call.
 ///
 /// Returns:
 ///     A dict: ``files`` (list of ``(name, bytes)`` in write order,
@@ -54,7 +61,7 @@ use crate::PySfmrReconstruction;
 #[pyfunction]
 #[pyo3(signature = (
     recon, out_dir, *, patches=true, thumbnails=true, patch_size=None, jpeg_quality=85,
-    max_points=None, start_image=None, source_name=None, generator=None
+    max_points=None, start_image=None, source_name=None, generator=None, cache=None
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn write_web_export<'py>(
@@ -69,6 +76,7 @@ pub fn write_web_export<'py>(
     start_image: Option<String>,
     source_name: Option<String>,
     generator: Option<String>,
+    cache: Option<PyRef<'py, PyPhotographCache>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let mut options = WebExportOptions {
         patches,
@@ -83,9 +91,17 @@ pub fn write_web_export<'py>(
     if let Some(generator) = generator {
         options.generator = generator;
     }
+    let own;
+    let photographs = match &cache {
+        Some(cache) => &cache.inner,
+        None => {
+            own = PhotographCache::new(PhotographCacheOptions::default());
+            &own
+        }
+    };
     let inner = recon.inner();
     let report = py
-        .detach(|| core_write(inner, &out_dir, &options, &Progress::none()))
+        .detach(|| core_write(inner, &out_dir, &options, photographs, &Progress::none()))
         .map_err(|e| match e {
             WebExportError::Io(_) => PyIOError::new_err(e.to_string()),
             WebExportError::Photograph(_) => PyRuntimeError::new_err(e.to_string()),

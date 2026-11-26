@@ -118,8 +118,14 @@ def export_reconstruction(
     jpeg_quality: int = 85,
     max_points: int | None = None,
     start_image: str | None = None,
+    cache=None,
 ) -> dict:
     """Write ``recon`` as a web export into ``out_dir``.
+
+    ``cache`` is the ``sfmtool.photographs.PhotographCache`` the export reads
+    the photographs through, passed on to
+    :func:`sfmtool._sfmtool.fileio.write_web_export`, which makes a cache of
+    its own when it is ``None``.
 
     Returns the report of :func:`sfmtool._sfmtool.fileio.write_web_export`, with
     ``files`` listing what is in ``out_dir`` now, by name and size in bytes.
@@ -143,6 +149,7 @@ def export_reconstruction(
         start_image=start_image,
         source_name=source_name,
         generator=_generator(),
+        cache=cache,
     )
     # Refuse what can be refused before anything in out_dir is touched.
     if out_dir.is_dir() and any(out_dir.iterdir()) and not overwrite:
