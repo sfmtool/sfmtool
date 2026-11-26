@@ -14,8 +14,8 @@ and its relative stop; the early stop, the second growth on the second rung and
 the shift-only fit; the information read through the Sobel gradient with the σ
 target of 2.75°; reading each view through its own slid patch; writing no
 keypoint; the arithmetic of the fits; the optimiser's tilt cap that grows;
-the working grid laid again at each stage's plane; and σ read in the plane's
-own angular frame.
+the working grid laid again at each stage's plane; σ read in the plane's
+own angular frame; and the three-way ladder.
 
 ## How the step is scored
 
@@ -798,3 +798,101 @@ it is reported as, and it no longer depends on the normal the step starts
 from. The thresholds that read it were set on the chart's σ; setting them
 again is an open question
 ([grown-plane-normal-open-questions.md](../../drafts/grown-plane-normal-open-questions.md)).
+
+## The three-way ladder (2026-11-25)
+
+**What was tried.** At each rung of the selection the pick is grown jointly
+with a partner from the same rung, one plane for the two views with a shift
+for each, each view compared with the reference only
+(§ "The three-way ladder" of the spec). Before the change every pick was
+grown alone. The arm adopted compares each view with the reference only,
+keeps the wide pairs, counts a joint growth as two views towards
+`max_selected_views` and grows jointly on every rung.
+
+**The study.** On a sample of 200 ground-truth points of `seoul_bull`,
+`kerry_park`, `dino_dog_toy` and `seattle_backyard`, each run from five
+starting normals (the mean viewing direction, two cone starts and two
+perturbed starts):
+
+| Arm | points with two or more answers | one answer where the two-view ladder gave several / the reverse |
+|-----|---|---|
+| two-view ladder | 59 | — |
+| three-way ladder, reference comparisons only | 42 | 27 / 10 |
+| the same without the wide pairs | 40 | 31 / 12 |
+| a joint growth counted as one pick | 43 | 26 / 10 |
+| joint growths on the first rung only | 45 | 24 / 10 |
+| each view also compared with the other | 54 | 24 / 19 |
+
+Starts with no answer stayed at 11 to 14 of 1000 (12 before), so the gain is
+not from refusing. The gain was on the Seoul bull (6 of 40 points with
+several answers against 11) and the dino (4 of 60 against 12), not Kerry Park
+(25 of 60 against 26), and about the same at every width of the views' weak
+axes and every shape of the triangle the reference and two views make. The
+renders per point were the same, 216, and the time per point about the same.
+In a blind review of 40 points where the two answers differed, the reviewer
+accepted the three-way ladder's normal on 36 and the two-view ladder's on 35.
+There was no gain on points the sample did not select from ("fresh" points),
+on 120 of which 32 to 36 had several answers against 31, or on the demo
+scene's exact truth (1174 of 1600 trials right against 1183).
+
+**The too-far check.** As prototyped, a joint growth was one estimate to the
+distance test, so a view whose own plane disagreed with the others joined
+when it had a partner: on the tests' disagreeing-view scene the view at 38°,
+grown with the one at 25°, joined at a distance of 1.6 and the normal ended
+5.3° off with σ 0.89°, where the two-view ladder left the view out and ended
+within a degree. Two forms of a check before a joint growth is taken were
+tried, each holding each view's own plane (one Gauss–Newton step of its
+residual alone from the joint plane) to the combination's distance test
+against the plane kept before the growth: (A) a view too far is left out and
+the other grown alone; (B) a view too far refuses the joint growth and both
+are grown alone. The view's own plane is not added to the plane it is tested
+against: added, its own information dominates the mean, and the disagreeing
+view measured 1.70, under the cutoff, against 3.74 without it. Against the
+ladder without a check, on the study's 1093 ground-truth trials:
+
+| | no check | A | B (built) |
+|---|---|---|---|
+| disagreeing-view scene: error / weakest σ | 5.27° / 0.89° | 0.08° / 1.01° | 0.08° / 1.01° |
+| trials whose output changes | — | 19 (17 over 0.5°) | 19 (all over 0.5°) |
+| change of those, median / 90th pct / max | — | 4.4° / 16.2° / 18.8° | 2.8° / 11.3° / 53.4° |
+| changed answers nearer the two-view ladder's than the stored normal | — | 16 of 19 | 17 of 19 |
+| changed answers nearer the two-view ladder's than before the check | — | 10 of 19 | 11 of 19 |
+| points with two or more answers over five starts (two-view ladder 59) | 42 | 42 | 42 |
+| review 5's 40 non-control points changed | — | 0 | 0 |
+
+Neither form touches seoul_bull v02 point 255, whose joint growth is on the
+first rung with no plane kept before it, nor any two-view point. B is built:
+it leaves every single view to the combination, as the two-view ladder did.
+
+**On the four ground truths.** Every finite point of a copy of
+`seoul_bull_sculpture_ground_truth_v02`, `kerry_park_ground_truth_v02`,
+`dino_dog_toy_ground_truth_v01` and the `seattle_backyard` candidate
+ground truth v04, from its stored normal, at the defaults, with the two-view
+ladder and with the three-way ladder as built, with the too-far check; the
+change is the angle between the two normals the step ends at.
+
+| dataset | points | two-view points | changed over 0.5° | over 2° | over 10° | change of those over 0.5°, median / 90th pct / max | low confidence before → after | weak turn / none joined before → after | CPU ms per point before → after |
+|---|---|---|---|---|---|---|---|---|---|
+| seoul_bull | 274 | 21 | 182 | 119 | 42 | 3.77° / 18.5° / 52.2° | 169 → 170 | 3 / 0 → 3 / 0 | 42.2 → 35.2 |
+| kerry_park | 387 | 11 | 253 | 144 | 49 | 2.63° / 17.9° / 58.6° | 194 → 200 | 0 / 3 → 3 / 4 | 61.4 → 60.8 |
+| dino_dog_toy | 1243 | 11 | 451 | 74 | 2 | 0.91° / 2.51° / 18.0° | 45 → 50 | 0 / 0 → 0 / 0 | 96.5 → 99.2 |
+| seattle_backyard | 281 | 6 | 214 | 118 | 24 | 2.43° / 10.8° / 54.2° | 210 → 216 | 0 / 0 → 0 / 0 | 71.6 → 62.6 |
+| all | 2185 | 49 | 1100 | 455 | 117 | 1.58° / 10.5° / 58.6° | 618 → 636 | 3 / 3 → 6 / 4 | 80.2 → 79.7 |
+
+The CPU time is per call, one call per point, six worker processes on a
+shared machine, both steps run in the same session; other sessions gave
+71.4 → 76.7 ms and, with ten workers, 99.2 → 102.9 ms over all points, so
+the difference is within the machine's noise. The check adds no render: the
+views' own steps come from the read that judges the growth. Against the
+ladder without the check, 16 of the 2185 points change by more than 0.5°.
+The 49 points seen by two views, which have no partner, gave the same
+normal, σ, outcome and low-confidence verdict bit for bit. The study's own
+sample was rerun with the step as built: on all 1093 of its ground-truth
+trials it gave the study's three-way ladder's normal bit for bit before the
+check, and the prototyped check B's normal bit for bit with it.
+
+**Decision.** The three-way ladder replaces the two-view ladder, with the
+too-far check. Its partner rule, its reading of a joint growth's information
+in the selection's model, its wide pairs by a joint growth's pick only, and
+a first-rung joint growth with no plane to be checked against are open in
+[grown-plane-normal-open-questions.md](../../drafts/grown-plane-normal-open-questions.md).

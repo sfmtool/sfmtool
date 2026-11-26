@@ -10,9 +10,10 @@
 //! opposite sides of the reference whose pairs sharpen the plane, a selection
 //! that matches a few of many views, a flat wall, and large turns on weak and
 //! on strong evidence, and the ladder's selection near to far: its order, a
-//! refused pick on the second rung grown again from the starting plane while
-//! its rung waits for its other view, a refused pick past it grown once, its
-//! end at the widest view that passes, and a view at the reference's centre;
+//! refused pick alone on the second rung grown again from the starting plane,
+//! a refused pick past it grown once, its end at the widest view that passes,
+//! and a view at the reference's centre; the three-way ladder's partner, a
+//! joint growth with an unrelated view, and a track of two views;
 //! a growth stopped early, keypoints off the content in views fitted for
 //! their shift alone, and a shift-only fit from a keypoint too far off.
 
@@ -438,15 +439,18 @@ fn a_large_turn_on_strong_evidence_is_made() {
 }
 
 /// A view that sees the texture on a plane turned 25 degrees from the one
-/// the others see is left out, and the plane is the others'. The selection
-/// matches every view; this one passes the floor on its own, the combination
-/// leaves it out as too far, and it is not grown again.
+/// the others see is left out, and the plane is the others'. With the
+/// facing view the reference, the views at 8, 15, 25 and 38 degrees each have
+/// a rung of their own, so each is grown alone. The selection matches every
+/// view; this one passes the floor on its own, the combination leaves it out
+/// as too far, and it is not grown again.
 #[test]
 fn a_view_whose_own_plane_disagrees_is_left_out() {
-    let centres = wide_centres();
-    let scene = disagreeing_scene();
+    let centres = wide_centres()[..5].to_vec();
+    let scene = disagreeing_scene_of(centres.clone());
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::y(), 10.0);
+    let (track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
     let row = row_of(&track, 4);
     let (turned, report) = run(&scene, &edited, &track, &every_view());
     let sequence = sequence_of(&report);
@@ -475,6 +479,78 @@ fn a_view_whose_own_plane_disagrees_is_left_out() {
     assert_eq!(tries.len(), 1, "{tries:#?}");
     assert_eq!(tries[0].outcome, GrownPlaneTryOutcome::Matched);
     assert_eq!(tries[0].attempts.len(), 1);
+    assert!(
+        sequence.trace.iter().all(|t| t.partner.is_none()),
+        "{sequence:#?}"
+    );
+}
+
+/// On the full disagreeing-view scene the view at 38 degrees, which sees a
+/// plane turned 25 degrees from the others', is grown jointly with its rung's
+/// other view, at 25 degrees. Its own plane lies too far from the plane kept
+/// before the joint growth, so the joint growth is refused as too far, with
+/// no first-window or floor test failing, and both views are grown alone; the
+/// combination leaves the disagreeing view out as too far, and the normal
+/// ends on the others' plane (0.08 degrees off measured; without the test the
+/// joint growth was taken and the normal ended 5.3 degrees off).
+#[test]
+fn a_disagreeing_view_with_a_partner_is_left_out_as_too_far() {
+    let scene = disagreeing_scene();
+    let edited = edited_of(&scene);
+    let track = tilted_track(&edited, Vector3::y(), 10.0);
+    let (odd, partner) = (row_of(&track, 4), row_of(&track, 3));
+    let (turned, report) = run(&scene, &edited, &track, &every_view());
+    let sequence = sequence_of(&report);
+    let joint = sequence
+        .trace
+        .iter()
+        .find(|t| t.partner.is_some())
+        .expect("a joint growth");
+    let pair = [
+        joint.observation,
+        joint.partner.expect("a partner").observation,
+    ];
+    assert!(pair.contains(&odd) && pair.contains(&partner), "{joint:#?}");
+    assert_eq!(joint.outcome, GrownPlaneTryOutcome::LeftOut, "{joint:#?}");
+    let attempt = joint.attempts.last().expect("a growth");
+    assert_eq!(
+        attempt.refusal,
+        Some(GrownPlaneRefusal::TooFar),
+        "{attempt:#?}"
+    );
+    let [za, zb] = attempt.view_zncc.expect("both views scored");
+    assert!(za >= 0.5 && zb >= 0.5, "{attempt:#?}");
+    let distances = attempt.view_distance.expect("a plane kept before it");
+    let at = |row: usize| if joint.observation == row { 0 } else { 1 };
+    assert!(distances[at(odd)] > 3.0, "{distances:?}");
+    assert!(distances[at(partner)] <= 3.0, "{distances:?}");
+    // Both views are grown alone after it.
+    for row in [odd, partner] {
+        assert!(
+            sequence
+                .trace
+                .iter()
+                .any(|t| t.observation == row && t.partner.is_none()),
+            "{sequence:#?}"
+        );
+    }
+    assert!(
+        matches!(
+            sequence.views[odd],
+            GrownPlaneView::LeftOut {
+                reason: GrownPlaneRefusal::TooFar,
+                ..
+            }
+        ),
+        "{:?}",
+        sequence.views[odd]
+    );
+    assert!(matches!(
+        sequence.views[partner],
+        GrownPlaneView::Joined { .. }
+    ));
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 0.25, "{after:.3} deg off: {report}");
 }
 
 /// A checker four image px a square, so that a 7×7 window matches equally
@@ -587,10 +663,11 @@ fn the_keypoint_implied_shift_takes_the_right_peak_on_repeating_texture() {
         .contains("0 of 3 views joined, 3 left out"));
 }
 
-/// Three views at 20 to 30 degrees, two with their keypoints on the point's
-/// projection and the third with its keypoint 6 px off along one axis and
+/// Views at 15, 35 and 22 degrees, one a rung so each is grown alone, two
+/// with their keypoints on the point's projection and the 22-degree view
+/// with its keypoint 6 px off along one axis and
 /// 2 px along the other, past what the growing windows recover. The step
-/// trusts the keypoint: the third view is grown from the shift it implies,
+/// trusts the keypoint: the 22-degree view is grown from the shift it implies,
 /// from the combined plane and, on the second rung, again from the starting
 /// plane at the same shift, both refused, and it is left out with no other
 /// growth. No phase searches for a shift, and the plane is the other two
@@ -603,8 +680,8 @@ fn a_view_whose_keypoint_is_off_past_the_growth_is_left_out() {
     let centres = vec![
         centre(0.0, 0.0),
         centre(15.0, 0.0),
-        centre(25.0, 120.0),
-        centre(30.0, 240.0),
+        centre(35.0, 120.0),
+        centre(22.0, 240.0),
     ];
     let scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
     let edited = edited_of(&scene);
@@ -991,10 +1068,10 @@ fn depth_of_phase(phases: &[(&'static str, u8, Option<String>)], name: &str) -> 
         .expect("recorded")
 }
 
-/// The scene of [`a_view_whose_own_plane_disagrees_is_left_out`]: one view at
-/// 38 degrees sees the texture on a plane turned 25 degrees from the others'.
-fn disagreeing_scene() -> Scene {
-    let centres = wide_centres();
+/// The views of `centres`, the fifth of which, at 38 degrees in
+/// [`wide_centres`], sees the texture on a plane turned 25 degrees from the
+/// others'.
+fn disagreeing_scene_of(centres: Vec<[f64; 3]>) -> Scene {
     let odd = centres[4];
     let turn = nalgebra::Rotation3::from_axis_angle(&Vector3::x_axis(), 25f64.to_radians());
     let other_normal = turn * truth();
@@ -1011,12 +1088,18 @@ fn disagreeing_scene() -> Scene {
     })
 }
 
+/// [`wide_centres`] with the view at 38 degrees seeing another plane.
+fn disagreeing_scene() -> Scene {
+    disagreeing_scene_of(wide_centres())
+}
+
 /// Detail phases change nothing: the step's track and report are the same
 /// with no sink, with a sink at the overview level and with a detailed one.
 /// The overview level records the step and one phase per try; the detailed
 /// one adds every stage under them, here including a view left out by the
-/// means, the pairs, the picks and the shift-only fits. A view whose keypoint
-/// is removed is left out with no try. No joint fit is recorded.
+/// means (the disagreeing one, grown alone with six picks), the pairs, the
+/// picks and the shift-only fits. A view whose keypoint is removed is left
+/// out with no try. No joint fit is recorded.
 #[test]
 fn the_grown_plane_normals_detail_phases_change_nothing() {
     use crate::progress::Event;
@@ -1144,13 +1227,35 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
         assert_eq!(names(&detailed_phases, "pairs"), 1);
         assert!(!sequence.pairs.is_empty(), "{sequence:#?}");
         assert_eq!(names(&detailed_phases, "pair fit"), sequence.pairs.len());
-        assert_eq!(names(&detailed_phases, "selection"), sequence.picks.len());
+        // One selection phase per pick grown alone and per joint growth,
+        // whose two views are both picks.
+        let joint_picks = sequence
+            .picks
+            .iter()
+            .filter(|p| p.partner.is_some())
+            .count();
+        assert_eq!(
+            names(&detailed_phases, "selection"),
+            sequence.picks.len() - joint_picks / 2
+        );
         assert_eq!(names(&detailed_phases, "shift-only fit"), shift_only);
-        // The reference and the view with no keypoint are not candidates.
+        // The reference and the view with no keypoint are not candidates;
+        // every candidate is picked or fitted for its shift alone.
         let candidates = sequence.views.len() - 2;
-        let picked = max_selected_views.min(candidates);
-        assert_eq!(sequence.picks.len(), picked, "{sequence:#?}");
-        assert_eq!(shift_only, candidates - picked, "{sequence:#?}");
+        assert!(sequence.picks.len() >= max_selected_views.min(candidates));
+        assert_eq!(
+            shift_only,
+            candidates - sequence.picks.len(),
+            "{sequence:#?}"
+        );
+        // The scene has a rung holding two views, which are grown jointly:
+        // its growth phases are noted as joint.
+        assert!(joint_picks >= 2, "{sequence:#?}");
+        assert!(
+            detailed_phases.iter().any(|(n, _, note)| *n == "growth"
+                && note.as_deref().is_some_and(|t| t.starts_with("joint"))),
+            "{detailed_phases:#?}"
+        );
         for once in ["setup", "turn", "grown plane normal"] {
             assert_eq!(names(&detailed_phases, once), 1, "{once}");
         }
@@ -1185,11 +1290,13 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
         assert_eq!(depth_of("mean"), step + 1);
         assert_eq!(depth_of("selection"), step + 1);
         assert_eq!(depth_of("pair fit"), depth_of("pairs") + 1);
-        if max_selected_views == 3 {
+        if shift_only > 0 {
             assert_eq!(depth_of("shift-only fit"), step + 1);
-        } else {
-            // Every view is matched, and the means leave the disagreeing
-            // one out.
+        }
+        if max_selected_views == 6 {
+            // Every view with a keypoint is matched. With the 8-degree view
+            // left without a keypoint, the disagreeing view is grown alone,
+            // and the means leave it out as too far.
             let refused = detailed_phases
                 .iter()
                 .filter(|(n, _, note)| {
@@ -1199,15 +1306,26 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
                 })
                 .count();
             assert!(refused >= 1, "{detailed_phases:#?}");
+            assert!(
+                matches!(
+                    sequence.views[row_of(&track, 4)],
+                    GrownPlaneView::LeftOut {
+                        reason: GrownPlaneRefusal::TooFar,
+                        ..
+                    }
+                ),
+                "{sequence:#?}"
+            );
         }
     }
 }
 
 /// The information-weighted plane of the views on opposite sides of a
 /// reference that faces the plane: each view is 20 degrees from it, and the
-/// two pairs, the views opposite each other, are 40 degrees apart. Under a
-/// target `σ` the four views do not reach, the selection matches all four,
-/// the pairs are matched widest first and both are kept; with them the
+/// views opposite each other are 40 degrees apart. Under a target `σ` the
+/// four views do not reach, the selection matches all four, in two joint
+/// growths, and the widest pair of the growths' picks is matched and kept;
+/// with it the
 /// weakest `σ` is under that of the reference matches alone (with
 /// `max_pairs` 0), and still is with each pair's information halved, and the
 /// plane stays on the truth.
@@ -1235,8 +1353,13 @@ fn wide_pairs_sharpen_the_plane_over_reference_matches_alone() {
     assert_eq!(alone_seq.joined(), 4, "{alone_seq:#?}");
     assert_eq!(paired_seq.joined(), 4, "{paired_seq:#?}");
     assert!(alone_seq.pairs.is_empty());
-    assert_eq!(paired_seq.pairs.len(), 2, "{paired_seq:#?}");
-    assert_eq!(paired_seq.pairs_kept(), 2, "{paired_seq:#?}");
+    // The four views are grown as two joint growths, each a view and the
+    // view across from it, and a joint growth is in a pair by its pick only:
+    // one pair, of the two picks, which lie opposite each other.
+    assert_eq!(paired_seq.trace.len(), 2, "{paired_seq:#?}");
+    assert!(paired_seq.trace.iter().all(|t| t.partner.is_some()));
+    assert_eq!(paired_seq.pairs.len(), 1, "{paired_seq:#?}");
+    assert_eq!(paired_seq.pairs_kept(), 1, "{paired_seq:#?}");
     for pair in &paired_seq.pairs {
         assert!((pair.angle_deg - 40.0).abs() < 0.5, "{pair:?}");
         let images: Vec<u32> = pair
@@ -1267,12 +1390,13 @@ fn wide_pairs_sharpen_the_plane_over_reference_matches_alone() {
 }
 
 /// Sixteen views around the point, in rings at 10 to 40 degrees: the
-/// selection matches a view of its first rung and then, from the combined
-/// plane, the views of the widest ring that most raise the weakest predicted
-/// information, and stops once the combined
-/// plane's `σ` reaches the target, having matched far fewer views than there
-/// are. Every other view is fitted for its shift alone at the final plane,
-/// with a shift near zero, and keeps its keypoint.
+/// selection grows a view of its first rung jointly with a partner from
+/// that rung, then, from the combined plane, the view of the widest ring
+/// that most raises the weakest predicted information jointly with its
+/// partner from that ring, each partner across its pick's offset, and stops
+/// once the combined plane's `σ` reaches the target, having matched far
+/// fewer views than there are. Every other view is fitted for its shift
+/// alone at the final plane, with a shift near zero, and keeps its keypoint.
 #[test]
 fn the_selection_reaches_the_target_sigma_matching_few_views() {
     let mut centres = vec![centre(0.0, 0.0)];
@@ -1295,7 +1419,7 @@ fn the_selection_reaches_the_target_sigma_matching_few_views() {
     let sequence = sequence_of(&report);
     let others = centres.len() - 1;
     assert!(
-        sequence.matched() <= 3,
+        sequence.matched() <= 4,
         "{} of {others}: {report}: {:#?}",
         sequence.matched(),
         sequence.picks
@@ -1303,25 +1427,36 @@ fn the_selection_reaches_the_target_sigma_matching_few_views() {
     assert_eq!(sequence.picks.len(), sequence.matched());
     let last = sequence.picks.last().expect("a pick");
     assert!(last.sigma_after_deg <= target, "{:#?}", sequence.picks);
-    // The first pick is from the first rung, 10 to 20 degrees, and the
-    // later ones from the widest ring, the last rung, grown from the
+    // Two joint growths: the first rung's, 10 to 20 degrees, from the
+    // starting plane, and then the widest ring's, the last rung, from the
     // combined plane.
-    let first = sequence.picks[0].angle_deg;
-    assert!((10.0..=20.0).contains(&first), "{:#?}", sequence.picks);
-    for pick in &sequence.picks[1..] {
+    assert_eq!(sequence.trace.len(), 2, "{:#?}", sequence.trace);
+    assert!(sequence.trace.iter().all(|t| t.partner.is_some()));
+    assert_eq!(sequence.picks.len(), 4, "{:#?}", sequence.picks);
+    for pick in &sequence.picks[..2] {
+        assert!(
+            (10.0..=20.0).contains(&pick.angle_deg),
+            "{:#?}",
+            sequence.picks
+        );
+    }
+    for pick in &sequence.picks[2..] {
         assert!((pick.angle_deg - 40.0).abs() < 0.5, "{:#?}", sequence.picks);
     }
-    for entry in &sequence.trace[1..sequence.picks.len()] {
-        assert_eq!(entry.attempts[0].tilt_start, GrownPlaneTiltStart::Combined);
-    }
-    // The two wide picks are not along one offset.
-    let d0 = sequence.picks[1].offset_direction;
-    let d1 = sequence.picks[2].offset_direction;
-    assert!(
-        (d0[0] * d1[0] + d0[1] * d1[1]).abs() < 0.9,
-        "{:#?}",
-        sequence.picks
+    assert_eq!(
+        sequence.trace[1].attempts[0].tilt_start,
+        GrownPlaneTiltStart::Combined
     );
+    // Each partner lies across its pick's offset, not along it, and the two
+    // wide picks are not along one offset either.
+    let across = |a: usize, b: usize| {
+        let (d0, d1) = (
+            sequence.picks[a].offset_direction,
+            sequence.picks[b].offset_direction,
+        );
+        (d0[0] * d1[0] + d0[1] * d1[1]).abs() < 0.9
+    };
+    assert!(across(0, 1) && across(2, 3), "{:#?}", sequence.picks);
     let precision = sequence.precision.expect("views joined");
     assert!(precision.discounted_sigma_weak_deg <= target, "{report}");
     let after = degrees(patch_frame_of(&turned).normal(), truth());
@@ -1394,13 +1529,15 @@ fn run_ladder(scene: &Scene) -> (EditableTrack, EditableTrack, NormalReport) {
 }
 
 /// Views at 5 to 50 degrees: the ladder picks the view nearest 12 degrees
-/// first, grown from the starting plane, then one view a rung, each about
-/// 1.6 times wider than the widest before it and grown from the combined
-/// plane, out to the widest view, and last the view under its first rung.
+/// first and grows it from the starting plane jointly with the first rung's
+/// other view, at 19 degrees, then one view a rung, each about 1.6 times
+/// wider than the widest before it and grown alone from the combined plane,
+/// since no other view is in its rung, out to the widest view, and last the
+/// view under its first rung.
 #[test]
 fn the_ladder_visits_views_near_to_far() {
     let scene = ladder_scene(&spread(&[5.0, 12.0, 19.0, 31.0, 50.0]), &[]);
-    let (_, turned, report) = run_ladder(&scene);
+    let (track, turned, report) = run_ladder(&scene);
     let sequence = sequence_of(&report);
     let angles: Vec<f64> = sequence.picks.iter().map(|p| p.angle_deg).collect();
     let expected = [12.0, 19.0, 31.0, 50.0, 5.0];
@@ -1409,14 +1546,43 @@ fn the_ladder_visits_views_near_to_far() {
         assert!((a - e).abs() < 0.5, "{angles:?}");
     }
     let rungs: Vec<u32> = sequence.picks.iter().map(|p| p.rung).collect();
-    assert_eq!(rungs, [0, 1, 2, 3, 4]);
+    assert_eq!(rungs, [0, 0, 1, 2, 3]);
     assert!(sequence.picks.iter().all(|p| p.matched), "{report}");
-    // The first pick grows from the starting plane, every later one from
+    // The first rung's two views are grown jointly, each the other's
+    // partner; every later pick alone.
+    let (at12, at19) = (row_of(&track, 2), row_of(&track, 3));
+    assert_eq!(
+        sequence.picks[0].partner,
+        Some(at19),
+        "{:#?}",
+        sequence.picks
+    );
+    assert_eq!(
+        sequence.picks[1].partner,
+        Some(at12),
+        "{:#?}",
+        sequence.picks
+    );
+    assert!(sequence.picks[2..].iter().all(|p| p.partner.is_none()));
+    assert_eq!(sequence.trace.len(), 4, "{:#?}", sequence.trace);
+    let joint = &sequence.trace[0];
+    assert_eq!(joint.observation, at12);
+    assert_eq!(joint.partner.map(|p| p.observation), Some(at19));
+    assert_eq!(joint.outcome, GrownPlaneTryOutcome::Matched);
+    let attempt = &joint.attempts[0];
+    let [z12, z19] = attempt.view_zncc.expect("read at a growth that passed");
+    assert!(z12 >= 0.5 && z19 >= 0.5, "{attempt:#?}");
+    assert!(attempt.partner_shift.is_some());
+    assert!(sequence.trace[1..].iter().all(|t| t.partner.is_none()));
+    assert!(matches!(
+        sequence.views[at19],
+        GrownPlaneView::Joined { .. }
+    ));
+    // The first growth starts from the starting plane, every later one from
     // the combined plane, and passes there.
     let first: Vec<GrownPlaneTiltStart> = sequence
         .trace
         .iter()
-        .take(sequence.picks.len())
         .map(|t| t.attempts[0].tilt_start)
         .collect();
     assert_eq!(first[0], GrownPlaneTiltStart::Starting);
@@ -1426,22 +1592,22 @@ fn the_ladder_visits_views_near_to_far() {
             .all(|&s| s == GrownPlaneTiltStart::Combined),
         "{first:?}"
     );
-    for entry in sequence.trace.iter().take(sequence.picks.len()) {
+    for entry in &sequence.trace {
         assert_eq!(entry.attempts.len(), 1, "{entry:#?}");
     }
+    assert_eq!(sequence.matched(), 5);
     let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3}: {report}");
 }
 
-/// A view in the second rung that sees unrelated texture is refused from
-/// the combined plane, its growth stopped at a window stage, and grown once
-/// again from the starting plane, at the same keypoint-implied shift, where
-/// it is refused too; the rung waits, and its other view is picked next.
+/// A view alone in the second rung that sees unrelated texture is refused
+/// from the combined plane, its growth stopped at a window stage, and grown
+/// once again from the starting plane, at the same keypoint-implied shift,
+/// where it is refused too; with no other view in its rung, the ladder then
+/// moves out to the next.
 #[test]
 fn a_refused_second_rung_pick_is_retried_from_the_start() {
-    // The unrelated view is across the first pick's offset and the wider of
-    // the second rung's two, so the rung's prediction picks it first.
-    let views = [(12.0, 0.0), (17.0, 20.0), (22.0, 90.0), (35.0, 200.0)];
+    let views = [(12.0, 0.0), (22.0, 90.0), (35.0, 200.0)];
     let scene = ladder_scene(&views, &[22.0]);
     let (_, turned, report) = run_ladder(&scene);
     let sequence = sequence_of(&report);
@@ -1467,26 +1633,187 @@ fn a_refused_second_rung_pick_is_retried_from_the_start() {
     );
     assert_eq!(retry.tilt_start, GrownPlaneTiltStart::Starting);
     assert!(retry.refusal.is_some(), "{entry:#?}");
-    // The rung waits for its other view before the ladder moves out.
+    assert!(entry.partner.is_none(), "{entry:#?}");
+    // No other view is in its rung, so the ladder moves out.
     let next = &sequence.picks[bad + 1];
-    assert_eq!(next.rung, 1, "{angles:?}");
-    assert!((next.angle_deg - 17.0).abs() < 0.5, "{angles:?}");
+    assert!(next.rung > 1, "{angles:?}");
+    assert!((next.angle_deg - 35.0).abs() < 0.5, "{angles:?}");
     assert!(next.matched);
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3}: {report}");
+}
+
+/// The second rung holds two views, one of which sees unrelated texture:
+/// they are grown jointly, the joint growth is not taken, the unrelated view
+/// is left out and the other view of the rung joins, grown alone after it.
+#[test]
+fn a_joint_growth_with_an_unrelated_view_keeps_the_other_view() {
+    let views = [(12.0, 0.0), (22.0, 90.0), (24.0, 200.0)];
+    let scene = ladder_scene(&views, &[22.0]);
+    let (track, turned, report) = run_ladder(&scene);
+    let sequence = sequence_of(&report);
+    let (bad, good) = (row_of(&track, 2), row_of(&track, 3));
+    let joint = sequence
+        .trace
+        .iter()
+        .find(|t| t.partner.is_some())
+        .expect("a joint growth");
+    let pair = [
+        joint.observation,
+        joint.partner.expect("a partner").observation,
+    ];
+    assert!(pair.contains(&bad) && pair.contains(&good), "{joint:#?}");
+    assert_eq!(joint.outcome, GrownPlaneTryOutcome::LeftOut, "{joint:#?}");
+    // The other view is grown alone, after the joint growth, and joins.
+    let alone = sequence
+        .trace
+        .iter()
+        .position(|t| t.observation == good && t.partner.is_none())
+        .expect("grown alone");
+    assert_eq!(
+        alone,
+        sequence
+            .trace
+            .iter()
+            .position(|t| t.partner.is_some())
+            .unwrap()
+            + 1
+    );
+    assert_eq!(sequence.trace[alone].outcome, GrownPlaneTryOutcome::Matched);
     assert!(
-        sequence.picks[bad + 2..].iter().all(|p| p.rung > 1),
+        matches!(sequence.views[good], GrownPlaneView::Joined { .. }),
+        "{report}"
+    );
+    assert!(
+        matches!(sequence.views[bad], GrownPlaneView::LeftOut { .. }),
+        "{report}"
+    );
+    let picked = |row: usize| {
+        sequence
+            .picks
+            .iter()
+            .find(|p| p.observation == row)
+            .expect("picked")
+    };
+    assert!(
+        picked(good).matched && !picked(bad).matched,
         "{:#?}",
         sequence.picks
     );
+    assert_eq!(picked(good).partner, Some(bad));
+    assert_eq!(picked(good).rung, 1);
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3}: {report}");
+}
+
+/// The first rung holds the pick, at 13 degrees, and three other views: one
+/// at 14 degrees and one at 19 degrees, both along nearly the pick's offset,
+/// and one at 16 degrees across it. The partner is the view across, which
+/// constrains the tilt the pick leaves weak, though the view at 14 degrees is
+/// nearer the pick's angle and the one at 19 degrees has the larger gain.
+#[test]
+fn the_partner_constrains_the_axis_the_pick_leaves_weak() {
+    let views = [(13.0, 0.0), (14.0, 10.0), (19.0, 350.0), (16.0, 95.0)];
+    let scene = ladder_scene(&views, &[]);
+    let (track, turned, report) = run_ladder(&scene);
+    let sequence = sequence_of(&report);
+    let first = &sequence.trace[0];
+    assert_eq!(first.observation, row_of(&track, 1), "{first:#?}");
+    assert_eq!(
+        first.partner.map(|p| p.observation),
+        Some(row_of(&track, 4)),
+        "{first:#?}"
+    );
+    assert_eq!(first.outcome, GrownPlaneTryOutcome::Matched, "{first:#?}");
+    assert_eq!(sequence.picks[1].observation, row_of(&track, 4));
+    assert_eq!(sequence.picks[1].rung, 0);
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3}: {report}");
+}
+
+/// A track of two views, the reference and one other, leaves no partner:
+/// the one view is grown alone, as a pick with no other view in its rung
+/// is, with no joint growth in the trace or the picks, and the patch is
+/// turned onto the plane. The binding's tests check, on a two-view point of
+/// a ground truth, that this is the step the three-way ladder replaced, to
+/// the last digits.
+#[test]
+fn a_track_of_two_views_grows_its_one_view_alone() {
+    let scene = ladder_scene(&[(25.0, 40.0)], &[]);
+    let (track, turned, report) = run_ladder(&scene);
+    let sequence = sequence_of(&report);
+    let [entry] = sequence.trace.as_slice() else {
+        panic!("one try: {sequence:#?}");
+    };
+    assert_eq!(entry.observation, row_of(&track, 1));
+    assert!(entry.partner.is_none(), "{entry:#?}");
+    assert_eq!(entry.outcome, GrownPlaneTryOutcome::Matched);
+    assert!(entry
+        .attempts
+        .iter()
+        .all(|a| a.partner_shift.is_none() && a.view_zncc.is_none()));
+    let [pick] = sequence.picks.as_slice() else {
+        panic!("one pick: {sequence:#?}");
+    };
+    assert!(pick.partner.is_none() && pick.matched, "{pick:#?}");
+    assert_eq!(sequence.joined(), 1);
+    assert_eq!(sequence.outcome, GrownPlaneOutcome::Turned);
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3}: {report}");
+}
+
+/// Four views 20 degrees from a reference that faces the plane, on opposite
+/// sides of it, grown as two joint growths.
+fn four_opposite_views() -> (EditableTrack, EditableTrack, NormalReport) {
+    let views = [(20.0, 0.0), (20.0, 180.0), (20.0, 90.0), (20.0, 270.0)];
+    let scene = ladder_scene(&views, &[]);
+    run_ladder(&scene)
+}
+
+/// The first rung's joint growth has no plane kept before it, so its views'
+/// own planes are not held to the distance test: it records no distances and
+/// is taken on its scores alone.
+#[test]
+fn the_first_rungs_joint_growth_is_not_held_to_the_distance_test() {
+    let (_, _, report) = four_opposite_views();
+    let sequence = sequence_of(&report);
+    let first = &sequence.trace[0];
+    assert!(first.partner.is_some(), "{first:#?}");
+    assert_eq!(first.attempts[0].tilt_start, GrownPlaneTiltStart::Starting);
+    assert!(
+        first.attempts.iter().all(|a| a.view_distance.is_none()),
+        "{first:#?}"
+    );
+    assert!(first.attempts[0].view_zncc.is_some(), "{first:#?}");
+    assert_eq!(first.outcome, GrownPlaneTryOutcome::Matched, "{first:#?}");
+}
+
+/// A later joint growth whose two views agree with the plane kept before it
+/// is held to the distance test, both views within the cutoff, and taken.
+#[test]
+fn a_joint_growth_whose_views_agree_with_the_kept_plane_is_taken() {
+    let (_, turned, report) = four_opposite_views();
+    let sequence = sequence_of(&report);
+    let second = &sequence.trace[1];
+    assert!(second.partner.is_some(), "{second:#?}");
+    let attempt = &second.attempts[0];
+    assert_eq!(attempt.tilt_start, GrownPlaneTiltStart::Combined);
+    let distances = attempt.view_distance.expect("a plane kept before it");
+    assert!(distances.iter().all(|&d| d <= 3.0), "{distances:?}");
+    assert!(attempt.refusal.is_none(), "{attempt:#?}");
+    assert_eq!(second.outcome, GrownPlaneTryOutcome::Matched, "{second:#?}");
+    assert_eq!(sequence.joined(), 4, "{report}");
     let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3}: {report}");
 }
 
 /// A view in the third rung that sees unrelated texture is refused from the
 /// combined plane and is not grown again from the starting plane: past the
-/// second rung a refused pick is left out after its one growth.
+/// second rung a refused pick is left out after its one growth. Each rung
+/// holds one view, so every view is grown alone.
 #[test]
 fn a_refused_pick_past_the_second_rung_is_not_retried() {
-    let scene = ladder_scene(&spread(&[12.0, 20.0, 32.0]), &[32.0]);
+    let scene = ladder_scene(&spread(&[12.0, 21.0, 34.0]), &[34.0]);
     let (track, turned, report) = run_ladder(&scene);
     let sequence = sequence_of(&report);
     let rungs: Vec<u32> = sequence.picks.iter().map(|p| p.rung).collect();
@@ -1577,7 +1904,7 @@ fn a_view_at_the_references_centre_ends_the_ladder() {
 /// through every stage, and the patch is still turned onto the plane.
 #[test]
 fn a_growth_that_cannot_reach_the_floor_stops_early() {
-    let scene = ladder_scene(&spread(&[12.0, 20.0, 32.0]), &[12.0]);
+    let scene = ladder_scene(&spread(&[12.0, 21.0, 34.0]), &[12.0]);
     let (track, turned, report) = run_ladder(&scene);
     let sequence = sequence_of(&report);
     let stages = sequence.window_half_widths.len() + 1;

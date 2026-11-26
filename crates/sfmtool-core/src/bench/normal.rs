@@ -47,8 +47,9 @@ pub use grid_plane::{
 };
 pub use grown_plane::{
     grown_plane_normal, GrownPlaneAttempt, GrownPlaneGridRound, GrownPlaneNormalOptions,
-    GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal,
-    GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView,
+    GrownPlaneOutcome, GrownPlanePair, GrownPlanePartner, GrownPlanePick, GrownPlanePrecision,
+    GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTry,
+    GrownPlaneTryOutcome, GrownPlaneView,
 };
 pub use pairwise_flow::{
     pairwise_flow_normal, PairwiseFlowCrop, PairwiseFlowFit, PairwiseFlowNormalOptions,

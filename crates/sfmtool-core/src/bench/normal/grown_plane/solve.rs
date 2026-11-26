@@ -797,3 +797,222 @@ pub(super) fn shift_response(n: &DMatrix<f64>, dt: [f64; 2]) -> Vec<f64> {
         None => vec![0.0; k - 2],
     }
 }
+
+/// Several views against the reference through one plane: parameters
+/// `[a, b, s₀x, s₀y, s₁x, s₁y, …]`, the tilt and one shift per view, each
+/// view's samples at its own shift. The score is the sum of the views'
+/// scores against the reference, each read as [`ViewFit`] reads one view
+/// (a window's ZNCC, or the robust cell score over the live cells with its
+/// own cell weights), so the residual's sum of squares is
+/// `Σ 2·(1 − scoreᵥ)` and the normal matrix is the views' summed. The views
+/// are compared with the reference only, never with each other.
+pub(super) struct JointFit<'r, 'g, 'a> {
+    pub(super) views: Vec<&'r ViewRender<'g, 'a>>,
+    pub(super) reference: &'r Samples,
+    /// Which reference cells are textured, for [`Reading::Grid`].
+    pub(super) live: &'r [bool; 9],
+    pub(super) reading: Reading,
+    pub(super) min_coverage: f64,
+}
+
+/// A joint fit's residual frozen at one render of each view: each block with
+/// the view it belongs to, and each view's samples.
+pub(super) struct JointFrozen {
+    blocks: Vec<(usize, Block)>,
+    samples: Vec<Samples>,
+}
+
+impl JointFit<'_, '_, '_> {
+    /// The samples this fit renders.
+    fn rows(&self) -> Vec<usize> {
+        match &self.reading {
+            Reading::Window(rows) => rows.clone(),
+            Reading::Grid => self.views[0].grid.all(),
+        }
+    }
+
+    /// View `q`'s shift in `p`.
+    fn shift(p: &[f64], q: usize) -> [f64; 2] {
+        [p[2 + 2 * q], p[3 + 2 * q]]
+    }
+
+    /// Every view's samples at `p`, one render each.
+    fn renders(&self, p: &[f64]) -> Vec<Samples> {
+        let rows = self.rows();
+        self.views
+            .iter()
+            .enumerate()
+            .map(|(q, view)| view.render([p[0], p[1]], Self::shift(p, q), &rows))
+            .collect()
+    }
+
+    /// One view's score against the reference in `samples`, with each
+    /// cell's robust weight for [`Reading::Grid`].
+    fn score_of(&self, samples: &Samples) -> (f64, [f64; 9]) {
+        match &self.reading {
+            Reading::Window(rows) => (
+                zncc(self.reference, samples, rows, self.min_coverage),
+                [0.0; 9],
+            ),
+            Reading::Grid => {
+                let cells = cell_znccs(
+                    self.views[0],
+                    self.reference,
+                    self.live,
+                    samples,
+                    self.min_coverage,
+                );
+                robust_score(&cells)
+            }
+        }
+    }
+}
+
+/// One view's normal matrix over `[a, b, sx, sy]` and gradient of its own
+/// residual, in a joint fit.
+pub(super) type ViewEquations = (DMatrix<f64>, DVector<f64>);
+
+impl JointFit<'_, '_, '_> {
+    /// The score at `p` and the normal matrix of the residual frozen there,
+    /// as [`score_and_normal_matrix`] reads them, and from the same render and
+    /// Jacobian each view's own normal matrix `JᵥᵀJᵥ` over `[a, b, sᵥx, sᵥy]`
+    /// and gradient `Jᵥᵀrᵥ` of its own residual, read through the Sobel
+    /// gradient; the last two `None` where nothing can be read.
+    pub(super) fn score_and_normal_matrices(
+        &self,
+        p: &[f64],
+    ) -> (f64, Option<DMatrix<f64>>, Option<Vec<ViewEquations>>) {
+        let (score, frozen) = self.freeze(p);
+        let Some((fz, r0)) = frozen else {
+            return (score, None, None);
+        };
+        if r0.is_empty() {
+            return (score, None, None);
+        }
+        let j = self.jacobian(&fz, p, &r0, GradientRead::Sobel);
+        let normal = j.tr_mul(&j);
+        let k = self.views.len();
+        let mut out = vec![(DMatrix::zeros(4, 4), DVector::zeros(4)); k];
+        let mut row = 0;
+        let mut scratch = Vec::new();
+        for (q, block) in &fz.blocks {
+            scratch.clear();
+            block.residuals(&fz.samples[*q], &mut scratch);
+            let m = scratch.len();
+            let cols = [0, 1, 2 + 2 * q, 3 + 2 * q];
+            let (n, g) = &mut out[*q];
+            for r in row..row + m {
+                for (a, &ca) in cols.iter().enumerate() {
+                    g[a] += j[(r, ca)] * r0[r];
+                    for (b, &cb) in cols.iter().enumerate() {
+                        n[(a, b)] += j[(r, ca)] * j[(r, cb)];
+                    }
+                }
+            }
+            row += m;
+        }
+        (score, Some(normal), Some(out))
+    }
+}
+
+impl Objective for JointFit<'_, '_, '_> {
+    type Frozen = JointFrozen;
+
+    fn tilt_entries(&self) -> usize {
+        2
+    }
+
+    /// A trial plane at or past 90° from the starting normal scores `−1`
+    /// per view with nothing to linearise, so no step keeps it.
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<JointFrozen>>) {
+        if !self.views[0].grid.faces_start([p[0], p[1]]) {
+            return (-(self.views.len() as f64), None);
+        }
+        let samples = self.renders(p);
+        let mut total = 0.0;
+        let mut blocks = Vec::new();
+        for (q, view) in samples.iter().enumerate() {
+            let (score, weights) = self.score_of(view);
+            total += score;
+            match &self.reading {
+                Reading::Window(rows) => {
+                    if let Some(block) =
+                        Block::freeze(self.reference, view, rows, 1.0, self.min_coverage)
+                    {
+                        blocks.push((q, block));
+                    }
+                }
+                Reading::Grid => {
+                    let sum: f64 = weights.iter().sum();
+                    if sum > 0.0 {
+                        for k in (0..9).filter(|&k| weights[k] > 0.0) {
+                            if let Some(block) = Block::freeze(
+                                self.reference,
+                                view,
+                                &self.views[0].grid.cells[k],
+                                weights[k] / sum,
+                                self.min_coverage,
+                            ) {
+                                blocks.push((q, block));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if blocks.is_empty() {
+            return (total, None);
+        }
+        let mut r0 = Vec::new();
+        for (q, block) in &blocks {
+            block.residuals(&samples[*q], &mut r0);
+        }
+        (total, Some((JointFrozen { blocks, samples }, r0)))
+    }
+
+    #[cfg(test)]
+    fn residuals(&self, frozen: &JointFrozen, p: &[f64], out: &mut Vec<f64>) {
+        let samples = self.renders(p);
+        for (q, block) in &frozen.blocks {
+            block.residuals(&samples[*q], out);
+        }
+    }
+
+    /// Each view's samples move with the tilt by their gradient through how
+    /// their pixels move, and with that view's own shift by their gradient;
+    /// the reference is fixed, so each block's residual moves as minus its
+    /// view's normalised samples.
+    fn jacobian(
+        &self,
+        frozen: &JointFrozen,
+        p: &[f64],
+        r0: &[f64],
+        read: GradientRead,
+    ) -> DMatrix<f64> {
+        let tilt = [p[0], p[1]];
+        let rows = self.rows();
+        let gradients: Vec<Gradients> = (0..self.views.len())
+            .map(|q| self.views[q].gradients(tilt, Self::shift(p, q), &rows, read))
+            .collect();
+        let pixels: Vec<Vec<[[f64; 2]; 2]>> = self
+            .views
+            .iter()
+            .map(|view| view.pixel_tilt_derivatives(tilt, &rows))
+            .collect();
+        let mut j = DMatrix::zeros(r0.len(), p.len());
+        let mut row = 0;
+        for (q, block) in &frozen.blocks {
+            let q = *q;
+            row += block.add_derivative(
+                &frozen.samples[q],
+                -1.0,
+                |k, c, out| {
+                    value_derivative(&gradients[q], Some(&pixels[q]), Some(2 + 2 * q), k, c, out)
+                },
+                &mut j,
+                row,
+            );
+        }
+        j
+    }
+}

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The fits' analytic Jacobians against differences of real renders of a
-//! synthetic plane: a view fit, a shift-only fit, a window, a pair, a grid
+//! synthetic plane: a view fit, a shift-only fit, a window, a pair, a joint
+//! fit of two views and how it adds up from theirs, a grid
 //! pushed partly off the photograph and lenses with distortion; and the
 //! pieces they are built from, the sampler's two gradients, the derivative
 //! through a block's normalisation and how a pixel moves with the tilt.
@@ -14,8 +15,8 @@ use super::render::{
     Block, GradientRead, Gradients, Grid, Samples, StepReads, ViewImage, ViewRender,
 };
 use super::solve::{
-    cell_znccs, forward_difference, live_cells, normal_matrix, schur_tilt, tilt_information,
-    Objective, PairFit, Reading, ViewFit,
+    cell_znccs, forward_difference, live_cells, normal_matrix, schur_tilt, score_and_normal_matrix,
+    tilt_information, JointFit, Objective, PairFit, Reading, ViewFit,
 };
 use crate::bench::tests::scene::{texture, Scene, PLANE_Z, WORLD};
 use crate::camera::image::ImageU8;
@@ -243,6 +244,34 @@ fn the_analytic_jacobian_follows_a_difference_of_renders() {
                     true,
                 ),
             ),
+            (
+                "joint",
+                compare(
+                    &JointFit {
+                        views: vec![&renders[1], &renders[2]],
+                        reference: &reference,
+                        live: &live,
+                        reading: Reading::Grid,
+                        min_coverage: 0.6,
+                    },
+                    &[tilt[0], tilt[1], 0.3, -0.2, -0.4, 0.1],
+                    true,
+                ),
+            ),
+            (
+                "joint window",
+                compare(
+                    &JointFit {
+                        views: vec![&renders[1], &renders[2]],
+                        reference: &reference,
+                        live: &live,
+                        reading: Reading::Window(grid.window(6)),
+                        min_coverage: 0.6,
+                    },
+                    &[tilt[0], tilt[1], 0.3, -0.2, -0.4, 0.1],
+                    true,
+                ),
+            ),
         ];
         for (name, (small, old, sobel)) in cases {
             assert!(small < RENDER_TOLERANCE, "{model} {name}: {small}");
@@ -315,6 +344,81 @@ fn the_information_is_read_through_the_sobel_gradient() {
         "{sigma} vs {sobel_sigma}"
     );
     assert!(sigma > 1.1 * bilinear_sigma, "{sigma} vs {bilinear_sigma}");
+}
+
+/// A joint fit of two views against the reference is the two views' fits
+/// added: its score is the sum of their scores, its normal matrix over
+/// `[a, b, s₀, s₁]` has each view's normal matrix in its tilt and its own
+/// shift block and nothing between the two shifts, and its information about
+/// the tilt, with both shifts eliminated, is the two views' information
+/// summed.
+#[test]
+fn a_joint_fit_is_its_two_views_fits_added() {
+    let pool = RegionPool::for_kernel_call();
+    let reads = StepReads::new(&pool, &Progress::none());
+    let scene = scene("pinhole");
+    let views = scene.views();
+    let patch_frame = patch_frame();
+    let side = 32;
+    let grid = Grid::new(&patch_frame, &views[0], None, side);
+    let images: Vec<ViewImage<'_>> = views
+        .iter()
+        .map(|v| {
+            ViewImage::new(
+                v,
+                &reads,
+                &grid.anchored_patch_frame,
+                side,
+                Vector3::zeros(),
+            )
+        })
+        .collect();
+    let renders: Vec<ViewRender<'_, '_>> =
+        images.iter().map(|i| ViewRender::new(&grid, i)).collect();
+    let reference = renders[0].render([0.0; 2], [0.0; 2], &grid.all());
+    let live = live_cells(&grid.cells, &reference);
+    let one = |k: usize| ViewFit {
+        render: &renders[k],
+        reference: &reference,
+        live: &live,
+        reading: Reading::Grid,
+        held: None,
+        min_coverage: 0.6,
+    };
+    let joint = JointFit {
+        views: vec![&renders[1], &renders[2]],
+        reference: &reference,
+        live: &live,
+        reading: Reading::Grid,
+        min_coverage: 0.6,
+    };
+    let tilt = [0.06, -0.04];
+    let (s1, s2) = ([0.3, -0.2], [-0.4, 0.1]);
+    let p = [tilt[0], tilt[1], s1[0], s1[1], s2[0], s2[1]];
+    let (z1, n1) = score_and_normal_matrix(&one(1), &[tilt[0], tilt[1], s1[0], s1[1]]);
+    let (z2, n2) = score_and_normal_matrix(&one(2), &[tilt[0], tilt[1], s2[0], s2[1]]);
+    let (z, n) = score_and_normal_matrix(&joint, &p);
+    let (n1, n2, n) = (n1.unwrap(), n2.unwrap(), n.unwrap());
+    assert!((z - (z1 + z2)).abs() < 1e-12, "{z} vs {z1} + {z2}");
+    let mut added = DMatrix::zeros(6, 6);
+    for (n_view, at) in [(&n1, 2), (&n2, 4)] {
+        let index = |r: usize| if r < 2 { r } else { at + r - 2 };
+        for r in 0..4 {
+            for c in 0..4 {
+                added[(index(r), index(c))] += n_view[(r, c)];
+            }
+        }
+    }
+    assert!(
+        (&n - &added).norm() <= 1e-9 * added.norm(),
+        "{n} vs {added}"
+    );
+    let summed = schur_tilt(&n1) + schur_tilt(&n2);
+    assert!(
+        (schur_tilt(&n) - summed).norm() <= 1e-9 * summed.norm(),
+        "{} vs {summed}",
+        schur_tilt(&n)
+    );
 }
 
 /// A view shifted until about a quarter of the grid lies off the photograph:

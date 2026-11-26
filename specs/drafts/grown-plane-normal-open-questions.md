@@ -60,6 +60,37 @@ answer folded into the spec.
   whether a model that reads the view's texture as well as its geometry, or the
   reference's information along each direction, picks better, and what the
   target σ and the budget (`max_selected_views`) should be once τ is settled.
+- **The three-way ladder's first choices.** Three rules of the joint growth
+  are the ones the evaluated prototype used, not designs, and its too-far
+  check leaves two questions:
+  - *The partner.* The pick is the one the two-view ladder chose, and the
+    partner the view of the same range whose geometric prediction `g·d dᵀ`
+    added to the pick's has the largest smaller eigenvalue; whether the pair
+    should instead be the best pair over the rung, read the model's `α` and
+    `β`, or read the views' texture.
+  - *The selection's model.* A joint growth's information is read as the
+    pick's own when `α` and `β` are taken, divided by the pick's gain alone,
+    though it holds both views'; whether to split it, or to divide by the two
+    gains summed.
+  - *The wide pairs.* A joint growth is in a pair by its pick only, so on the
+    wide pairs' test scene, four views on opposite sides of the reference, one
+    pair is matched where the two-view ladder matched two.
+  - *A first-rung joint growth.* The too-far check holds each view of a
+    joint growth to the plane kept before it, and on the first rung no plane
+    is kept yet, so a first-rung joint growth is taken on its scores alone.
+    On `seoul_bull_sculpture_ground_truth_v02` point 255, seen by three views
+    within 4.1° of each other and grown as one first-rung joint growth, eight
+    passes from the stored normal turn it 69.6°, then 5.3°, 8.2°, 1.2°, 5.8°,
+    8.0°, 7.5° and 4.3°, each within its weakest σ of 15° to 21° and flagged
+    low confidence, where the two-view ladder turned it 62.4°, then 4.4°,
+    0.3°, 0.1°, 0.1°, 2.6°, 1.8° and 1.3°. Whether a first-rung joint growth
+    should be checked against something, such as each view's own plane
+    against the other's.
+  - *What the check changed.* On the study's 1093 ground-truth trials the
+    check changed 19 answers, by a median of 2.8° (90th percentile 11.3°, at
+    most 53.4°); 11 of them moved nearer the two-view ladder's answer and 17
+    lie nearer it than the stored normal. Which of the 19 are better has not
+    been judged.
 - **The pairs' rules.** Whether the widest pairs, each view in one pair, up to
   three, are the right pairs, or whether a pair should lie on opposite sides of
   the reference or be wider than the widest view's angle from the reference;

@@ -39,11 +39,15 @@ In outline, for the views it picks:
   plane, with its information about the plane.
 - **It trusts the keypoints.** It does not search a view for another place, so
   a caller whose keypoints may be off fits them first with a separate step.
-- **It grows only a few views**, picked one at a time near to far by what their
-  geometry predicts they say about the plane, until the plane is precise
-  enough. It combines their planes by a robust information-weighted mean,
-  never by fitting the views together, then matches the widest pairs of kept
-  views against each other and adds their planes to the mean.
+- **It grows only a few views**, picked near to far by what their geometry
+  predicts they say about the plane, until the plane is precise enough. At
+  each rung of that ladder the pick is grown jointly with a partner from the
+  same rung, the view that best constrains the tilt the pick leaves weak, one
+  plane for the two views with each compared with the reference only; a pick
+  with no partner left in its rung, as on a track of two views, is grown
+  alone. It combines the growths' planes by a robust information-weighted
+  mean, then matches the widest pairs of kept views against each other and
+  adds their planes to the mean.
 - **It turns the patch** to the plane found whenever at least one view joined,
   unless the turn is large and the evidence for it weak, when it keeps the
   starting normal. It fits the shift alone of every view it did not pick, and
@@ -97,6 +101,8 @@ scores in
 [grown_plane/render.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/render.rs),
 the optimiser in
 [grown_plane/solve.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/solve.rs),
+the joint growth of a pick and its partner in
+[grown_plane/joint.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/joint.rs),
 the weighted mean, the robust combination and the agreement distance in
 [grown_plane/combine.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/combine.rs),
 and the selection, the wide pairs and the shift-only fits in
@@ -197,28 +203,38 @@ pub enum GrownPlaneTiltStart { Starting, Combined }
 pub enum GrownPlaneRefusal { UnderFloor, TooFar, HeldUnderFloor, StoppedEarly, ViewLeftOut, NoKeypoint }
 pub enum GrownPlaneTryOutcome { Matched, LeftOut }
 
-/// One try of one view, and the combined plane after it.
+/// One try of one view, or of a pick and its partner grown jointly, and the
+/// combined plane after it.
 pub struct GrownPlaneTry {
-    pub observation: usize,
+    pub observation: usize,                // the pick's for a joint growth
     pub image: u32,
     pub angle_deg: f64,
+    pub partner: Option<GrownPlanePartner>, // the view grown jointly with it; None when grown alone
     pub attempts: Vec<GrownPlaneAttempt>,  // from the combined plane, then from the starting plane
-    pub outcome: GrownPlaneTryOutcome,
+    pub outcome: GrownPlaneTryOutcome,     // a joint growth: Matched only when taken
     pub combined_normal: Option<[f64; 3]>, // the picks' plane after this pick; None when left out
     pub combined_sigma_deg: f64,
 }
 
-/// One growth of one view against the reference, and how it was judged.
+/// A joint growth's second view.
+pub struct GrownPlanePartner { pub observation: usize, pub image: u32, pub angle_deg: f64 }
+
+/// One growth of one view against the reference, or of a pick and its
+/// partner jointly, and how it was judged. A joint growth's scores are the
+/// means of its two views'.
 pub struct GrownPlaneAttempt {
     pub tilt_start: GrownPlaneTiltStart, // the plane its windows started from
     pub stage_zncc: Vec<f64>,   // stage 1 at the keypoint-implied shift, each later window, the last round's robust score
-    pub shift: [f64; 2],
+    pub shift: [f64; 2],        // the pick's for a joint growth
     pub normal: [f64; 3],       // the view's own plane
     pub grid_zncc: f64,         // on the grid laid at that plane; NaN when it stopped early
     pub sigma_deg: f64,         // its own weakest σ; NaN when it stopped early
-    pub refusal: Option<GrownPlaneRefusal>, // UnderFloor or StoppedEarly
+    pub refusal: Option<GrownPlaneRefusal>, // UnderFloor or StoppedEarly; TooFar for a joint growth the too-far check refused
     pub stage_turn_deg: Vec<f64>, // each fitted window stage's turn, as far as the growth ran
     pub grid_rounds: Vec<GrownPlaneGridRound>, // empty when it stopped early; one with turned_support off
+    pub partner_shift: Option<[f64; 2]>, // a joint growth's partner's shift
+    pub view_zncc: Option<[f64; 2]>,     // a joint growth that reached the floor: each view's own score at its plane
+    pub view_distance: Option<[f64; 2]>, // the too-far check where made: each view's own plane's distance from the plane kept before
 }
 
 /// One pair of kept views matched against each other.
@@ -252,6 +268,7 @@ pub struct GrownPlanePick {
     pub predicted_weak: f64,          // smallest eigenvalue predicted with it; NaN in the first rung
     pub matched: bool,
     pub rung: u32,                    // the selection's rung, the first 0
+    pub partner: Option<usize>,       // the other view of its joint growth; None when grown alone
     pub sigma_after_deg: f64,         // NaN when not matched
 }
 
@@ -828,8 +845,12 @@ Every growth ends at the view's own plane, the plane its whole-grid stage
 reached, stated as a tilt `tₑ` of the starting frame, with its shift and its
 information `Iₑ` about that tilt, read at that plane and shift
 (§ [The plane's precision](#the-planes-precision),
-§ [Combining estimates read in different frames](#combining-estimates-read-in-different-frames)). The step
-combines planes by their information and never fits views together. The
+§ [Combining estimates read in different frames](#combining-estimates-read-in-different-frames)).
+A joint growth of a pick and its partner
+(§ [The three-way ladder](#the-three-way-ladder)) is one estimate in the same
+way, its plane the one plane it fitted to both views and its information both
+views' at that plane. The step fits at most two views together, in a joint
+growth, and combines every estimate by its information. The
 combined plane of a set of estimates is their information-weighted mean,
 
 ```text
@@ -850,11 +871,14 @@ about a sixth of the time
 
 The step runs in this order:
 
-1. **The selection** picks views one at a time near to far, growing the first
-   from the starting plane and each later one from the combined plane so far
-   (§ [The selection](#the-selection)). After each pick that reaches the floor,
-   the picks so far are combined by the robust combination below, and the
-   selection stops once that plane is precise enough.
+1. **The selection** picks views near to far, growing the first rung's from
+   the starting plane and each later one from the combined plane so far, each
+   pick jointly with a partner from its rung where one is left and alone
+   otherwise (§ [The selection](#the-selection),
+   § [The three-way ladder](#the-three-way-ladder)). After each growth that
+   reaches the floor, the estimates so far are combined by the robust
+   combination below, and the selection stops once that plane is precise
+   enough.
 2. **The robust combination** of every pick that reached the floor.
 3. **The wide pairs** among the views kept, fitted from the combined plane, and
    the robust combination of the views' and the pairs' planes
@@ -871,8 +895,10 @@ the Mahalanobis distance of
 § [When an estimate agrees with the combined plane](#when-an-estimate-agrees-with-the-combined-plane),
 the furthest is left out (`TooFar`), with any pair that holds a view left out
 (`ViewLeftOut`), and the mean is read again. Then each kept view is scored at
-the mean, at its shift moved there (below), one render each; a view under
-`min_held_zncc` is left out (`HeldUnderFloor`) with its pairs, and the whole is
+the mean, at its shift moved there (below), one render each, and a joint
+growth's partner the same way; a view under `min_held_zncc` is left out
+(`HeldUnderFloor`) with its pairs, a joint growth's two views together when
+either is under it, and the whole is
 repeated until no view is left out. The furthest goes first and one at a time so
 that the result does not depend on the order the estimates are given in, and so
 that at least one estimate is kept, since an estimate alone is at no distance
@@ -891,7 +917,10 @@ cₑ(x) = ((x·uₑ)/(x·fₑ), (x·vₑ)/(x·fₑ))      the chart of that grid
 s     = sₑ − N_ss⁻¹ N_st δ
 ```
 
-which costs no render. With the turned support that grid is laid at the
+which costs no render. A joint growth's normal matrix is over
+`[a, b, sx, sy, s′x, s′y]`, the pick's shift and the partner's, and the same
+formula with `N_ss` its 4×4 shift block moves both shifts at once. With the
+turned support that grid is laid at the
 estimate's own plane, so `fₑ = nₑ` and `cₑ(nₑ) = 0`; without it the frame is the
 starting frame and `δ = t − tₑ`, the difference of the two planes' tilts. The
 chart is used rather than the Jacobian of the next section applied to the
@@ -960,7 +989,9 @@ rather than at one end, two views on opposite sides of it are further apart from
 each other than either is from the reference, so comparing them with each other
 is more sensitive to the plane than either comparison with the reference.
 
-**Which pairs.** Among the views the robust combination kept, every pair is
+**Which pairs.** Among the views the robust combination kept, each kept
+estimate standing for its own view or, for a joint growth, its pick's view
+only (§ [The three-way ladder](#the-three-way-ladder)), every pair is
 ranked by the angle between the two views' directions from the patch centre,
 widest first, ties by the two views' order among the candidates, and pairs are
 taken down that list so that no view is in more than one pair, up to
@@ -1086,10 +1117,13 @@ almost always with a plane good to a few degrees
   grown again. A rung waits until one of its views is kept: a refused pick is
   followed by another view in the same range, and the ladder moves out only once
   the widest kept angle widens or no view is left in the range.
-- **Stopping.** After each pick that reaches the floor the picks are combined by
-  the robust combination, and the selection stops when the combined weakest σ
-  (a) is at most `target_sigma_deg` or `max_selected_views` picks have reached
-  the floor, or no candidate is left. A candidate whose angle is not finite is
+- **Partners.** Each pick is grown jointly with a partner from its rung where
+  one is left, and alone otherwise (§ [The three-way ladder](#the-three-way-ladder)).
+- **Stopping.** After each growth that reaches the floor the estimates are
+  combined by the robust combination, and the selection stops when the
+  combined weakest σ (a) is at most `target_sigma_deg` or `max_selected_views`
+  views have reached the floor, a taken joint growth counting two, or no
+  candidate is left. A candidate whose angle is not finite is
   never picked. The trace records each pick's try with the plane each growth
   started from (`tilt_start`) and the combined plane after it, and each pick its
   rung.
@@ -1111,6 +1145,111 @@ score of a full whole-grid fit at about 40% less time on the shift-only views
 ([measurements](grown-plane-normal-measurements.md#cheaper-growths-2026-10-20-and-2026-10-21)).
 When no pick joined, or the turn is not made, the views not picked are reported
 `NotAttempted`.
+
+### The three-way ladder
+
+Each pick of the selection is grown together with a **partner**, a second
+view from the same rung: one plane through the anchor shared by the
+reference and the two views, with one image shift for each view. The
+reference and the two views make three, hence the name.
+
+**Which partner.** The partner is taken from the candidates not yet picked
+whose angle from the reference is finite and lies in the range the pick was
+taken from, bounds included: `first_rung_min_deg` to `first_rung_max_deg`
+for a pick of the first rung found in that range, the later rung's range
+(`aim/√rung_ratio` to `aim·√rung_ratio`, or from the last rung's lower bound
+outward) for a later pick, and every candidate left for a first-rung pick
+taken from outside its range and for a pick of the rung that takes every view
+left. Among them it is the view `j` for which `gᵢ dᵢdᵢᵀ + gⱼ dⱼdⱼᵀ`, the
+selection's geometric gain times the outer product of the offset direction
+(§ [The selection](#the-selection)) for the pick `i` and for `j`, has the
+largest smaller eigenvalue, ties by the larger `gᵢ + gⱼ` and then by the
+earlier candidate. A single view constrains the tilt most along its offset
+from the reference and least across it, so this is the view that most
+constrains the axis the pick leaves weak. The rule reads only the geometry,
+not the model's `α` and `β`. The pick itself is chosen as before.
+
+**No partner.** Where no other candidate is in the range, the pick is grown
+alone, exactly as the step grows any single view
+(§ [Near to far within a view](#near-to-far-within-a-view)), and everything
+after is as for a single view. That is the case on a track of two views, the
+reference and one other, which therefore gives the same normal, σ, outcome
+and report as a selection of single views; on a rung holding one view; and
+once the views of a range are used up.
+
+**The joint growth.** It runs the stages a single view's growth runs, from the
+same plane (the starting plane on the first rung, the combined plane of the
+views kept so far after it), from each view's keypoint-implied shift: the
+first window, the growing windows with the early stop, the whole-grid rounds
+with their caps, each on the grid laid at the plane reached. Each stage fits
+`[a, b, sx, sy, s′x, s′y]` for the best sum of the two views' scores against
+the reference, each read as a single view's is (a window's ZNCC, or the robust
+cell score with its own cell weights); the two views are never compared with
+each other. Every score the growth reports and is judged by is the mean of the
+two views' scores. Its normal matrix is the two views' added, and its
+information about the tilt, the Schur complement with both shifts eliminated,
+is the two views' information at the shared plane summed.
+
+**Taking it.** A joint growth that stops early or whose mean whole-grid score,
+read on the grid laid at its plane, is under `min_held_zncc` is refused; on
+the second rung it is grown once more from the starting plane, as a single
+pick is. One that passes is scored again, each view on its own at the
+growth's plane and its own shift (`view_zncc`). When both views reach the
+floor and the views kept before the joint growth have a combined plane, each
+view is then held to the robust combination's distance test against that
+plane (the **too-far check**): the view's own plane is one Gauss–Newton step
+of that view's residual alone, over the tilt and its own shift, from the
+joint plane, with that view's own information (its own normal matrix with its
+shift eliminated), both carried into the starting frame; its distance is the
+combination's Mahalanobis distance from the plane kept before, the two
+covariances added (`view_distance`). Both views' steps and information come
+from the read that judges the growth, so the check costs no render. When
+either distance is over `max_agreement_distance`, or not a number, the joint
+growth is refused (`TooFar`) and both views are grown alone, so the
+combination judges each as it judges any single view. On the first rung, and
+wherever no view has been kept before, there is no plane to hold the views
+to, and the check is not made. When both views reach the floor and pass the
+check where it is made, the joint growth is taken: its plane is one estimate,
+with both views' information, combined with the estimates before it. When
+only one view reaches the floor,
+the other is left out under the floor and the one that reaches it is grown
+alone, as a pick is; when the joint growth is refused, both are grown alone,
+the pick first. A view grown alone after a joint growth starts from the plane
+the views kept before that joint growth reached, not from one that includes
+the other view's lone growth. Each estimate a joint try yields is combined in
+turn.
+
+**What follows from one estimate for two views.**
+
+- A taken joint growth counts as two views towards `max_selected_views`, and
+  both its views count for the widest angle kept that sets the next rung's aim.
+- The selection's model reads its information as the pick's own: the joint
+  information enters the medians of `α` and `β` along and across the pick's
+  offset, divided by the pick's gain.
+- The robust combination keeps or leaves out the two views together. Its held
+  check scores both views at the mean, each at its own shift moved there by
+  the joint normal matrix, and leaves both out when either is under the floor.
+  A taken joint growth is one estimate to the distance test; a view whose own
+  plane disagrees with the plane kept before is caught by the too-far check
+  before the growth is taken, except on the first rung, where no plane is
+  kept yet.
+- The wide pairs are taken among the kept estimates by their picks' views: a
+  joint growth's partner is in no pair.
+- In the report, a joint try is one `GrownPlaneTry` with `partner` set, whose
+  attempts carry both shifts; both views are `GrownPlanePick`s, each naming
+  the other as `partner`; each view has its own `GrownPlaneView`, the
+  partner's shift moved to the final plane and its own held score.
+
+**Why.** On a sample of 200 ground-truth points, each run from five starting
+normals, the ladder gave a single answer where the two-view ladder it
+replaced gave several on 27 points, and the reverse on 10 (42 points with
+several answers against 59), at the same cost, the same number of renders.
+In a blind review of 40 points where the two answers differed, the reviewer
+accepted the three-way ladder's normal on 36 and the two-view ladder's on 35.
+It gave no gain on points the sample did not select from, or on the demo
+scene's exact truth. Comparing each view with the other as well as with the
+reference lost the gain
+([measurements](grown-plane-normal-measurements.md#the-three-way-ladder-2026-11-25)).
 
 ### The plane's precision
 
@@ -1376,7 +1515,10 @@ off
   its turn, steps taken and renders), a `whole-grid stage` per round (noted with
   the round, its cap, its turn, its ZNCC, steps taken and renders), and
   `judge` (the growth's own information, noted with its grid ZNCC, `σ` and
-  verdict, or with the verdict alone for a growth that stopped early). A view
+  verdict, or with the verdict alone for a growth that stopped early). A joint
+  growth is one try with one `selection` and one `grown plane view`, noted with
+  both images, and its `growth` phases, noted as joint, carry the same stages
+  with the two views' mean scores and renders. A view
   counts its renders in a `Cell` of its own; the notes are
   built only when a phase records, and nothing a phase does reaches the result,
   so the step's track and report are the same with detail on and off.
@@ -1430,7 +1572,7 @@ The defaults are `GrownPlaneNormalOptions::default()` in
 | `min_turn_sigma_ratio` | `3.0` | Ratio of the turn to σ (a) that a turn of at least `weak_turn_deg` needs to be made; a σ that is not finite counts as a ratio of 0; finite and at least 0, 0 turns the rule off |
 | `max_pairs` | `3` | Pairs of views matched against each other, at most |
 | `target_sigma_deg` | `2.75` | The selection stops once the combined weakest σ is at most this, degrees; finite and above 0 |
-| `max_selected_views` | `6` | The selection stops once this many picks have reached the floor; at least 1 |
+| `max_selected_views` | `6` | The selection stops once this many views have reached the floor, a taken joint growth counting two; at least 1 |
 | `first_rung_deg` | `15.0` | The selection's first pick is the view nearest this angle from the reference within the first rung's range, degrees; within that range itself |
 | `first_rung_min_deg` | `10.0` | The narrowest angle of the first rung's range, degrees; finite, at least 0 |
 | `first_rung_max_deg` | `20.0` | The widest angle of the first rung's range, degrees; finite, at least `first_rung_min_deg` |
@@ -1505,37 +1647,69 @@ the scenes with up to six views that need every view picked set a target σ of
   turns. **A large turn on strong evidence**, the wide scene with
   `weak_turn_deg` 10, is made.
 - **A disagreeing view,** one view at 38° seeing the texture on a plane turned
-  25° from the others', passes the floor on its own and is left out as `TooFar`
-  at more than 3σ, with one try and no kept pair holding it; the normal ends
-  within a degree of the others' plane.
+  25° from the others', with views at 8°, 15° and 25°, one a rung so every view
+  is grown alone, passes the floor on its own and is left out as `TooFar` at
+  more than 3σ, with one try and no kept pair holding it; the normal ends
+  within a degree of the others' plane. **The same view with a partner,** on
+  the scene with a 50° view as well, where it is grown jointly with the 25°
+  view: both views reach the floor at the joint plane, the too-far check puts
+  the disagreeing view's own plane over 3 from the plane kept before and the
+  partner's within it, the joint growth is refused as `TooFar`, both views
+  are grown alone, the combination leaves the disagreeing view out as
+  `TooFar`, and the normal ends within 0.25° of the plane (0.08° measured).
 - **Repeating texture under the spot:** a checker of 8 px period, with three
   views' poses turned so the photograph's content sits more than 5 px from where
   the pose projects the point and each keypoint on the content. Every view joins
   on its first growth with a shift under 0.75 px. With the keypoints removed,
   each view is left out as `NoKeypoint` with no try and no pick, and the
   outcome is `NoneJoined`.
-- **A keypoint off past the growth:** the 30° view of three, its keypoint 6 px
-  and 2 px off the content, is grown from the combined plane and, on the second
+- **A keypoint off past the growth:** the 22° view of views at 15°, 22° and
+  35°, one a rung, its keypoint 6 px and 2 px off the content, is grown from the combined plane and, on the second
   rung, once more from the starting plane, both refused, and left out; no phase
   searches, and the other two views' plane ends within a degree of the truth.
   **A shift-only fit from a keypoint off past the fit** ends nearer the
   keypoint-implied shift than the content, and every keypoint is kept.
 - **Wide pairs:** four views 20° from a reference that faces the plane, on
-  opposite sides of it. Both pairs, 40° apart, are taken and kept; the weakest σ
-  is lower than with `max_pairs` 0, and still is with each pair's information
-  halved; the plane ends within a degree of the truth.
+  opposite sides of it, grown as two joint growths of views across from each
+  other. The one pair of their picks, 40° apart, is taken and kept; the
+  weakest σ is lower than with `max_pairs` 0, and still is with the pair's
+  information halved; the plane ends within a degree of the truth.
 - **The selection:** sixteen views in rings at 10° to 40° with a target of 2°.
-  The first pick is in the first rung's range, the next are 40° views grown from
-  the combined plane, the selection stops at the target having matched far fewer
-  views than there are, and every other view is fitted for its shift alone,
+  Two joint growths: the first of two views in the first rung's range, the
+  second of two 40° views grown from the combined plane, each partner across
+  its pick's offset; the selection stops at the target having matched four
+  views, and every other view is fitted for its shift alone,
   reaches the floor with a shift under 0.5 px and keeps its keypoint.
-- **The ladder:** views at 5°, 12°, 19°, 31° and 50° are picked one rung
-  outward each and then the view under the first rung; a refused second-rung
-  pick is grown again from the starting plane and followed by another view of
-  the same rung before the ladder moves out; a refused pick past the second rung
-  is not grown again; the last rung ends at the widest view that passes; a view
-  at the reference's own centre does not hold the ladder at 0°.
-- **A growth stopped early:** a first-rung pick seeing unrelated texture stops
+- **The ladder:** views at 5°, 12°, 19°, 31° and 50°: the first rung's two,
+  12° and 19°, are grown jointly from the starting plane, each the other's
+  partner, then one view a rung outward, alone, and then the view under the
+  first rung; a refused second-rung pick alone in its rung is grown again from
+  the starting plane and the ladder then moves out; a refused pick past the
+  second rung is not grown again; the last rung ends at the widest view that
+  passes; a view at the reference's own centre does not hold the ladder at 0°.
+- **The three-way ladder:** of a first rung's views at 14° and 19°, both along
+  the pick's offset, and at 16° across it, the 13° pick's partner is the view
+  across, though the others are nearer its angle or of larger gain; a second
+  rung of a view seeing unrelated texture and a good view grows them jointly,
+  does not take the joint growth, leaves the unrelated view out and grows the
+  good one alone after it, which joins; a track of two views grows its one
+  view alone, with no partner in the trace or the picks. On four views 20°
+  from the reference on opposite sides, grown as two joint growths, the first
+  rung's records no distance and is taken on its scores, and the second,
+  grown from the combined plane, has both views within 3 of it and is
+  taken.
+  [jacobian_tests.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/jacobian_tests.rs)
+  checks that a joint fit's score and normal matrix are its two views' added,
+  and the binding's tests that on `dino_dog_toy_ground_truth_v01` point 1000,
+  seen by two views, the one view is grown alone and the step gives the
+  two-view ladder's outcome and low-confidence verdict, its normal and turn
+  within 0.15° and its σ within 5%. The result is not bit-stable across
+  platforms where the score is flat in the tilt, so the test bounds it; bit
+  for bit, on one platform, the two-view result matched the two-view
+  ladder's on all 49 two-view points of the four test datasets
+  ([measurements](grown-plane-normal-measurements.md#the-three-way-ladder-2026-11-25)).
+- **A growth stopped early:** a first-rung pick alone in its range, seeing
+  unrelated texture, stops
   at a window stage under 0.25, from index 2 of `stage_zncc` on and before the
   whole-grid stage, with `grid_zncc` and `sigma_deg` `NaN`, and is left out as
   `StoppedEarly`; every view that passes is grown through every stage.
@@ -1605,7 +1779,10 @@ the scenes with up to six views that need every view picked set a target σ of
   ([test_bench_normal_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_normal_rust_bindings.py)):
   on `seoul_bull_sculpture_ground_truth_v02` point 255, three passes from the
   stored normal, the first turning it more than 30°, the second and third
-  under 5° (4.4° and 0.3° measured).
+  each by less than the weakest σ the pass reports and under 10° (5.3° and
+  8.2° against 21.0° and 18.1° measured; its two other views are grown
+  jointly), every pass reporting low confidence. The passes do not settle on
+  this point.
 - **The analytic Jacobian,** on renders of a textured plane through a pinhole, a
   radial lens and a fisheye, from a reference facing it and views 25° and 35°
   off: with the bilinear read's own derivative, every column of a view fit over
@@ -1660,7 +1837,8 @@ proposes them.
 ## Open questions
 
 The questions still open about the step's settings and rules (the calibration
-of σ, the agreement numbers, the weak-turn thresholds, the ladder, the pairs,
+of σ, the agreement numbers, the weak-turn thresholds, the ladder, the
+three-way ladder's partner, model, pairs and first-rung joint growths, the pairs,
 the selection's model, the window schedule, the cheaper growths' constants, the
 optimiser, points where every view is weak or narrow, blur matching, the
 report's fields, and the turned support's score, side, pyramid levels,
