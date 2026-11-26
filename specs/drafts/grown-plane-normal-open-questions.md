@@ -80,8 +80,10 @@ answer folded into the spec.
     (`wide_centres`, the 38° view seeing a plane turned 25°) that view is
     grown jointly with the 25° view, the joint growth is taken, and the final
     normal ends 5.3° off the others' plane, where the 38° view still scores 0.62,
-    over the floor. On that scene the two-view ladder left the view out as
-    too far and ended within a degree.
+    over the floor, at a distance of 1.6. The step reports that plane with
+    a weakest σ of 0.89°, so the error is not flagged as low confidence. On
+    that scene the two-view ladder left the view out as too far and ended
+    within a degree.
     Whether to test each view's own plane, or each view's distance, before a
     joint growth is taken.
 - **The pairs' rules.** Whether the widest pairs, each view in one pair, up to

@@ -1078,7 +1078,9 @@ def test_repeated_grown_plane_passes_settle_on_a_ground_truth_point():
     the step turned it 69.6, 15.6, 3.9, 4.4 and 3.5 degrees on five passes;
     with the grid laid at each stage's plane and its two other views grown
     jointly, the second and third passes turn it 5.3 and 8.2 degrees, under
-    the bar of 10."""
+    the bar of 10. Later passes do not settle further: eight passes turn it
+    between 1 and 8 degrees each after the first, within its weakest sigma
+    of 15 to 21 degrees."""
     path = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr"
     recon = SfmrReconstruction.load(str(path))
     edited = EditedReconstruction(recon)
