@@ -144,7 +144,7 @@ const KEY_ORDER: &[&str] = &[
 /// let text = sfmtool_workspace_marker(&SfmtoolWorkspaceOptions::default());
 /// let record: serde_json::Value = serde_json::from_str(&text).unwrap();
 /// assert_eq!(record["feature_options"]["double_image_below_long_side"], 4096);
-/// assert_eq!(record["mipmap_options"]["out_of_core_long_side"], 4096);
+/// assert_eq!(record["mipmap_options"]["out_of_core_long_side"], 1536);
 /// assert!(text.starts_with("{\n  \"version\": 2,\n  \"feature_tool\": \"sfmtool\",\n"));
 /// ```
 pub fn sfmtool_workspace_marker(options: &SfmtoolWorkspaceOptions) -> String {

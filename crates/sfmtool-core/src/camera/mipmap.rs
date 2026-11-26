@@ -60,7 +60,7 @@ pub const MIPMAP_DIR_NAME: &str = ".sfm-mipmaps";
 /// The `out_of_core_long_side` that `sfm ws init` writes, in
 /// `NEW_WORKSPACE_MIPMAP_OPTIONS`: a photograph with a side over this is out
 /// of core.
-pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 4096;
+pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 1536;
 
 /// The largest side of a photograph any pyramid reader accepts, the largest
 /// side a JPEG frame can hold. The photograph cache refuses a photograph with

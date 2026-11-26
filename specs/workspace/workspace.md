@@ -132,7 +132,7 @@ qualities, read and validated by `read_mipmap_options`
 
 ```json
 "mipmap_options": {
-  "out_of_core_long_side": 4096,
+  "out_of_core_long_side": 1536,
   "jpeg_quality": 95,
   "full_resolution_jpeg_quality": 95
 }

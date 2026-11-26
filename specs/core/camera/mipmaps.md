@@ -47,7 +47,7 @@ names, `sfmtool_core::camera`; the workspace object's reader is
 
 ```rust
 pub const MIPMAP_DIR_NAME: &str = ".sfm-mipmaps";
-pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 4096; // what `sfm ws init` writes
+pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 1536; // what `sfm ws init` writes
 pub const MAX_JPEG_SIDE: u32 = 65535;
 pub const PHOTOGRAPH_TILE_SIZE: u32 = 512;
 pub const MIPMAP_RESTART_INTERVAL_MCUS: u16 = 16;
@@ -61,7 +61,7 @@ pub struct MipmapOptions { pub out_of_core_long_side: u32, pub jpeg_quality: u8,
 /// `None` when the file has none, an error naming file, key and value.
 pub fn read_mipmap_options(root: &Path) -> Result<Option<MipmapOptions>, WorkspaceConfigError>;
 
-/// `sfmtool_core::workspace`: the object a new workspace records (4096, 95
+/// `sfmtool_core::workspace`: the object a new workspace records (1536, 95
 /// and 95), and an object as the file holds it, which `read_mipmap_options`
 /// reads back.
 pub const NEW_WORKSPACE_MIPMAP_OPTIONS: MipmapOptions;
@@ -306,7 +306,7 @@ nothing outside sfmtool reads the record, so it has no format crate and no
 
 ```json
 "mipmap_options": {
-  "out_of_core_long_side": 4096,
+  "out_of_core_long_side": 1536,
   "jpeg_quality": 95,
   "full_resolution_jpeg_quality": 95
 }
@@ -326,15 +326,23 @@ photograph of a workspace whose object is invalid until the file is fixed
 `sfm ws init` writes the object above, `NEW_WORKSPACE_MIPMAP_OPTIONS`, into
 every new workspace, after `feature_prefix_dir`, for each feature tool
 ([ws-init-command.md](../../cli/workspace/ws-init-command.md#persisted-settings)).
-The threshold of 4096 px is where an in-core photograph's whole decode, made
-again each time its tiles are evicted, starts to cost a few tenths of a
-second, against about 3 ms for each tile of an out-of-core one; it is also
-the side at which a new workspace stops doubling images for SIFT, so SIFT
-never doubles an out-of-core photograph. Quality 95 re-encodes a JPEG
-original's full-resolution copy closest to the original among the qualities
-measured (0.07 to 0.09 grey levels), and no quality depends on the
-original's format; a workspace of PNG or TIFF photographs can set
-`full_resolution_jpeg_quality` higher itself. Each workspace keeps the values
+The threshold of 1536 px keeps memory bounded for a job that reads many
+photographs of a few megapixels, such as those of a 24-megapixel camera or a
+phone: an in-core photograph is decoded whole, all its pixels at once, when a
+tile of it is needed and the cache holds none, and decoded whole again once
+its tiles are evicted, while an out-of-core one decodes only the tiles a read
+needs, about 3 ms each, at the cost of one encode of its levels. The
+threshold is separate from `double_image_below_long_side`, which a new
+workspace sets to 4096: a photograph whose longer side is 1537 to 4095 px is
+out of core and is doubled for SIFT. SIFT decodes the original whole in either
+tier, and the mipmap is made from the photograph, not the doubled image: the
+Rust `.sift` build makes it from its decode before the extraction
+([sift.md § "Building `.sift` files"](../features/sift.md#building-sift-files)),
+and `sfm sift` decodes the original again once the files are written. Quality
+95 re-encodes a JPEG original's full-resolution copy closest to the original
+among the qualities measured (0.07 to 0.09 grey levels), and no quality
+depends on the original's format; a workspace of PNG or TIFF photographs can
+set `full_resolution_jpeg_quality` higher itself. Each workspace keeps the values
 in its own file, so a later change of these defaults does not change which
 pixels an existing workspace's kernels read.
 

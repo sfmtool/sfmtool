@@ -33,7 +33,7 @@ const DEFAULT_MARKER: &str = r#"{
   },
   "feature_prefix_dir": "features/sift-sfmtool-fc19c88d9c98d94ebff1b97f2a345bb6",
   "mipmap_options": {
-    "out_of_core_long_side": 4096,
+    "out_of_core_long_side": 1536,
     "jpeg_quality": 95,
     "full_resolution_jpeg_quality": 95
   }
@@ -68,7 +68,7 @@ const CUSTOM_MARKER: &str = r#"{
   },
   "feature_prefix_dir": "features/sift-sfmtool-3c0cb5ee50910f836de546984da60395",
   "mipmap_options": {
-    "out_of_core_long_side": 4096,
+    "out_of_core_long_side": 1536,
     "jpeg_quality": 95,
     "full_resolution_jpeg_quality": 95
   }
@@ -114,7 +114,7 @@ fn a_new_workspace_reads_back_the_new_workspace_mipmap_options() {
     assert_eq!(
         NEW_WORKSPACE_MIPMAP_OPTIONS,
         crate::camera::mipmap::MipmapOptions {
-            out_of_core_long_side: 4096,
+            out_of_core_long_side: 1536,
             jpeg_quality: 95,
             full_resolution_jpeg_quality: 95,
         }

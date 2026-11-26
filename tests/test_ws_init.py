@@ -146,7 +146,7 @@ def test_init_writes_version_2(tmp_path: Path):
 
 @pytest.mark.parametrize("tool", ["sfmtool", "colmap", "opencv"])
 def test_init_writes_the_mipmap_options(tmp_path: Path, tool):
-    """Every tool's new workspace reads photographs with a side over 4096 px
+    """Every tool's new workspace reads photographs with a side over 1536 px
     from mipmaps at quality 95, the object written after the folder's name,
     and the command says so."""
     from sfmtool.workspace import new_workspace_mipmap_options
@@ -157,7 +157,7 @@ def test_init_writes_the_mipmap_options(tmp_path: Path, tool):
     assert result.exit_code == 0, result.output
     config = json.loads((tmp_path / ".sfm-workspace.json").read_text())
     expected = {
-        "out_of_core_long_side": 4096,
+        "out_of_core_long_side": 1536,
         "jpeg_quality": 95,
         "full_resolution_jpeg_quality": 95,
     }
@@ -165,7 +165,7 @@ def test_init_writes_the_mipmap_options(tmp_path: Path, tool):
     assert list(config["mipmap_options"]) == list(expected)
     assert new_workspace_mipmap_options() == expected
     assert (
-        "  mipmap_options: photographs with a side over 4096 px are read from "
+        "  mipmap_options: photographs with a side over 1536 px are read from "
         "mipmaps, JPEG quality 95 (95 at full resolution)" in result.output
     )
 
@@ -254,7 +254,7 @@ def _python_written_marker(max_num_features=None, image_to_gray=None) -> dict:
         "feature_options": options,
         "feature_prefix_dir": feature_prefix_dir("sfmtool", feature_type, options),
         "mipmap_options": {
-            "out_of_core_long_side": 4096,
+            "out_of_core_long_side": 1536,
             "jpeg_quality": 95,
             "full_resolution_jpeg_quality": 95,
         },

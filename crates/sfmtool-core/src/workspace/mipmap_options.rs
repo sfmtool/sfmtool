@@ -67,7 +67,7 @@ pub const NEW_WORKSPACE_MIPMAP_OPTIONS: MipmapOptions = MipmapOptions {
 /// use sfmtool_core::workspace::{mipmap_options_json, NEW_WORKSPACE_MIPMAP_OPTIONS};
 ///
 /// let object = mipmap_options_json(&NEW_WORKSPACE_MIPMAP_OPTIONS);
-/// assert_eq!(object["out_of_core_long_side"], 4096);
+/// assert_eq!(object["out_of_core_long_side"], 1536);
 /// assert_eq!(object["jpeg_quality"], 95);
 /// assert_eq!(object["full_resolution_jpeg_quality"], 95);
 /// ```

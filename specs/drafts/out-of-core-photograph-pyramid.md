@@ -131,7 +131,7 @@ mipmaps* task, `MipmapLocation`).
 | **mipmap** / **mip level** / **mip level file** | a photograph's **mipmap** is its whole stored chain of levels, kept under `.sfm-mipmaps/`: its reduced levels, and its full-resolution copy when the original cannot be read by region. One stored level is a **mip level**, numbered as the pyramid's level is (level 0 full resolution, level `l` reduced by `2^l`), and the file holding it is a **mip level file**, `<file name>-mip<l>-q<quality>.jpg`: `IMG_0001.JPG-mip1-q95.jpg` is half size at quality 95, `-mip2-q95.jpg` a quarter, and `-mip0-q95.jpg` the full-resolution copy; this draft names a file by its level part alone (`-mip0`, `-mip1`) where the quality does not matter. The number after `mip` is the level index the code uses; no factor is converted to a level anywhere. `sfmtool_core::camera::mipmap` | `mipmap set`, a single file called a mipmap, `level file`, `cache file`, `pyramid file`, factor names such as `-mipmap2` | the user chose the standard usage, so others find it familiar: Williams, "Pyramidal Parametrics" (SIGGRAPH 1983), coined *mip map* for the whole prefiltered set of an image at successive halvings; OpenGL says a texture has a mipmap whose images are *mipmap levels*, numbered by level of detail with level 0 the base image (`glTexImage2D`'s `level`); Direct3D and Vulkan say *mip chain* and *mip level* (`mipLevels`); KTX and DDS store a whole chain in one file. *Level* alone stays the in-memory pyramid level, which for a small photograph has no file. Names about the whole feature keep *mipmap* (`mipmap_options`, `sfm ws mipmaps`, `build_mipmaps`, `MipmapError`, `MipmapLocation`, `sfmtool_core::camera::mipmap`), since they act on photographs' mipmaps, plural in the standard sense. The viewer, the CLI and the Python messages use the same words as the code, with no separate user-facing ones: the quiet task *Build mipmaps*, the line *Building mipmaps: {done} of {total}*, a panel's *Building mipmap…* while the one photograph's mipmap it waits for is made, the phase *build mipmaps*, and *mip level* where a message is about one level. A mipmap is made inside the photograph cache's `get` or `get_many`, in the path's slot, with no builder object |
 | **region-readable** (an original) | an original JPEG whose layout passes the test in § "Which originals can be read by region", so a rectangle of it decodes to exactly the pixels of the whole decode; its level 0 is the original, and it has no `-mip0` | `tiled`, `seekable`, `RST-capable` | names what the test decides, that a region can be read, rather than one ingredient of it |
 | **mipmap directory** | `.sfm-mipmaps/` at a workspace's root, holding the mip level files of the workspace's out-of-core photographs, in directories that mirror the workspace; it can be deleted at any time and rebuilt | `cache directory`, `.sfm-cache`, `cache folder`, `.cache` | the name says what is in it, mipmaps, and `sfm` keeps it apart from other tools' directories at a workspace root |
-| **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over that object's `out_of_core_long_side` (4096 as `sfm ws init` writes it), is out of core (§ "Which photographs are out of core"; one with a side of 65536 px or more is refused everywhere): its reduced levels come from mipmaps, its level 0 from the original or a `-mip0`; any other photograph is in core: it has no mip level files, and its tiles are cut from a whole decode of the original, made when a tile of it is needed and not kept. Every photograph, in core or out, is read a region at a time through photograph tiles | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, on disk or only in memory, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is read in tiles |
+| **out-of-core photograph** / **in-core photograph** | a photograph of a workspace whose file has `mipmap_options`, with a width or height over that object's `out_of_core_long_side` (1536 as `sfm ws init` writes it), is out of core (§ "Which photographs are out of core"; one with a side of 65536 px or more is refused everywhere): its reduced levels come from mipmaps, its level 0 from the original or a `-mip0`; any other photograph is in core: it has no mip level files, and its tiles are cut from a whole decode of the original, made when a tile of it is needed and not kept. Every photograph, in core or out, is read a region at a time through photograph tiles | `large image`, `tiled image`, `big photograph` | the tier decides where the levels live, on disk or only in memory, which is what *core* means here; *large* says nothing about what is done differently, and every photograph is read in tiles |
 | **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels to assist bilinear interpolation: the unit the display draws as one texture and that a level is read in; `PhotographTile`, keyed by level, column and row | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders ([GLOSSARY.md](../GLOSSARY.md) § "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
 
 ## Which photographs are out of core
@@ -144,20 +144,31 @@ the refusal is `GetError::TooLarge { path, width, height }` from
 workspace. Still to come with the readers that raise it:
 `PhotographReadError::TooLarge` for a kernel (step 10) and the Python
 bindings raising it as `OSError`, as `read_image_rgb` raises a decoder's
-limit (step 16). The test data, 3840 x 2160 video frames and 4032 x 3024
-phone photographs are in core under the default threshold; a 24-megapixel
-camera (6000 x 4000) and the 200-megapixel phone photographs are out of core.
+limit (step 16). Under the default threshold of 1536 px, the test data's
+photographs are in core except `dino_dog_toy`'s 2040 x 1536, which are out of
+core in a new workspace (the checked-in workspaces have no object, so every
+photograph is in core there); 1920 x 1080 video frames are out of core, as are
+3840 x 2160 frames, 4032 x 3024 phone photographs, a 24-megapixel camera's
+6000 x 4000 and the 200-megapixel phone photographs.
 
-Why 4096 rather than 8192, the texture limit: once every photograph is drawn in
-tiles (below), the texture limit no longer separates anything, and the tier is
-about the time of a read. An in-core photograph whose tiles were evicted is
-decoded whole again, about 0.05 s at 3840 x 2160 but 0.2 to 0.4 s for a
-6000 x 4000 photograph (estimated by pixel count), while an out-of-core one
-decodes only the tiles it needs, about 3 ms each, at the cost of one extra
-encode of its levels, once.
-4096 is also where `sfm ws init` stops SIFT image doubling
-(`double_image_below_long_side`: an image is doubled only when both sides are
-below 4096), so at the default SIFT never doubles an out-of-core photograph.
+Why 1536 (open question 26): once every photograph is drawn in tiles (below),
+the texture limit, 8192, no longer separates anything, and the tier is about
+the time of a read and the memory of a job. An in-core photograph whose tiles
+were evicted is decoded whole again, all its pixels at once, about 0.05 s at
+3840 x 2160 but 0.2 to 0.4 s for a 6000 x 4000 photograph (estimated by pixel
+count), while an out-of-core one decodes only the tiles it needs, about 3 ms
+each, at the cost of one extra encode of its levels, once. At 1536 a job
+reading many photographs of a few megapixels, such as those of a 24-megapixel
+camera or a phone, reads them a tile at a time, so its memory is bounded by
+the tiles it reads rather than by whole decodes.
+The threshold is separate from `double_image_below_long_side`, which
+`sfm ws init` sets to 4096 (an image is doubled for SIFT only when both sides
+are below it), so a new workspace's photograph whose longer side is 1537 to
+4095 px is out of core and doubled for SIFT. Nothing depends on the two
+agreeing: SIFT decodes the original whole in either tier, and the mipmap is
+made from the photograph, not the doubled image (by `build_sift_file` from its
+decode before the extraction, and by `sfm sift` from the original once the
+files are written).
 The user has decided that the threshold is a workspace setting: which tier a
 photograph is in decides which pixels the kernels read, so a workspace keeps
 its own value if the default changes later, as it keeps its feature options,
@@ -254,12 +265,12 @@ steps add to them:
   14a), and Image Detail says *Workspace file error:* and the message
   (14e). `load_workspace_config` calls `read_mipmap_options` through a
   binding, raising `RuntimeError` (step 16).
-- **Writing the object** (steps 15 and 17): `sfm ws init` writes it with 4096,
+- **Writing the object** (steps 15 and 17): `sfm ws init` writes it with 1536,
   95 and 95; `sfm ws mipmaps --enable` adds it to an existing workspace (or
   with `--out-of-core-long-side`, `--jpeg-quality` and
   `--full-resolution-jpeg-quality`) and refuses a file that has it;
   `sfm ws upgrade` leaves it as it finds it; and the viewer says once per
-  session, the first time it reads a photograph over 4096 px in a workspace
+  session, the first time it reads a photograph over 1536 px in a workspace
   without the object: *This workspace decodes large photographs whole. Run
   `sfm ws mipmaps --enable` to read them a tile at a time.*
 - **Orphans** (built, step 15e, as
@@ -1144,7 +1155,7 @@ record, the region test and the tile decode), exported from
 `sfmtool_core::camera`:
 
 ```rust
-pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 4096; // what `sfm ws init` writes
+pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 1536; // what `sfm ws init` writes
 pub const MAX_JPEG_SIDE: u32 = 65535; // a photograph with a larger side is refused
 pub const PHOTOGRAPH_TILE_SIZE: u32 = 512;
 pub const MIPMAP_RESTART_INTERVAL_MCUS: u16 = 16;
@@ -4316,7 +4327,7 @@ in core. Step 17 turns the tier on.
     `sfm embed-patches`, `sfm xform`, `sfm compare --strips` and
     `sfm inspect --strips` print naming `sfm ws mipmaps
     --enable` in place of the object to add by hand, and the workspace
-    spec gains the object. Tests: a new workspace has the object with 4096,
+    spec gains the object. Tests: a new workspace has the object with 1536,
     95 and 95; `--enable` writes the object and refuses a file that has one;
     a workspace without the object writes nothing (the checked-in `test-data`
     workspaces are such workspaces).
@@ -4344,13 +4355,13 @@ in core. Step 17 turns the tier on.
       it; `init_workspace` writes the same object for the `colmap` and
       `opencv` tools, from the binding `new_workspace_mipmap_options()`; and
       `sfm ws init` prints `mipmap_options: photographs with a side over
-      4096 px are read from mipmaps, JPEG quality 95 (95 at full
+      1536 px are read from mipmaps, JPEG quality 95 (95 at full
       resolution)`. `sfm ws init --force` writes a fresh file, so it writes
       the object too. `sfm undistort` writes its output workspace's file
       itself and writes no object until 17b. In `sfmtool_core::workspace`:
 
       ```rust
-      /// The `mipmap_options` a new workspace records: 4096, 95 and 95.
+      /// The `mipmap_options` a new workspace records: 1536, 95 and 95.
       pub const NEW_WORKSPACE_MIPMAP_OPTIONS: MipmapOptions;
       /// The object as `.sfm-workspace.json` holds it, which
       /// `read_mipmap_options` reads back to `options`.
@@ -4363,7 +4374,7 @@ in core. Step 17 turns the tier on.
       `json.dump(..., indent=2)` writes it; `read_mipmap_options` reads a
       new workspace's object back as `NEW_WORKSPACE_MIPMAP_OPTIONS`; a
       workspace `sfm ws init` makes for each of the three tools has the
-      object with 4096, 95 and 95, and the command prints it.
+      object with 1536, 95 and 95, and the command prints it.
     - **17b, `sfm ws mipmaps --enable`.** `sfm ws mipmaps --enable PATH`
       adds the object to the workspace at or above `PATH`, with
       `--out-of-core-long-side`, `--jpeg-quality` and
@@ -4398,7 +4409,7 @@ in core. Step 17 turns the tier on.
       hand. Tests: the line names the command and the workspace.
     - **17d, the viewer's notice.** The first time in a session the
       photograph cache's layout read finds a photograph with a side over
-      4096 px in a workspace without the object, the viewer says once, with
+      1536 px in a workspace without the object, the viewer says once, with
       the text the draft's § "Mip level files" gives it, *This workspace
       decodes large photographs whole. Run `sfm ws mipmaps --enable` to read
       them a tile at a time.* Tests: the notice is given once for two such
@@ -4445,8 +4456,9 @@ decisions.
    the standard mipmap convention in which levels are numbered and level 0 is
    the base image (§ "Terms"), and making a change of quality unambiguous.
 2. **The threshold's value and the other constants.** *Decided by the
-   user:* `sfm ws init` writes `out_of_core_long_side` 4096. The tile size
-   and the restart interval stay constants.
+   user:* `sfm ws init` writes `out_of_core_long_side` 1536, changed from
+   4096 by open question 26. The tile size and the restart interval stay
+   constants.
 3. **Qualities.** *Decided by the user:* `sfm ws init` writes 95 for both
    `jpeg_quality` and `full_resolution_jpeg_quality`, with no rule that
    depends on the original's format; a workspace changes them by editing its
@@ -4977,7 +4989,7 @@ decisions.
     - (a) the command passes a cache of the default budget: from current
       mipmaps the export takes about a second, and in core its peak rises
       by about the cache's tiles of the photographs, here 4.8 GB. Once step
-      17 turns the tier on, a photograph in core is at most 4096 px on its
+      17 turns the tier on, a photograph in core is at most 1536 px on its
       long side, so the rise is large only in a workspace without it;
     - (b) keep budget 0, as built: the in-core peak stays, and an export
       from mipmaps takes about a minute for these 8;
@@ -5018,3 +5030,30 @@ decisions.
     workspace's `mipmap_options` when the source's file has one, and none
     when it has none, so undistorting keeps the choice the source's owner
     made; it is part of step 17b.
+26. **The default threshold.** Found while reviewing 17a. Open question 2
+    first set the `out_of_core_long_side` a new workspace records to 4096:
+    an in-core photograph's whole decode, made again each time its tiles are
+    evicted, starts to cost a few tenths of a second there, and it was the
+    side at which a new workspace stops doubling images for SIFT, so SIFT
+    never doubled an out-of-core photograph. *Decided by the user:* 1536,
+    since the benefits for high image counts are important too: a job that
+    reads many photographs of a few megapixels, such as those of a
+    24-megapixel camera (6000 x 4000) or a phone (4032 x 3024), reads them a
+    tile at a time, so its memory stays bounded where in core it holds whole
+    decodes. `DEFAULT_OUT_OF_CORE_LONG_SIDE` is 1536, and
+    `NEW_WORKSPACE_MIPMAP_OPTIONS`, the line `sfm ws init` prints and the
+    object the recommendation line of open question 21 gives all take it
+    from there; the viewer's notice of 17d is given for a photograph over
+    1536 px, and 17b's `--enable` defaults to 1536.
+    `double_image_below_long_side` stays 4096, so a new workspace's
+    photograph whose longer side is 1537 to 4095 px is out of core and
+    doubled for SIFT; nothing relies on the two agreeing (§ "Which
+    photographs are out of core"). A workspace already made with 4096 keeps it, as every workspace
+    keeps its own value. Scripts that make a new workspace of
+    `dino_dog_toy`'s 2040 x 1536 photographs, `scripts/solve_crossval.py
+    --datasets dino` and the setup `scripts/benchmark_flow_matching.py`
+    describes, now have them out of core, so the extraction also makes their
+    mipmaps; the `.sift` files are unchanged. The checked-in `test-data`
+    workspaces have no object, and the `init_dataset_*.sh` scripts make a
+    workspace only where the file is missing, which for `dino_dog_toy` it
+    is not.

@@ -75,8 +75,8 @@ keeps the name of the options `sfm ws init` wrote.
 
 Every tool's file ends with the `mipmap_options` object of
 [mipmaps.md § "The workspace setting"](../../core/camera/mipmaps.md#the-workspace-setting),
-`out_of_core_long_side` 4096 and both qualities 95, so the new workspace reads
-each photograph with a side over 4096 px from its mipmaps under
+`out_of_core_long_side` 1536 and both qualities 95, so the new workspace reads
+each photograph with a side over 1536 px from its mipmaps under
 `.sfm-mipmaps/`, a tile at a time, rather than decoding it whole. No flag sets
 it; a workspace changes the values by editing the object, and
 `sfm ws mipmaps --prune` then deletes the files made at an old quality
@@ -106,7 +106,7 @@ The command prints the tool, its main options, the `image_to_gray` conversion,
 the `feature_prefix_dir` and the `mipmap_options`:
 
 ```
-  mipmap_options: photographs with a side over 4096 px are read from mipmaps, JPEG quality 95 (95 at full resolution)
+  mipmap_options: photographs with a side over 1536 px are read from mipmaps, JPEG quality 95 (95 at full resolution)
 ```
 
 ## Usage Examples

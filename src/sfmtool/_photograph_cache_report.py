@@ -12,6 +12,7 @@ out-of-core draft's open question 21.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -37,6 +38,8 @@ def photograph_cache_lines(
     ]
     in_core = sum(not cache.layout(path).out_of_core for path in set(paths))
     if stats["decodes"] > in_core:
+        from sfmtool.workspace import new_workspace_mipmap_options
+
         markers = dict.fromkeys(
             str(Path(workspace_dir) / ".sfm-workspace.json")
             for workspace_dir in workspace_dirs
@@ -46,7 +49,6 @@ def photograph_cache_lines(
             "times, since their tiles are more than its budget. To read them "
             'from mipmaps instead, a tile at a time, add a "mipmap_options" '
             f"object to {' and '.join(markers)}, such as "
-            '"mipmap_options": {"out_of_core_long_side": 4096, '
-            '"jpeg_quality": 95, "full_resolution_jpeg_quality": 95}.'
+            f'"mipmap_options": {json.dumps(new_workspace_mipmap_options())}.'
         )
     return lines

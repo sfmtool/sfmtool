@@ -545,7 +545,7 @@ fn write_sfmtool_workspace_marker_py(
 }
 
 /// The ``mipmap_options`` object a new workspace records, as a dict with its
-/// keys in the order they are written: ``out_of_core_long_side`` 4096,
+/// keys in the order they are written: ``out_of_core_long_side`` 1536,
 /// ``jpeg_quality`` 95 and ``full_resolution_jpeg_quality`` 95.
 ///
 /// ``sfmtool_workspace_marker`` writes it for the ``sfmtool`` tool, and
