@@ -290,3 +290,18 @@ def test_enable_with_another_mode_or_its_values_without_it_is_refused(
     assert result.exit_code == 2
     assert message in result.output
     assert path.read_text() == text
+
+
+def test_the_help_gives_each_value_s_default_from_a_new_workspace():
+    from sfmtool.workspace import new_workspace_mipmap_options
+
+    result = CliRunner().invoke(main, ["ws", "mipmaps", "--help"])
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split())
+    new = new_workspace_mipmap_options()
+    assert f"read from mipmaps (default {new['out_of_core_long_side']})." in text
+    assert f"mip level files (default {new['jpeg_quality']})." in text
+    assert (
+        "cannot be read by region "
+        f"(default {new['full_resolution_jpeg_quality']})." in text
+    )

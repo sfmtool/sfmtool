@@ -25,9 +25,17 @@ from ..workspace import (
     upgrade_workspace,
 )
 
-# The values `sfm ws mipmaps --enable` writes when no option gives one, those
-# of a new workspace.
-_NEW_WORKSPACE_MIPMAP_OPTIONS = new_workspace_mipmap_options()
+
+class _NewWorkspaceDefault(click.Option):
+    """A value of ``sfm ws mipmaps --enable``, whose help ends with the value
+    a new workspace records under the option's name, the one ``--enable``
+    writes when the option is not given. The value is read when the help is
+    shown, so importing the module calls nothing."""
+
+    def get_help_record(self, ctx):
+        names, text = super().get_help_record(ctx)
+        default = new_workspace_mipmap_options()[self.name]
+        return names, f"{text} (default {default})."
 
 
 @click.group("ws")
@@ -203,22 +211,22 @@ def upgrade(path, dry_run):
 @click.option(
     "--out-of-core-long-side",
     type=int,
+    cls=_NewWorkspaceDefault,
     help="With --enable: a photograph with a side over this many pixels is "
-    "read from mipmaps (default "
-    f"{_NEW_WORKSPACE_MIPMAP_OPTIONS['out_of_core_long_side']}).",
+    "read from mipmaps",
 )
 @click.option(
     "--jpeg-quality",
     type=int,
-    help="With --enable: the JPEG quality, 1 to 100, of the reduced mip level "
-    f"files (default {_NEW_WORKSPACE_MIPMAP_OPTIONS['jpeg_quality']}).",
+    cls=_NewWorkspaceDefault,
+    help="With --enable: the JPEG quality, 1 to 100, of the reduced mip level files",
 )
 @click.option(
     "--full-resolution-jpeg-quality",
     type=int,
+    cls=_NewWorkspaceDefault,
     help="With --enable: the JPEG quality, 1 to 100, of the full-resolution "
-    "copy of a photograph that cannot be read by region (default "
-    f"{_NEW_WORKSPACE_MIPMAP_OPTIONS['full_resolution_jpeg_quality']}).",
+    "copy of a photograph that cannot be read by region",
 )
 def mipmaps(
     paths,
