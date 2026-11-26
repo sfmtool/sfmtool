@@ -366,8 +366,8 @@ with one endpoint refused and one at infinity:
   the read gives 1, and the refusal of a node with no measurement in the menu's
   words, with the read's `refusal` the same.
 
-`ui_basic` finds the entry, greyed on the demo, in the reconstruction row's
-menu in a real window.
+`ui_basic` finds the entry in the reconstruction row's menu in a real window,
+enabled on the demo scene, which stores a distance measurement.
 
 ---
 

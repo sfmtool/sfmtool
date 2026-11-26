@@ -1769,9 +1769,9 @@ bundle from `retain_nodes` on the next frame.
   owned by the Scene row opened where the cursor was and holds a few of its
   entries (read over MCP). After a synthetic right-click over MCP on all three
   platforms, it checks every entry in order with its enabled state, `Tint` and
-  `Refine All Normals` as the entries that open a submenu, `Align to`, `Bake Transform`
-  and `Scale to Median Measurement...` greyed on the demo, which stores no
-  measurement, and `Bundle Adjust...` and `Retriangulate All Points`
+  `Refine All Normals` as the entries that open a submenu, `Align to` and `Bake Transform`
+  greyed on the demo, `Scale to Median Measurement...` enabled on it, since it
+  stores a distance measurement, and `Bundle Adjust...` and `Retriangulate All Points`
   enabled on it, since its observations carry their inline keypoints. The demo
   is the demo scene, an `embedded_patches` file with patch frames and
   photographs, so `Refit All Points`, `Refine All Normals`, `Prune Covered
