@@ -1700,9 +1700,14 @@ the scenes with up to six views that need every view picked set a target σ of
   taken.
   [jacobian_tests.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/jacobian_tests.rs)
   checks that a joint fit's score and normal matrix are its two views' added,
-  and the binding's tests that on `seoul_bull_sculpture_ground_truth_v02`
-  point 192, seen by two views, the step gives the normal, σ, outcome and
-  low-confidence verdict the two-view ladder gave.
+  and the binding's tests that on `dino_dog_toy_ground_truth_v01` point 1000,
+  seen by two views, the one view is grown alone and the step gives the
+  two-view ladder's outcome and low-confidence verdict, its normal and turn
+  within 0.15° and its σ within 5%. The result is not bit-stable across
+  platforms where the score is flat in the tilt, so the test bounds it; bit
+  for bit, on one platform, the two-view result matched the two-view
+  ladder's on all 49 two-view points of the four test datasets
+  ([measurements](grown-plane-normal-measurements.md#the-three-way-ladder-2026-11-25)).
 - **A growth stopped early:** a first-rung pick alone in its range, seeing
   unrelated texture, stops
   at a window stage under 0.25, from index 2 of `stage_zncc` on and before the

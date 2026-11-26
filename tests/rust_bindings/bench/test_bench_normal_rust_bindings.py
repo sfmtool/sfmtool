@@ -26,7 +26,7 @@ from sfmtool.bench import (
 )
 from sfmtool.fileio import read_image_rgb
 from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
-from tests.conftest import SEOUL_BULL_DIR
+from tests.conftest import SEOUL_BULL_DIR, TEST_DATA_DIR
 
 PLANE_WORDS = {
     "in_plane",
@@ -411,7 +411,8 @@ class TestGrownPlaneNormal:
                 if attempt["view_distance"] is not None:
                     assert attempt["view_zncc"] is not None
                     assert attempt["view_distance"].shape == (2,)
-                    far = bool(np.any(attempt["view_distance"] > 3.0))
+                    # A distance that is not a number counts as too far.
+                    far = bool(np.any(~(attempt["view_distance"] <= 3.0)))
                     assert far == (attempt["refusal"] == "too_far")
                 else:
                     assert attempt["refusal"] != "too_far"
@@ -1115,37 +1116,73 @@ def test_repeated_grown_plane_passes_stay_within_sigma_on_a_ground_truth_point()
         assert turn < sigma and turn < 10.0, passes
 
 
-# A point of seoul_bull v02 seen in two images, images 6 and 7.
-TWO_VIEW_POINT = 192
+# A point of dino_dog_toy v01 seen in two images, images 61 and 65: the
+# best-determined two-view point of the four test datasets (weakest sigma 1.6
+# degrees, under the low-confidence bar of 3.67).
+TWO_VIEW_POINT = 1000
+
+# How far the normal may lie from the one recorded on Windows from the
+# two-view ladder. The step's result depends on the platform's floating point
+# where the score is flat in the tilt: on seoul_bull v02 point 192, whose
+# weakest sigma is 33 degrees, macOS arm64 ended 0.55 degrees from Windows,
+# about a sixtieth of that sigma, which here would be 0.03 degrees. The bound
+# is five times that, and still fails on a change to how the one view is
+# grown: with the grid laid once on the starting square
+# (turned_support=False) the normal moves 0.18 degrees, and with the windows
+# at a fifth and a half of the grid 1.4 degrees.
+TWO_VIEW_NORMAL_DEG = 0.15
 
 
-def test_grown_plane_on_two_views_grows_the_one_view_alone(ground_truth):
+@pytest.fixture(scope="module")
+def dino_ground_truth():
+    """dino_dog_toy v01 as an ``EditedReconstruction``, with its photographs."""
+    directory = TEST_DATA_DIR / "images" / "dino_dog_toy"
+    recon = SfmrReconstruction.load(
+        str(directory / "dino_dog_toy_ground_truth_v01.sfmr")
+    )
+    images = [read_image_rgb(directory / name) for name in recon.image_names]
+    return EditedReconstruction(recon), images
+
+
+def test_grown_plane_on_two_views_grows_the_one_view_alone(dino_ground_truth):
     """A track of two views, the reference and one other, leaves the
     three-way ladder no partner: the one view is grown alone, with no joint
     growth in the trace or the picks, and the step gives the normal, ``σ``,
-    outcome and low-confidence verdict it gave before the ladder grew views
-    jointly, recorded here from that step."""
-    edited, images = ground_truth
+    outcome and low-confidence verdict the two-view ladder gave, recorded
+    here from that step on Windows. On one platform the two-view result was
+    measured bit-identical to the two-view ladder's on all 49 two-view points
+    of the four test datasets; across platforms the result is not bit-stable,
+    so this test bounds it: the normal and the turn within
+    ``TWO_VIEW_NORMAL_DEG``, and the two ``σ`` within 5% (with the grid laid
+    once they move 9%). The Rust test
+    ``a_track_of_two_views_grows_its_one_view_alone`` checks the same
+    structure on a synthetic scene."""
+    edited, images = dino_ground_truth
     _, track = create_track(Bench(), edited, TWO_VIEW_POINT)
-    assert sorted(o["image"] for o in track.observations) == [6, 7]
+    assert sorted(o["image"] for o in track.observations) == [61, 65]
     turned, report = grown_plane_normal(track, edited, images)
     estimate = report["estimate"]
     assert estimate["outcome"] == "turned"
     [entry] = estimate["trace"]
     assert entry["partner"] is None
     assert all(
-        a["partner_shift"] is None and a["view_zncc"] is None for a in entry["attempts"]
+        a["partner_shift"] is None
+        and a["view_zncc"] is None
+        and a["view_distance"] is None
+        for a in entry["attempts"]
     )
     [pick] = estimate["picks"]
     assert pick["partner"] is None and pick["matched"]
-    np.testing.assert_allclose(
-        _normal(turned),
-        [0.18478093375830723, -0.8611483028230938, -0.4735816794010437],
-        rtol=0,
-        atol=1e-9,
-    )
+    assert estimate["matched"] == 1 and estimate["joined"] == 1
+    recorded = np.array([0.37912708077215496, 0.7095127734425991, 0.5940153878031905])
+    off = np.degrees(np.arccos(np.clip(abs(_normal(turned) @ recorded), -1.0, 1.0)))
+    assert off < TWO_VIEW_NORMAL_DEG, off
     precision = estimate["precision"]
-    assert precision["sigma_weak_deg"] == pytest.approx(32.81202610486749, rel=1e-9)
-    assert precision["sigma_strong_deg"] == pytest.approx(27.777687274316666, rel=1e-9)
-    assert precision["low_confidence"]
-    assert estimate["turn_deg"] == pytest.approx(7.392994207887867, rel=1e-9)
+    assert precision["sigma_weak_deg"] == pytest.approx(1.5712386388812718, rel=0.05)
+    assert precision["sigma_strong_deg"] == pytest.approx(1.2109071650131853, rel=0.05)
+    # Under half the bar of 3.67 degrees, so the verdict does not flip with
+    # the rounding the bounds above allow.
+    assert not precision["low_confidence"]
+    assert estimate["turn_deg"] == pytest.approx(
+        2.161836667918495, abs=TWO_VIEW_NORMAL_DEG
+    )
