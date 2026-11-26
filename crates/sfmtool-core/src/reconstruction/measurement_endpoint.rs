@@ -34,7 +34,7 @@ use crate::reconstruction::{EditedReconstruction, PointView};
 use crate::RotQuaternion;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Where one endpoint of a measurement lies.
 #[derive(Debug, Clone, Copy, PartialEq)]

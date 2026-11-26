@@ -7,6 +7,7 @@
 //! and a third posed image that observes nothing, with points near the origin
 //! whose square patch frames face the cameras (`u = x`, `v = y`, `n = z`).
 //! Every keypoint is the exact projection of its point unless a test moves it.
+//! The scale tests (`measurement_scale/tests.rs`) build their scenes with it too.
 
 use std::sync::Arc;
 
@@ -34,7 +35,7 @@ const R: u32 = 24;
 
 /// One point of a fixture: its homogeneous position, its two half-vectors,
 /// and the images that observe it.
-struct Pt {
+pub(crate) struct Pt {
     pos: [f64; 3],
     w: f64,
     u: [f64; 3],
@@ -44,7 +45,7 @@ struct Pt {
 
 /// A finite point at `(x, y, z)` with a square patch of half-size `h` facing
 /// `+z`, observed by images 0 and 1.
-fn pt(x: f64, y: f64, z: f64, h: f64) -> Pt {
+pub(crate) fn pt(x: f64, y: f64, z: f64, h: f64) -> Pt {
     Pt {
         pos: [x, y, z],
         w: 1.0,
@@ -78,7 +79,7 @@ fn project(recon: &SfmrReconstruction, i: usize, xyz: Vector3<f64>, w: f64) -> [
 }
 
 /// The fixture over `points`, with no readings.
-fn scene(points: &[Pt]) -> SfmrReconstruction {
+pub(crate) fn scene(points: &[Pt]) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(1);
     recon.image_set.cameras = vec![pinhole()];
     recon.image_set.images = (0..IMAGES)
@@ -199,7 +200,13 @@ fn resolve(
 
 /// The pixel of image `i` that shows texel `(s, t)` of point `p`'s square
 /// there: the patch slid onto the observation's keypoint.
-fn pixel_of_texel(recon: &SfmrReconstruction, p: u32, i: usize, s: f64, t: f64) -> [f64; 2] {
+pub(crate) fn pixel_of_texel(
+    recon: &SfmrReconstruction,
+    p: u32,
+    i: usize,
+    s: f64,
+    t: f64,
+) -> [f64; 2] {
     let edited = edited(recon.clone());
     let view = edited.point(p).unwrap();
     let k = view
