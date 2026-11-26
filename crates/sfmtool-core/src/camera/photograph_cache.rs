@@ -1734,7 +1734,7 @@ impl PhotographCache {
 
     /// Decode `path` and cut its tiles, polling `progress` between the two:
     /// [`GetError::Cancelled`] when it was cancelled during the decode.
-    /// Reads the header first, refusing the photograph as [`header`] does
+    /// Reads the header first, refusing the photograph as [`Self::header`] does
     /// under `setting`, its workspace's, and, when `share` holds nothing,
     /// reserves the decode with [`Self::reserve_builds`] before reading the
     /// pixels.

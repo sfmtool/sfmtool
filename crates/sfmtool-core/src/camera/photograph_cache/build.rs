@@ -305,7 +305,7 @@ impl PhotographCache {
     /// those files in memory ([`MipmapFiles::in_memory`]), with a warning
     /// through `progress` the first time for each photograph, not again when
     /// a level evicted since is made again.
-    /// Reads the header first, refusing the photograph as [`header`] does,
+    /// Reads the header first, refusing the photograph as [`Self::header`] does,
     /// and when `share` holds nothing reserves the build as a whole decode
     /// with [`Self::reserve_builds`] before reading the pixels.
     ///
