@@ -1350,7 +1350,7 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   over it that `request_layout` reads in a workspace without the object,
   still that one after `read_layout` of a second and a `clear`, the one a
   `read_layout` reads in a cache of its own, and nothing for a photograph of
-  a workspace whose object keeps it in core.
+  a workspace whose object keeps it in core or for one in no workspace.
 - [photograph_cache/mipmap_tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/mipmap_tests.rs),
   on 300 x 200 synthetic JPEGs in a temporary workspace with a threshold of
   64 and tiles of 32, their mipmaps made with `build_mipmaps`: every tile,

@@ -221,12 +221,17 @@ fn a_layout_read_notes_the_first_large_photograph_of_a_workspace_without_mipmap_
     );
 
     // A workspace whose file has the object, even one whose threshold keeps
-    // the photograph in core, is not one without it.
+    // the photograph in core, is not one without it, and a photograph in no
+    // workspace is not one either.
     let with = tempfile::tempdir().unwrap();
     write_workspace(with.path(), &valid(4096), 1);
     let c = write_png(with.path(), "c.png", long + 1, 1);
+    let outside = tempfile::tempdir().unwrap();
+    let d = write_png(outside.path(), "d.png", long + 1, 1);
     let cache = PhotographCache::new(with_budget(GIB));
-    cache.request_layout(&c);
-    cache.read_layout(&c).unwrap();
+    for path in [&c, &d] {
+        cache.request_layout(path);
+        cache.read_layout(path).unwrap();
+    }
     assert_eq!(cache.large_photograph_without_mipmap_options(), None);
 }
