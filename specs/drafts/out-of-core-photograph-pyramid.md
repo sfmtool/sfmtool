@@ -384,7 +384,13 @@ two files:
   514 px regions of one of the user's 16320 x 12240 photographs (4:2:0, interval
   4 MCUs), among them all four corners and the centre, took 0.9 to 2.6 ms each,
   every pixel equal to `read_rgb`; `OriginalRegions::from_bytes`, the region
-  test and the index of its 195,075 intervals, took 10 to 12 ms.
+  test and the index of its 195,075 intervals, took 10 to 12 ms. Those
+  regions were one frame each, which `jpeg-decoder` decodes on three threads
+  of its own, and inside a kernel that keeps every core busy the same decode
+  took about 200 ms (open question 21); since then a region is decoded in
+  strips of frames no wider than 128 px, which it decodes on the calling
+  thread, about 13 ms a 514 px tile on one idle thread
+  ([core/camera/mipmaps.md § "A region of a region-readable original"](../core/camera/mipmaps.md#a-region-of-a-region-readable-original)).
 - **Every other original** is read from its `-mip0`, by the tile decode of
   a mip level file above, and never from the original.
 
@@ -4129,7 +4135,10 @@ in core. Step 17 turns the tier on.
       since a run of either reads every photograph in each kernel call or
       step and decodes them again as `sfm cluster-patches` does once their
       tiles are more than the budget. In core both write the same file as
-      before, byte for byte; the measured cost is in open question 21.
+      before, byte for byte; the measured cost is in open question 21,
+      with why both took longer from current mipmaps than in core: the
+      region decode of an original, since decoded in strips the decoder
+      runs on the calling thread, and the process heap (open question 22).
       Tests: in
       [test_embed_patches_command.py](../../tests/patch/test_embed_patches_command.py),
       the command on every eighth point of the `seoul_bull_workspace`
@@ -4544,6 +4553,111 @@ decisions.
     commands took longer reading their photographs out of core, from
     current mipmaps, than in core at the default budget (81 s against 19 s
     for the `xform` steps, 169 s against 54 s for `embed_patches`), while
-    holding less than half the memory; what in their reads costs the time
-    is not measured yet, and is to be found before step 17 turns the tier
-    on.
+    holding less than half the memory. What cost the time was found before
+    step 17, below.
+
+    **Where the time went.** Measured on the same workspace copies, by
+    counting and timing the cache's reads in a build that was not committed
+    (each figure the thread time summed over the 32 rayon threads), and then
+    by sampling the threads' states:
+
+    - *A region of a region-readable original was decoded on threads that
+      could not run.* `jpeg-decoder` decodes a frame wider than 128 px on one
+      new OS thread per colour component and waits for them, and a level-0
+      tile's frame was about 600 px wide. While the kernel's own threads keep
+      every core busy those threads wait their turn: the 1,817 level-0 tiles
+      of an `xform` run took 368 s, 203 ms each, and the 2,429 of an
+      `embed_patches` run 539 s, 222 ms each, against 3 ms for the same tile
+      on an idle machine and 66 ms on one thread beside 32 busy ones. The
+      mip level files' tiles were not affected, since their frames are
+      128 px wide (559 level-1 tiles took 11 s, 20 ms each). Each original was
+      also read and indexed 23 to 31 times for 8 photographs, by threads
+      that asked for it at once, 4 to 25 s in all; and the coarse levels'
+      decodes, 4 to 5 of them, under 1.2 s. Reads answered from kept tiles
+      took 5.5 s and 28 s in all, and under 0.2 s once the fix below was
+      made. Fixed: a region is decoded in strips of frames no wider
+      than 128 px, which the decoder decodes on the calling thread
+      ([core/camera/mipmaps.md § "A region of a region-readable original"](../core/camera/mipmaps.md#a-region-of-a-region-readable-original)),
+      about 13 ms a tile on one idle thread for about twice the pixels; the
+      level-0 tiles of the same runs then took 25 s (17 ms each) and 52 s
+      (23 ms each). Every 512 px tile of one of the photographs equals the
+      whole decode, and every output below is the same file before and
+      after, byte for byte but the write record.
+    - *The process heap.* The fix left `embed_patches` from mipmaps at about
+      52 s against 37 s in core in the same session, though its reads now
+      took 66 s of thread time, about 2 s of the run, and the in-core run's
+      `ImagePyramidSet.read` 2.6 s. Run again over the same cache, every read
+      a kept tile, it still took 46 to 65 s against 26 to 48 s in core, with
+      160 to 310 s of kernel-mode time against 17 to 26 s, 24.8 million
+      context switches against 2.3 million, and a third of its threads'
+      samples waiting on a lock (`WrAlertByThreadId`) against a tenth. On one
+      thread it took the time the in-core run took (17.5 s on every sixteenth
+      point), and at quality 100 the time it took at 95, so the kernel's work
+      was the same. In one process, after one run from the mipmaps whose
+      set and cache were then dropped, the in-core run took 62 to 93 s
+      against 34 to 42 s in a fresh one. With `mimalloc` as the extension's
+      global allocator, in an uncommitted build, the run from the mipmaps
+      took 28.9 s with its reads and 28.3 s without against 28.2 s in core,
+      with 6 to 10 s of kernel-mode time, and a run from the mipmaps no
+      longer slowed the in-core runs after it (27.9 to 28.2 s). The thousands
+      of tile decodes on the kernel's own threads, each allocating and
+      freeing blocks of tens to hundreds of KB, leave the Windows process
+      heap, which Rust's default allocator uses, slow for every thread that
+      allocates after them. Changing the allocator is open question 22.
+
+    Measured as above, wall clock of one run each, by the build before the
+    fix (`a19c12b2`), with it (`aa076827`), and with it and `mimalloc` (an
+    uncommitted experiment); several values are runs repeated in the same
+    session, and the machine's other work made the same run vary by up to
+    two times, so the lowest is the better guide:
+
+    | Run | Cache budget | Before the fix | With the fix | With the fix and `mimalloc` |
+    |-----|--------------|----------------|--------------|-----------------------------|
+    | `xform`, in core | 15.9 GiB | 21.7, 35.6 s | 23.0 to 56.9 s (6 runs) | 17.8 s |
+    | `xform`, mipmaps current | 15.9 GiB | 28.3, 48.1 s | 26.1 to 37.1 s (6 runs) | 17.1 s |
+    | `xform`, mipmaps current | 0.8 GiB | 60.4 s | 63.4 s | 36.9 s |
+    | `embed_patches`, in core | 15.9 GiB | 39.0, 41.2 s | 37.1 to 123.7 s (6 runs) | 31.7 s |
+    | `embed_patches`, mipmaps current | 15.9 GiB | 73.5, 76.4 s | 47.1 to 79.0 s (6 runs) | 31.6 s |
+    | `embed_patches`, mipmaps current | 0.8 GiB | 126.2 s | 106.0 s | 61.9 s |
+    | `sfm cluster-patches`, in core | 15.9 GiB | 6.1, 7.1 s | 7.1 to 10.6 s (4 runs) | 5.5 s |
+    | `sfm cluster-patches`, mipmaps current | 15.9 GiB | 3.3, 4.7 s | 4.7 to 26.7 s (4 runs) | 3.9 s |
+    | `sfm cluster-patches`, mipmaps current | 0.8 GiB | 6.0 s | 8.4 s | 5.6 s |
+
+    The peak working set was unchanged by the fix (3.1 GB for `xform` and
+    3.8 GB for `embed_patches` from the mipmaps, 8 to 9 GB in core); with
+    `mimalloc` it was 3.5 and 4.3 GB from the mipmaps at the default budget,
+    4.7 and 5.0 GB at 0.8 GiB (3.1 and 3.9 GB without it), and 10.4 to
+    10.7 GB in core. `sfm cluster-patches` reads mostly the stored levels,
+    whose tiles were never slow, which is why it was faster from the
+    mipmaps before the fix. At 0.8 GiB the runs from the mipmaps still take
+    about twice the default budget's time: the level-0 file entries are the
+    originals' whole bytes, about 60 MB each, so the eight photographs'
+    entries and the tiles their kernels use are more than the budget, and an
+    `xform` run reads the originals 271 times and decodes 30,523 level-0
+    tiles, against 27 and 1,725 at the default budget.
+22. **The global allocator.** Found while measuring open question 21. With
+    the reads of open question 21 fixed, a kernel reading photographs from
+    their mipmaps still took up to 1.5 times as long as in core, because the
+    tile decodes on its threads leave the Windows process heap slow for
+    every allocation after them (the measurements are in open question 21).
+    The options:
+    - (a) `mimalloc` as the global allocator of the extension
+      (`sfmtool-py`) and of the viewer's own binary: a dependency that
+      builds C code with the `cc` crate on every platform, MIT-licensed.
+      Measured: from the mipmaps as fast as in core (31.6 s against 31.7 s
+      for `embed_patches`, 17.1 s against 17.8 s for `xform`), and in core
+      about 20% faster than with the system allocator, but the peak working
+      set 10 to 50% higher (5.0 GB against 3.9 GB for `embed_patches` at
+      0.8 GiB), which the cache's budget does not count.
+    - (b) fewer allocations in the tile decode: reuse a thread's buffers for
+      the small JPEG and the decoded strip, and decode a tile straight into
+      the tile's pixels. `jpeg-decoder` still allocates its own buffers for
+      every frame, so this lessens the churn without removing it; not
+      measured.
+    - (c) leave it: from current mipmaps the commands hold a third to a half
+      of the in-core memory and take up to 1.5 times as long on Windows.
+
+    *Decided by the user:* (a). `mimalloc` becomes the global allocator of
+    `sfmtool-py` and of the viewer's own binary, after the same runs are
+    measured on Linux and macOS, since their allocators differ from
+    Windows' heap. It is a change of its own, made before step 17.

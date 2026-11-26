@@ -331,9 +331,9 @@ impl OriginalRegions {
     /// Pixels `x0..x1` by `y0..y1` of the original as RGB, equal to the same
     /// pixels of `ImageU8::read_rgb` of the file.
     ///
-    /// The small JPEG keeps the original's layout: its columns are the
-    /// rectangle's MCU columns widened to interval boundaries, its rows the
-    /// rectangle's MCU rows, both with a margin, and it is decoded to RGB by
+    /// Each small JPEG keeps the original's layout: its columns are MCU
+    /// columns from an interval boundary to an interval boundary, its rows
+    /// the rectangle's MCU rows with a margin, and it is decoded to RGB by
     /// the `jpeg-decoder` path `read_rgb` takes, then cropped. One MCU above,
     /// below and to the left holds the neighbours chroma upsampling reads,
     /// and one MCU on the right also keeps the cropped pixels out of the last
@@ -341,11 +341,17 @@ impl OriginalRegions {
     /// rather than its SIMD one: a frame a whole number of MCUs wide leaves it
     /// exactly those. Such a frame ends at least one MCU before the image's
     /// last, so in the whole decode, whose scalar part is the last 8 to 15 px,
-    /// the cropped pixels are converted by the SIMD formula too. Where the
+    /// the cropped pixels are converted by the SIMD formula too. Where a
     /// frame reaches the image's right or bottom edge it ends at that edge,
     /// so the edge is padded as in the whole decode, and, the frame starting
     /// on a multiple of 8 px, the scalar part of each line falls on the same
     /// pixels in both.
+    ///
+    /// The columns are decoded in strips, each a frame no wider than 128 px
+    /// (`DECODED_ON_THE_CALLING_THREAD`), whenever the restart interval is
+    /// narrow enough for frames that wide to cover them with their margins,
+    /// so the decode runs on the calling thread and starts none of its own;
+    /// otherwise in one frame as wide as the rectangle and its margins.
     ///
     /// # Errors
     ///
@@ -365,15 +371,67 @@ impl OriginalRegions {
                 why,
             )))
         })?;
+        let mh = self.mcu_size.1;
+        let rows = (
+            (y0 / mh).saturating_sub(1),
+            (y1.div_ceil(mh) + 1).min(self.mcu_rows),
+        );
+        let strips = self
+            .strips(x0, x1)
+            .unwrap_or_else(|| vec![Strip::one_frame(self, x0, x1)]);
+        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let mut out = vec![0; w * h * 3];
+        for strip in strips {
+            self.decode_strip(&strip, rows, (x0, y0, w, h), &mut out)?;
+        }
+        Ok(ImageU8::new(w as u32, h as u32, 3, out))
+    }
+
+    /// Pixel columns `x0..x1` split into strips, each decoded by a frame at
+    /// most [`DECODED_ON_THE_CALLING_THREAD`] px wide that holds its columns
+    /// with their margins, and none reaching past the one frame of
+    /// [`Strip::one_frame`]; `None` when the restart interval is too wide for
+    /// frames that narrow to cover them.
+    fn strips(&self, x0: u32, x1: u32) -> Option<Vec<Strip>> {
+        let (mw, r) = (self.mcu_size.0, self.restart_interval);
+        let per_frame = DECODED_ON_THE_CALLING_THREAD / mw / r * r;
+        let last = Strip::one_frame(self, x0, x1).columns.1;
+        let mut strips = Vec::new();
+        let mut x = x0;
+        while x < x1 {
+            let lo = (x / mw).saturating_sub(1) / r * r;
+            let hi = (lo + per_frame).min(last);
+            let end = if hi == self.mcus_per_row {
+                x1
+            } else {
+                x1.min(hi.checked_sub(1)? * mw)
+            };
+            if end <= x {
+                return None;
+            }
+            strips.push(Strip {
+                columns: (lo, hi),
+                pixels: (x, end),
+            });
+            x = end;
+        }
+        Some(strips)
+    }
+
+    /// Decode the frame of `strip`'s MCU columns and MCU rows `rows`, and
+    /// copy its pixel columns, rows `y0..y0 + h`, into `out`, the `w` x `h`
+    /// RGB rectangle whose left edge is `x0`.
+    fn decode_strip(
+        &self,
+        strip: &Strip,
+        (row_lo, row_hi): (u32, u32),
+        (x0, y0, w, h): (u32, u32, usize, usize),
+        out: &mut [u8],
+    ) -> Result<(), ::image::ImageError> {
         let (mw, mh) = self.mcu_size;
         let r = self.restart_interval;
-        let col_lo = (x0 / mw).saturating_sub(1) / r * r;
-        let col_hi = (x1.div_ceil(mw) + 1)
-            .div_ceil(r)
-            .saturating_mul(r)
-            .min(self.mcus_per_row);
-        let row_lo = (y0 / mh).saturating_sub(1);
-        let row_hi = (y1.div_ceil(mh) + 1).min(self.mcu_rows);
+        let (col_lo, col_hi) = strip.columns;
+        let (from, to) = strip.pixels;
         let frame_width = if col_hi == self.mcus_per_row {
             self.width - col_lo * mw
         } else {
@@ -390,6 +448,8 @@ impl OriginalRegions {
                 (col_lo / r) as usize + row * per_row..(col_hi / r) as usize + row * per_row
             })
             .collect();
+        #[cfg(test)]
+        tests::note_frame_width(frame_width);
         // Both sides are at most the original's, which fit a JPEG frame.
         let jpeg = self
             .index
@@ -406,20 +466,59 @@ impl OriginalRegions {
                 "the region's intervals decode to the wrong number of samples".to_string(),
             )));
         }
-        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
-        let (left, top) = ((x0 - col_lo * mw) as usize, (y0 - row_lo * mh) as usize);
-        let mut out = Vec::with_capacity(w * h * 3);
-        for y in top..top + h {
-            let row = &pixels[y * line + left * channels..][..w * channels];
+        let span = (to - from) as usize;
+        let (left, top) = ((from - col_lo * mw) as usize, (y0 - row_lo * mh) as usize);
+        for y in 0..h {
+            let row = &pixels[(top + y) * line + left * channels..][..span * channels];
+            let at = (y * w + (from - x0) as usize) * 3;
+            let target = &mut out[at..at + span * 3];
             if channels == 1 {
-                out.extend(row.iter().flat_map(|&v| [v, v, v]));
+                for (p, &v) in target.as_chunks_mut::<3>().0.iter_mut().zip(row) {
+                    *p = [v, v, v];
+                }
             } else {
-                out.extend_from_slice(row);
+                target.copy_from_slice(row);
             }
         }
-        Ok(ImageU8::new(w as u32, h as u32, 3, out))
+        Ok(())
     }
 }
+
+/// One frame of a region read of an original: the MCU columns it decodes,
+/// from one interval boundary to another or the image's right edge, and the
+/// pixel columns of the rectangle it gives.
+struct Strip {
+    columns: (u32, u32),
+    pixels: (u32, u32),
+}
+
+impl Strip {
+    /// The one frame that gives pixel columns `x0..x1` with their margins:
+    /// from the interval boundary at or before the MCU left of `x0` to the
+    /// one at or after the MCU right of `x1`, or the image's right edge.
+    fn one_frame(original: &OriginalRegions, x0: u32, x1: u32) -> Self {
+        let (mw, r) = (original.mcu_size.0, original.restart_interval);
+        let lo = (x0 / mw).saturating_sub(1) / r * r;
+        let hi = (x1.div_ceil(mw) + 1)
+            .div_ceil(r)
+            .saturating_mul(r)
+            .min(original.mcus_per_row);
+        Self {
+            columns: (lo, hi),
+            pixels: (x0, x1),
+        }
+    }
+}
+
+/// The widest frame, in pixels, that `jpeg-decoder` 0.3.2 decodes on the
+/// calling thread. For a wider frame its `Decoder::decode` starts one OS
+/// thread per colour component (`select_worker` in its `decoder.rs`, which
+/// compares the frame's width squared with `128 * 128`). While a kernel keeps
+/// every core busy those threads wait their turn to run, and the thread that
+/// asked for the decode waits for them: a tile of a 16320 x 12240 original
+/// that decodes in 3 ms alone took about 200 ms inside `sfm xform
+/// --refine-normals`.
+pub(crate) const DECODED_ON_THE_CALLING_THREAD: u32 = 128;
 
 #[cfg(test)]
 mod tests;

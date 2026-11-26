@@ -4,6 +4,7 @@
 //! Tile decodes of synthetic mip level files and region decodes of synthetic
 //! originals, each compared with the same pixels of the whole decode.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use jpeg_encoder::SamplingFactor;
@@ -15,6 +16,28 @@ use crate::camera::mipmap::record::{MipLevelRecord, ENCODER, MIP_LEVEL_RECORD_VE
 use crate::camera::mipmap::region::index_intervals;
 use crate::camera::mipmap::test_support::{encode_jpeg, synthetic_rgb, JpegOptions};
 use crate::camera::mipmap::{ExpectedMipLevel, MipLevelFile, MipmapError};
+
+thread_local! {
+    /// The width of each frame a region read of an original decoded on this
+    /// thread, while a test records them.
+    static FRAME_WIDTHS: RefCell<Option<Vec<u32>>> = const { RefCell::new(None) };
+}
+
+/// Note a frame of `width` px that a region read of an original decodes.
+pub(super) fn note_frame_width(width: u32) {
+    FRAME_WIDTHS.with(|w| {
+        if let Some(widths) = w.borrow_mut().as_mut() {
+            widths.push(width);
+        }
+    });
+}
+
+/// The widths of the frames `read` decodes on this thread.
+fn frame_widths(read: impl FnOnce()) -> Vec<u32> {
+    FRAME_WIDTHS.with(|w| *w.borrow_mut() = Some(Vec::new()));
+    read();
+    FRAME_WIDTHS.with(|w| w.borrow_mut().take().unwrap_or_default())
+}
 
 /// What a mip level file of `image` must say to be read.
 fn expected_for(record: &MipLevelRecord) -> ExpectedMipLevel {
@@ -281,10 +304,15 @@ fn every_region_of_an_original_equals_the_same_pixels_of_read_rgb() {
     let cases = [
         ("4:2:0", SamplingFactor::F_2_2, 333, 211, 3),
         ("4:2:0", SamplingFactor::F_2_2, 37, 29, 1),
+        // 320 px is 5 intervals of 64 px, the interval of the 16320 x 12240
+        // photographs the out-of-core draft measures.
+        ("4:2:0", SamplingFactor::F_2_2, 320, 211, 4),
         ("4:2:2", SamplingFactor::F_2_1, 333, 211, 7),
+        ("4:2:2", SamplingFactor::F_2_1, 333, 211, 3),
         ("4:4:0", SamplingFactor::F_1_2, 333, 211, 6),
         ("4:4:0", SamplingFactor::F_1_2, 37, 29, 5),
         ("4:4:4", SamplingFactor::F_1_1, 333, 211, 3),
+        ("4:4:4", SamplingFactor::F_1_1, 320, 211, 8),
         ("grey", SamplingFactor::F_1_1, 333, 211, 2),
     ];
     for (name, sampling, width, height, r) in cases {
@@ -302,6 +330,55 @@ fn every_region_of_an_original_equals_the_same_pixels_of_read_rgb() {
             );
         }
     }
+}
+
+#[test]
+fn a_region_of_an_original_with_narrow_intervals_decodes_on_the_calling_thread() {
+    // A tile of 512 px with its border, away from the edges and at the right
+    // edge, of an original whose intervals are at most 64 px wide: each frame
+    // is narrow enough for `jpeg-decoder` to decode it on the calling thread,
+    // and every pixel is the whole decode's.
+    let cases = [
+        ("4:2:0", SamplingFactor::F_2_2, 4, 64 * 22),
+        ("4:2:0", SamplingFactor::F_2_2, 3, 48 * 29),
+        ("4:4:4", SamplingFactor::F_1_1, 8, 64 * 22),
+        ("grey", SamplingFactor::F_1_1, 1, 8 * 176),
+    ];
+    for (name, sampling, r, width) in cases {
+        let height = 600;
+        let bytes = original(&synthetic_rgb(width, height), sampling, r, name == "grey");
+        let whole = ImageU8::decode_rgb(&bytes).unwrap();
+        let regions = OriginalRegions::from_bytes(bytes.into()).unwrap();
+        for rect in [(511, 0, 1025, 514), (width - 514, 85, width, 599)] {
+            let (x0, y0, x1, y1) = rect;
+            let mut region = None;
+            let widths = frame_widths(|| region = Some(regions.decode_region(x0, y0, x1, y1)));
+            let region = region.unwrap().unwrap();
+            assert!(
+                region.data() == crop(&whole, rect),
+                "{name}, interval {r}: {rect:?}"
+            );
+            assert!(widths.len() > 1, "{name}: {widths:?}");
+            assert!(
+                widths.iter().all(|&w| w <= DECODED_ON_THE_CALLING_THREAD),
+                "{name}, interval {r}: frames {widths:?} for {rect:?}"
+            );
+            // The strips' frames overlap only by their margins, so they
+            // decode at most twice the columns asked for.
+            assert!(
+                widths.iter().sum::<u32>() <= 2 * (x1 - x0) + 2 * 64,
+                "{widths:?}"
+            );
+        }
+    }
+    // An interval of 112 px is too wide for strips of 128 px with their
+    // margins, so the region is one frame, as wide as it needs.
+    let bytes = original(&synthetic_rgb(336, 64), SamplingFactor::F_2_1, 7, false);
+    let regions = OriginalRegions::from_bytes(bytes.into()).unwrap();
+    let widths = frame_widths(|| {
+        regions.decode_region(100, 0, 230, 64).unwrap();
+    });
+    assert_eq!(widths, vec![336]);
 }
 
 #[test]
