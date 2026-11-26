@@ -253,17 +253,27 @@ def test_enable_refuses_a_file_that_has_the_object(tmp_path, monkeypatch, object
     assert path.read_text() == text
 
 
-def test_enable_refuses_a_value_out_of_range_and_writes_nothing(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "value, message",
+    [
+        (
+            "101",
+            "mipmap_options.jpeg_quality is 101; it must be an integer from 1 to 100",
+        ),
+        (str(2**64), "int too big to convert while processing 'jpeg_quality'"),
+    ],
+)
+def test_enable_refuses_a_value_out_of_range_and_writes_nothing(
+    tmp_path, monkeypatch, value, message
+):
     root = tmp_path / "ws"
     path = _workspace_without_the_object(root)
     text = path.read_text()
     monkeypatch.chdir(root)
-    result = _mipmaps("--enable", "--jpeg-quality", "101", ".")
-    assert result.exit_code == 1
-    assert (
-        "mipmap_options.jpeg_quality is 101; it must be an integer from 1 to 100"
-        in result.output
-    )
+    result = _mipmaps("--enable", "--jpeg-quality", value, ".")
+    assert result.exit_code == 1, result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert message in result.output
     assert path.read_text() == text
 
 

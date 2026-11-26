@@ -348,6 +348,10 @@ def _enable(path: str, values: dict) -> None:
         )
     except (ValueError, OSError) as e:
         raise click.ClickException(str(e))
+    except OverflowError as e:
+        # A value outside the 64-bit range the binding takes; its note names
+        # the argument.
+        raise click.ClickException(" ".join([str(e), *getattr(e, "__notes__", [])]))
     click.echo(
         f"Added mipmap_options to {_shown(root / '.sfm-workspace.json')}: "
         f"{describe_mipmap_options(written)}."
