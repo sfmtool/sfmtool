@@ -93,8 +93,8 @@ impl SfmtoolWorkspaceOptions {
 
 /// The keys of the record in the order `sfm ws init` writes them: the
 /// record's own, then the feature options', then `image_to_gray`'s, then
-/// `mipmap_options`'. A key
-/// not listed would follow the listed ones in sorted order.
+/// `mipmap_options`'. A key not listed would follow the listed ones in sorted
+/// order.
 const KEY_ORDER: &[&str] = &[
     "version",
     "feature_tool",

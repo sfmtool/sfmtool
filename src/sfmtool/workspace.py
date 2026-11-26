@@ -13,8 +13,8 @@ names the `feature_type` a workspace records for a tool,
 `sfmtool_workspace_marker` and `write_sfmtool_workspace_marker`, the text of
 a new `sfmtool` workspace's `.sfm-workspace.json` and its one writer;
 `new_workspace_mipmap_options`, the `mipmap_options` object a new workspace
-records; and
-`upgrade_workspace`, which brings a workspace's files to the current versions.
+records; and `upgrade_workspace`, which brings a workspace's files to the
+current versions.
 
 This module is the public home of the `sfmtool._sfmtool.workspace` bindings.
 """

@@ -250,20 +250,22 @@ def _mipmap_workspace(root: Path, with_mipmap_options: bool) -> tuple[Path, Path
     """An `sfmtool` workspace at `root` with a 300 x 200 noise photograph and
     a 60 x 40 one in `images/`, its `.sfm-workspace.json` given
     `mipmap_options` with a threshold of 64 px when `with_mipmap_options`, so
-    the first is out of core and the second in core."""
+    the first is out of core and the second in core, and with no
+    `mipmap_options` otherwise, in place of the object `sfm ws init` writes."""
     result = CliRunner().invoke(
         main, ["ws", "init", "--feature-tool", "sfmtool", str(root)]
     )
     assert result.exit_code == 0, result.output
+    config_file = root / ".sfm-workspace.json"
+    config = json.loads(config_file.read_text())
+    del config["mipmap_options"]
     if with_mipmap_options:
-        config_file = root / ".sfm-workspace.json"
-        config = json.loads(config_file.read_text())
         config["mipmap_options"] = {
             "out_of_core_long_side": 64,
             "jpeg_quality": 95,
             "full_resolution_jpeg_quality": 95,
         }
-        config_file.write_text(json.dumps(config))
+    config_file.write_text(json.dumps(config))
     images = root / "images"
     images.mkdir()
     rng = np.random.default_rng(7)

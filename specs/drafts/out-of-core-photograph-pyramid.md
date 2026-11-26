@@ -4336,17 +4336,18 @@ in core. Step 17 turns the tier on.
     - **17a, a new workspace has the object.** **Built**
       ([marker.rs](../../crates/sfmtool-core/src/workspace/marker.rs),
       [mipmap_options.rs](../../crates/sfmtool-core/src/workspace/mipmap_options.rs),
-      [_workspace.py](../../src/sfmtool/_workspace.py)), as planned here;
-      `sfm ws init` prints `mipmap_options: photographs with a side over
-      4096 px are read from mipmaps, JPEG quality 95 (95 at full
-      resolution)`. The one writer of a new
-      `sfmtool` workspace, `sfmtool_workspace_marker`, writes
-      `"mipmap_options"` after `feature_prefix_dir`, so `sfm ws init`,
+      [_workspace.py](../../src/sfmtool/_workspace.py)), as planned here.
+      The one writer of a new `sfmtool` workspace,
+      `sfmtool_workspace_marker`, writes `"mipmap_options"` after
+      `feature_prefix_dir`, so `sfm ws init`,
       `sfm pick-images --new-workspace` and the viewer's demo workspace get
       it; `init_workspace` writes the same object for the `colmap` and
       `opencv` tools, from the binding `new_workspace_mipmap_options()`; and
-      `sfm ws init` prints a line for it. `sfm ws init --force` writes a
-      fresh file, so it writes the object too. In `sfmtool_core::workspace`:
+      `sfm ws init` prints `mipmap_options: photographs with a side over
+      4096 px are read from mipmaps, JPEG quality 95 (95 at full
+      resolution)`. `sfm ws init --force` writes a fresh file, so it writes
+      the object too. `sfm undistort` writes its output workspace's file
+      itself and writes no object until 17b. In `sfmtool_core::workspace`:
 
       ```rust
       /// The `mipmap_options` a new workspace records: 4096, 95 and 95.
@@ -4379,6 +4380,16 @@ in core. Step 17 turns the tier on.
       leaves it as it is; `--enable` with `--check` or `--prune` is a usage
       error; `sfm ws upgrade` of a workspace without the object writes none,
       and of one with it keeps it.
+
+      17b also has `sfm undistort` carry the object over (open question
+      25): the `.sfm-workspace.json` it writes in its output directory gets
+      the source workspace's `mipmap_options`, unchanged and after
+      `feature_prefix_dir`, when the source's file has one, and none when it
+      has none. Tests: undistort
+      from a workspace with an object whose values differ from
+      `NEW_WORKSPACE_MIPMAP_OPTIONS` writes that object, and from one
+      without writes none; `undistort-command.md` § "Workspace config" shows
+      the key.
     - **17c, the recommendation names `--enable`.** The line
       `photograph_cache_lines` prints for `sfm cluster-patches`,
       `sfm embed-patches`, `sfm xform`, `sfm compare --strips` and
@@ -4987,3 +4998,23 @@ decisions.
     run each, through the command: in core 10.0 s and 14.98 GB, from
     current mipmaps 1.7 s and 4.09 GB, each writing the files of the run
     before 16e, byte for byte.
+24. **The workspace file's version.** Found while splitting step 17. Writing
+    `mipmap_options` into every new workspace could be marked by a new
+    version of `.sfm-workspace.json`, as a new optional entry of one of the
+    archive formats is ([format-versions.md](../formats/format-versions.md)).
+    *Decided by the user:* the file stays at
+    version 2. `mipmap_options` is already an optional key of version 2,
+    which the current reader reads and validates, and sfmtool 0.4.1's
+    `load_workspace_config` ignores keys it does not know, so it reads a new
+    workspace's file and decodes every photograph whole, which misreads
+    nothing the file holds
+    ([workspace.md § File Format](../workspace/workspace.md#file-format)).
+25. **`sfm undistort`'s output workspace.** Found while building 17a.
+    `sfm undistort` writes the `.sfm-workspace.json` of its output directory
+    itself, not through `init_workspace`, so 17a gives it no object. The
+    options: (a) copy the source workspace's object, (b) write
+    `NEW_WORKSPACE_MIPMAP_OPTIONS`, as a new workspace does, (c) write none.
+    *Decided by the user:* (a). The output workspace gets the source
+    workspace's `mipmap_options` when the source's file has one, and none
+    when it has none, so undistorting keeps the choice the source's owner
+    made; it is part of step 17b.
