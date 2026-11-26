@@ -152,11 +152,15 @@ the median line; with edges at multiples of `w`, measurements that agree
 exactly would fill a bar from `0` to `w` and read as a spread of up to `w`. A
 single measurement, or measurements that agree, make one bin one percent wide
 centred on the median. A bin's name and tooltip print its edges with the fewest
-decimals that print every edge exactly (`histogram::edge_decimals`), which for
+decimals that print every edge exactly, and never more than one past the count
+the width alone gives (`histogram::edge_decimals`), which for
 these half-width edges is one more digit than the width alone gives where the
 width starts with 1 or 5: the single bin reads `−0.5 to 0.5 %`, not
 `0 to 0 %`. For the Camera Intrinsics panel's edges, at multiples of the width,
-it is the width's own count, so those labels read as before.
+it is the width's own count, so those labels read as before. A camera with one
+image, whose one bin's edges are half a width either side of an arbitrary value
+that no count prints exactly, gets the cap, one digit more than before
+(`1134.6 to 1334.6`).
 
 **The axis is symmetric about the median.** It reaches the largest deviation
 on either side, and the ±5 bounds where those lie within a spread of the

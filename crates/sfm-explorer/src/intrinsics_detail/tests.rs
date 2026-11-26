@@ -2852,3 +2852,21 @@ fn the_parameter_tables_edges_print_with_their_widths_decimals() {
         );
     }
 }
+
+/// A camera with one image makes a one-bin histogram whose edges are half a
+/// width either side of its value, which no count of decimals prints exactly:
+/// they print with one decimal more than the width gives, and no more.
+#[test]
+fn a_one_bin_histogram_prints_one_decimal_past_its_width() {
+    use super::histogram::{decimals_for, edge_decimals};
+    for (value, width) in [
+        (1234.5678912, 200.0),
+        (std::f64::consts::FRAC_1_SQRT_2, 0.1),
+    ] {
+        let edges = [value - width / 2.0, value + width / 2.0];
+        assert_eq!(edge_decimals(&edges), decimals_for(width) + 1, "{edges:?}");
+    }
+    // A focal of 1234.5678912 in a bin 200 wide reads 1134.6 to 1334.6.
+    let decimals = edge_decimals(&[1134.5678912, 1334.5678912]);
+    assert_eq!(format!("{:.decimals$}", 1134.5678912), "1134.6");
+}

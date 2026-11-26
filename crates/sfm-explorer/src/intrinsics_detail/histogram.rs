@@ -213,17 +213,27 @@ pub(super) fn decimals_for(step: f64) -> usize {
     }
 }
 
-/// The fewest decimals, at most 9, that print every one of `edges` exactly.
+/// The fewest decimals that print every one of `edges` exactly, at most one
+/// more than [`decimals_for`] the bin width gives, and that cap where none
+/// does.
 ///
 /// For edges at multiples of a step of the 1/2/5 ladder, as the parameter
 /// table's are, that is [`decimals_for`] the step; the measurement scale
 /// dialog's edges are at odd multiples of half a step, which need one more
-/// digit where the step starts with 1 or 5 (`±0.5` for a step of `1`). Each
+/// digit where the step starts with 1 or 5 (`±0.5` for a step of `1`). A
+/// one-bin histogram of the parameter table, for a camera with one image, has
+/// its edges half a width either side of an arbitrary value, which no count of
+/// decimals prints exactly: the cap prints them with the one extra digit a
+/// half-width edge can need, rather than with the value's rounding noise. Each
 /// edge is compared to its print to a millionth of a part, so a multiple of
 /// `0.1` that floating point holds as `0.30000000000000004` still prints with
 /// one decimal.
-pub(crate) fn edge_decimals(edges: &[f64]) -> usize {
-    (0..=9)
+pub(super) fn edge_decimals(edges: &[f64]) -> usize {
+    let cap = match edges {
+        [a, b, ..] => (decimals_for(b - a) + 1).min(9),
+        _ => 9,
+    };
+    (0..=cap)
         .find(|&decimals| {
             edges.iter().all(|&edge| {
                 let printed = format!("{edge:.decimals$}")
@@ -232,7 +242,7 @@ pub(crate) fn edge_decimals(edges: &[f64]) -> usize {
                 !edge.is_finite() || (printed - edge).abs() <= 1e-6 * 10f64.powi(-(decimals as i32))
             })
         })
-        .unwrap_or(9)
+        .unwrap_or(cap)
 }
 
 /// An edge or tick: `0` for a value that rounds to zero, and a negative one
