@@ -1198,7 +1198,10 @@ floor the joint growth is taken: its plane is one estimate, with both views'
 information, combined with the estimates before it. When only one view does,
 the other is left out under the floor and the one that reaches it is grown
 alone, as a pick is; when the joint growth is refused, both are grown alone,
-the pick first. Each estimate a joint try yields is combined in turn.
+the pick first. A view grown alone after a joint growth starts from the plane
+the views kept before that joint growth reached, not from one that includes
+the other view's lone growth. Each estimate a joint try yields is combined in
+turn.
 
 **What follows from one estimate for two views.**
 

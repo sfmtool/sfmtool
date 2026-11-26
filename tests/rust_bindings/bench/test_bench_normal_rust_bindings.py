@@ -351,9 +351,7 @@ class TestGrownPlaneNormal:
         assert seq["left_out"] == sum(v["kind"] == "left_out" for v in views)
         assert seq["shift_only"] == sum(v["kind"] == "shift_only" for v in views)
         tried = {e["observation"] for e in seq["trace"]}
-
         tried |= {e["partner"]["observation"] for e in seq["trace"] if e["partner"]}
-
         assert seq["matched"] == len(tried)
         # The agreement is the mean score of the views in the plane.
         scores = [
@@ -713,9 +711,7 @@ class TestGrownPlaneNormal:
         assert names.count("mean") >= (1 if seq["matched"] else 0)
         assert names.count("pair fit") == len(seq["pairs"])
         # One selection per pick grown alone and per joint growth, whose two
-
         # views are both picks.
-
         joint_picks = sum(p["partner"] is not None for p in seq["picks"])
 
         assert names.count("selection") == len(seq["picks"]) - joint_picks // 2
