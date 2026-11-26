@@ -76,7 +76,10 @@ nothing took 41 to 64 s; in core the cache holds the photographs' tiles
 while the thumbnails decode them whole again, which raised the peak from
 10.0 to 14.9 GB on the same 8
 ([out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
-open question 23).
+open question 23). The cache keeps at most its budget, a quarter of
+physical memory clamped to between 1 and 16 GiB unless
+`SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` sets it, so the peak rises by at most
+that.
 A point with no
 frame (an all-zero `u` row) or an all-zero bitmap row is drawn as a splat
 either way, by the rule SfM Explorer's surfels follow
@@ -369,7 +372,8 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
   makes the mipmaps they need; the caller makes it, so a caller that reads the
   same photographs in another call passes the cache that call reads through,
   and a mipmap either makes is made once. `WebExportOptions` carries the
-  options above, plus `source_name`, `generator` and `max_page_size` (4096 unless a caller packs smaller pages).
+  options above, plus `source_name`, `generator` and `max_page_size` (4096
+  unless a caller packs smaller pages).
   The report lists each file with its size, the point, patch and camera counts,
   where the thumbnail rows came from, whether the bitmaps were rendered, the
   decoded atlas bytes and the warnings. Atlas packing is
