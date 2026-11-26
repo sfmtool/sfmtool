@@ -243,7 +243,9 @@ times too close. So the edit keeps the picture still, by one of two means.
 to another node or set from a patch, is drawn under `T·S⁻¹` afterwards: `T`'s
 rotation and translation with its scale divided by `s`. Every point, camera and
 bench patch is then drawn where it was, to rounding, and the node stays aligned
-with its partner. The view is not touched.
+with its partner. The camera is not touched; the scene scale is measured again
+from the loaded nodes, as after any change of a transform, so a scene scale set
+by hand on the HUD's slider goes back to the measured one.
 
 **A node at the identity that is the only one loaded** keeps the identity, and
 `scale_to_median_measurement` scales the 3D view about the world origin by `s`:
