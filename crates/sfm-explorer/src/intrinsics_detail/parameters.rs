@@ -243,6 +243,9 @@ fn show_statistics_row(
     let labels = histogram::Labels {
         component: row.component,
         unit: row.unit.name(),
+        items: ["image", "images"],
+        per: "per image",
+        selects: true,
         value: &value,
         name,
     };

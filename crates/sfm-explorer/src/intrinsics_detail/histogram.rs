@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The small histogram each `per image` row of the parameter table draws: how
-//! a camera's images' values of one component are spread.
+//! a camera's images' values of one component are spread. The measurement
+//! scale dialog (`crate::measurement_scale_prompt`) draws its measurements'
+//! deviations from their median with the same arithmetic and painter.
 //!
 //! [`Histogram`] is the arithmetic, shared with MCP `get_camera_intrinsics`,
 //! which reports the same bins; [`show_histogram`] paints one and turns a
@@ -231,26 +233,39 @@ fn edge_text(value: f64, decimals: usize) -> String {
     }
 }
 
-/// What one row's histogram is about, for its tooltips and its bins' names.
-pub(super) struct Labels<'a> {
-    /// The component, `focal`, `Δcx`, `ωz`, as the row's label names it.
-    pub(super) component: &'a str,
+/// What one histogram is about, for its tooltips and its bins' names.
+pub(crate) struct Labels<'a> {
+    /// The quantity, `focal`, `Δcx`, `ωz` as a parameter row's label names
+    /// it, or the measurement scale dialog's `deviation from the median`.
+    pub(crate) component: &'a str,
     /// The unit its values are in, `%`, `px`, `mrad per short side`, or empty
     /// for the radial coefficients.
-    pub(super) unit: &'a str,
+    pub(crate) unit: &'a str,
+    /// What one value belongs to, singular then plural: `image` and `images`
+    /// in the parameter table, `measurement` and `measurements` in the
+    /// measurement scale dialog.
+    pub(crate) items: [&'a str; 2],
+    /// What a bin's name opens with before the quantity, `per image` in the
+    /// parameter table, or empty for nothing.
+    pub(crate) per: &'a str,
+    /// Whether a click on a bin selects the next of its items, and its tooltip
+    /// says so. The measurement scale dialog's bins select nothing.
+    pub(crate) selects: bool,
     /// A value as the tooltip lists it, in the row's spelling.
-    pub(super) value: &'a dyn Fn(f64) -> String,
-    /// An image's name.
-    pub(super) name: &'a dyn Fn(usize) -> String,
+    pub(crate) value: &'a dyn Fn(f64) -> String,
+    /// An item's name: an image's, or a measurement's.
+    pub(crate) name: &'a dyn Fn(usize) -> String,
 }
 
 /// What the pointer did on a histogram this frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct HistogramResponse {
-    /// The image a click on a bin selected.
-    pub(super) select: Option<usize>,
-    /// The image the next click on the bin under the pointer selects.
-    pub(super) hovered: Option<usize>,
+pub(crate) struct HistogramResponse {
+    /// The item a click on a bin selected; always `None` where
+    /// [`Labels::selects`] is false.
+    pub(crate) select: Option<usize>,
+    /// The item the next click on the bin under the pointer selects; always
+    /// `None` where [`Labels::selects`] is false.
+    pub(crate) hovered: Option<usize>,
 }
 
 /// Paint `histogram` `width` wide and handle the pointer over its bins.
@@ -258,10 +273,11 @@ pub(super) struct HistogramResponse {
 /// The bars are the bins' counts, scaled to the fullest bin. The mean is a
 /// solid line and the two-standard-deviation bounds dashed ones, in the
 /// colour of the projection plot's ideal map, and zero a grey line when it is
-/// on the axis. The bin holding `selected`, the selected image, is outlined.
-/// Hovering a bin highlights it and lists its images in a tooltip, and a
-/// click selects the next of them ([`Histogram::next_in_bin`]).
-pub(super) fn show_histogram(
+/// on the axis. The bin holding `selected`, the selected item, is outlined.
+/// Hovering a bin highlights it and lists its items in a tooltip, and where
+/// [`Labels::selects`] holds a click selects the next of them
+/// ([`Histogram::next_in_bin`]).
+pub(crate) fn show_histogram(
     ui: &mut egui::Ui,
     id: egui::Id,
     histogram: &Histogram,
@@ -311,14 +327,32 @@ pub(super) fn show_histogram(
         let from = edge_text(histogram.edges[k], decimals);
         let to = edge_text(histogram.edges[k + 1], decimals);
         let count = bin.len();
-        let images = if count == 1 { "image" } else { "images" };
-        let response = ui.interact(column, id.with(k), Sense::click());
+        let [one, many] = labels.items;
+        let items = if count == 1 { one } else { many };
+        // A bin that selects nothing senses the hover alone, and is listed as
+        // a label rather than a button, so nothing offers a click that does
+        // nothing.
+        let (sense, role) = if labels.selects {
+            (Sense::click(), egui::WidgetType::Button)
+        } else {
+            (Sense::hover(), egui::WidgetType::Label)
+        };
+        let response = ui.interact(column, id.with(k), sense);
+        let per = if labels.per.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", labels.per)
+        };
         let name = format!(
-            "per image {} {from} to {to}{unit}: {count} {images}",
+            "{per}{} {from} to {to}{unit}: {count} {items}",
             labels.component
         );
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
-        let next = histogram.next_in_bin(k, selected);
+        response.widget_info(|| egui::WidgetInfo::labeled(role, true, &name));
+        let next = if labels.selects {
+            histogram.next_in_bin(k, selected)
+        } else {
+            None
+        };
         let hovered = response.hovered();
         if hovered {
             out.hovered = next;
@@ -328,7 +362,7 @@ pub(super) fn show_histogram(
         }
         response.on_hover_ui(|ui| {
             ui.label(format!(
-                "{} from {from} to {to}{unit}: {count} of {total} images",
+                "{} from {from} to {to}{unit}: {count} of {total} {many}",
                 labels.component
             ));
             for &(image, value) in bin.iter().take(LISTED) {
