@@ -1755,8 +1755,9 @@ version.
 readings as the dialog reads them: the reconstruction's `world_space_unit`, the
 `unit`, `factor` (the median per-measurement factor, what the write multiplies
 every coordinate by) and `scale_text` (`1 scene unit = 1020 mm`), and where the
-file declares a unit `correction`, the factor relative to it, and
-`correction_text` (`currently m; ×1.020 correction`); `statistics` (`count`
+file declares a unit `correction`, the measurements' scale relative to that
+unit, which is not the multiplier, and `correction_text` (`The file declares m.
+By these measurements its scale is off by +2.00% (×1.020).`); `statistics` (`count`
 and `total`, `median`, `mean`, `sample_std` and `sample_std_percent`,
 `median_absolute_deviation`, `min`, `max`, `max_abs_deviation_percent` and
 `disagrees`), with `disagreement_percent`, the bar `disagrees` is measured

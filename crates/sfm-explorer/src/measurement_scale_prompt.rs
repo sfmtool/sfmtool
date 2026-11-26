@@ -154,6 +154,19 @@ pub(crate) fn number_text(value: f64) -> String {
     }
 }
 
+/// A percentage as the statistics print it, `0.42`: two decimals, so a value
+/// that is float noise, such as the median absolute deviation of measurements
+/// that agree to the `float32` they are stored in, reads `0.00`.
+pub(crate) fn percent_text(percent: f64) -> String {
+    format!("{:.2}", if percent.abs() < 0.005 { 0.0 } else { percent })
+}
+
+/// A signed percentage, `+0.42` or `−0.20`, with `+0.00` for one that rounds to
+/// zero, as the table prints deviations.
+pub(crate) fn signed_percent_text(percent: f64) -> String {
+    measurements::signed(percent, 2)
+}
+
 /// `1 scene unit = 2.716 mm`: what the factor says, in words.
 pub(crate) fn scale_text(unit: LengthUnit, factor: f64) -> String {
     format!("1 scene unit = {} {}", number_text(factor), unit.name())
@@ -166,18 +179,23 @@ pub(crate) fn correction(file_unit: LengthUnit, unit: LengthUnit, factor: f64) -
     factor * unit.in_metres() / file_unit.in_metres()
 }
 
-/// `currently m; ×0.998 correction`, or `None` for a file that declares no
-/// unit, or one this format does not know.
+/// `The file declares m. By these measurements its scale is off by −0.20%
+/// (×0.998).`: the measurements compared with the unit the file declares, in
+/// words that cannot be taken for the multiplier the scale applies, which is a
+/// line of its own. `None` for a file that declares no unit, or one this
+/// format does not know.
 pub(crate) fn correction_text(
     file_unit: Option<&str>,
     unit: LengthUnit,
     factor: f64,
 ) -> Option<String> {
     let file_unit = file_unit.and_then(LengthUnit::from_name)?;
+    let correction = correction(file_unit, unit, factor);
     Some(format!(
-        "currently {}; \u{d7}{} correction",
+        "The file declares {}. By these measurements its scale is off by {}% (\u{d7}{}).",
         file_unit.name(),
-        number_text(correction(file_unit, unit, factor))
+        signed_percent_text(100.0 * (correction - 1.0)),
+        number_text(correction)
     ))
 }
 
@@ -238,8 +256,8 @@ impl ScaleView {
                 _ => "Standard deviation: none for a single measurement".to_string(),
             },
             format!(
-                "Median absolute deviation {}, min {}, max {}",
-                n(s.median_absolute_deviation),
+                "Median absolute deviation {}% of the median, min {}, max {}",
+                percent_text(100.0 * s.median_absolute_deviation / s.median),
                 n(s.min),
                 n(s.max)
             ),
@@ -471,35 +489,74 @@ fn body(ui: &mut egui::Ui, recon: ReconId, view: &ScaleView) {
 }
 
 /// The histogram the dialog draws: each usable measurement's signed deviation
-/// from the median, in percent, binned as the Camera Intrinsics panel bins a
-/// per-image value ([`Histogram::new`]), with the median as the solid line at
-/// `0` and the disagreement bar, [`SCALE_DISAGREEMENT_PERCENT`] either side,
-/// as the dashed ones.
+/// from the median, in percent, drawn with the Camera Intrinsics panel's
+/// painter, with the median as the solid line at `0` and the disagreement bar,
+/// [`SCALE_DISAGREEMENT_PERCENT`] either side, as the dashed ones.
 ///
 /// Deviations rather than the factors themselves, so the axis reads the same
-/// in every unit and the bar is the same two lines whatever the scale. A
-/// single measurement, or measurements that agree, deviate by `0`, which
-/// makes one bin one percent wide centred on the median.
+/// in every unit and the bar is the same two lines whatever the scale.
+///
+/// **The bins are centred on the median.** Their width is the one
+/// [`Histogram::new`] chooses, the step of the 1/2/5 ladder nearest the
+/// values' spread over about `⌈√n⌉` bins, at least 2 and at most 20
+/// ([`histogram::nearest_step`]), or one percent where every value is the
+/// same. But the edges are at `±w/2, ±3w/2, …` rather than at multiples of
+/// `w`, so a bin runs from `−w/2` to `+w/2` and a deviation of exactly `0` is
+/// in a bar symmetric about the median line; with edges at multiples of `w`,
+/// measurements that agree exactly fill a bar from `0` to `w` and read as a
+/// spread of up to `w`. The axis is symmetric too: it reaches the largest
+/// deviation on either side, and the disagreement bar where that lies within a
+/// spread of the values, as `Histogram::new` reaches its bounds, so the median
+/// line is in the middle even when every deviation is on one side of it.
 ///
 /// Each deviation is rounded to [`DEVIATION_RESOLUTION_PERCENT`] first. A
 /// stated distance is stored as a `float32`, so measurements that agree
-/// exactly still deviate by about `1e-6` percent, and the histogram's rule for
-/// equal values compares their spread with their size, which near `0` is
-/// nothing: unrounded, such measurements would be spread over bins a
-/// millionth of a percent wide.
+/// exactly still deviate by about `1e-6` percent, which would otherwise make a
+/// spread a millionth of a percent wide and bins to match.
 pub(crate) fn deviation_histogram(scale: &DistanceMeasurementScale) -> Histogram {
     let round = |percent: f64| {
         (percent / DEVIATION_RESOLUTION_PERCENT).round() * DEVIATION_RESOLUTION_PERCENT
     };
-    Histogram::new(
-        scale
-            .factors
-            .iter()
-            .map(|f| (f.index, round(f.deviation_percent)))
-            .collect(),
-        0.0,
-        [-SCALE_DISAGREEMENT_PERCENT, SCALE_DISAGREEMENT_PERCENT],
-    )
+    let mut values: Vec<(usize, f64)> = scale
+        .factors
+        .iter()
+        .map(|f| (f.index, round(f.deviation_percent)))
+        .filter(|(_, v)| v.is_finite())
+        .collect();
+    values.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    let bound = SCALE_DISAGREEMENT_PERCENT;
+    let lo = values.first().map_or(0.0, |v| v.1);
+    let hi = values.last().map_or(0.0, |v| v.1);
+    let span = hi - lo;
+    let width = if span > 0.0 {
+        let target = (values.len() as f64)
+            .sqrt()
+            .ceil()
+            .clamp(histogram::MIN_BINS as f64, histogram::MAX_BINS as f64);
+        histogram::nearest_step(span / target)
+    } else {
+        1.0
+    };
+    // How far the axis reaches either side of the median: the largest
+    // deviation, and the bar where it lies within a spread of the values.
+    let reach = lo.abs().max(hi.abs());
+    let reach = reach.max(bound.min(reach + span));
+    // Bins either side of the centre one: enough that the outermost edge,
+    // `(k + 1/2)·w`, is past `reach`.
+    let k = (reach / width - 0.5 - 1e-9).ceil().max(0.0) as i64;
+    let edges: Vec<f64> = (-k..=k + 1).map(|i| (i as f64 - 0.5) * width).collect();
+    let mut bins = vec![Vec::new(); edges.len() - 1];
+    for (index, value) in values {
+        let bin = ((value - edges[0]) / width + 1e-9).floor();
+        let bin = bin.clamp(0.0, (bins.len() - 1) as f64) as usize;
+        bins[bin].push((index, value));
+    }
+    Histogram {
+        edges,
+        bins,
+        mean: 0.0,
+        two_sd: [-bound, bound],
+    }
 }
 
 /// One row per usable measurement: its index and label, its stated distance in

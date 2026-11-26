@@ -150,11 +150,17 @@ fn the_view_of_the_fixture_in_millimetres_has_its_numbers() {
     );
     assert_eq!(
         correction_text(view.file_unit.as_deref(), view.unit, scale.factor()).as_deref(),
-        Some("currently m; \u{d7}1.020 correction")
+        Some(
+            "The file declares m. By these measurements its scale is off by +2.00% (\u{d7}1.020)."
+        )
     );
     let lines = view.statistics_lines(id);
     assert_eq!(lines[0], "Used 3 of 5 distance measurements");
     assert_eq!(lines[1], "Median 1020, mean 1080");
+    assert_eq!(
+        lines[3],
+        "Median absolute deviation 0.00% of the median, min 1020, max 1200"
+    );
     assert_eq!(
         lines.last().unwrap(),
         "Largest deviation +17.65% (Distance #4  paw width)"
@@ -174,7 +180,7 @@ fn the_dialog_draws_the_factor_the_table_and_the_exclusions() {
     for expected in [
         "Scale measured to Median Measurement",
         "1 scene unit = 1.020 m",
-        "currently m; \u{d7}1.020 correction",
+        "The file declares m. By these measurements its scale is off by +2.00% (\u{d7}1.020).",
         "Used 3 of 5 distance measurements",
         "Distance #4  paw width",
         "153 cm",
@@ -253,4 +259,82 @@ fn a_dialog_left_open_follows_an_edit_and_its_undo() {
     drawn(&mut state, "1 scene unit = 1.000 m");
     state.undo(id).expect("an undo");
     drawn(&mut state, "1 scene unit = 1.020 m");
+}
+
+#[test]
+fn the_correction_compares_the_measurements_with_the_files_unit() {
+    // A file in feet whose measurements agree with it exactly, scaled to
+    // metres: every coordinate is multiplied by 0.3048, and the file's scale
+    // is off by nothing.
+    assert_eq!(
+        scale_text(LengthUnit::Metre, 0.3048),
+        "1 scene unit = 0.3048 m"
+    );
+    assert_eq!(
+        correction_text(Some("ft"), LengthUnit::Metre, 0.3048).as_deref(),
+        Some(
+            "The file declares ft. By these measurements its scale is off by +0.00% (\u{d7}1.000)."
+        )
+    );
+    // Measurements 0.2% short of a file in metres, read in millimetres.
+    assert_eq!(
+        correction_text(Some("m"), LengthUnit::Millimetre, 998.0).as_deref(),
+        Some("The file declares m. By these measurements its scale is off by \u{2212}0.20% (\u{d7}0.9980).")
+    );
+    assert_eq!(correction_text(None, LengthUnit::Metre, 2.0), None);
+}
+
+#[test]
+fn a_median_absolute_deviation_of_float_noise_reads_zero() {
+    assert_eq!(percent_text(1.3e-6), "0.00");
+    assert_eq!(percent_text(-1.3e-6), "0.00");
+    assert_eq!(percent_text(0.4249), "0.42");
+}
+
+/// Four measurements that agree exactly, one 17.65% long and one left out, as
+/// in the screenshots: the four zeros are in a bar centred on the median, and
+/// the axis reaches as far below the median as above it.
+#[test]
+fn the_bins_are_centred_on_the_median() {
+    let (state, id) = state_of(keeping(
+        measured_reconstruction(Some("m")),
+        &[0, 1, 0, 1, 4, 2],
+    ));
+    let scale = node_scale(state.node(id).unwrap(), LengthUnit::Metre).expect("a scale");
+    assert_eq!(scale.factors.len(), 5);
+    let histogram = deviation_histogram(&scale);
+    let edges = &histogram.edges;
+    let centre = histogram
+        .bins
+        .iter()
+        .position(|bin| bin.len() == 4)
+        .expect("a bin holds the four that agree");
+    assert!(
+        (edges[centre] + edges[centre + 1]).abs() < 1e-12,
+        "the bin of the zeros is {:?}, not centred on 0",
+        &edges[centre..=centre + 1]
+    );
+    assert!(
+        (edges[0] + edges[edges.len() - 1]).abs() < 1e-12,
+        "the axis {edges:?} is not symmetric about the median"
+    );
+    assert_eq!(histogram.counts().iter().sum::<usize>(), 5);
+    assert!(*edges.last().unwrap() > 17.65);
+}
+
+/// Every deviation on one side of the median still leaves the median in the
+/// middle of the axis.
+#[test]
+fn deviations_on_one_side_leave_the_median_in_the_middle() {
+    // Measurement 0 alone with measurement 4, 17.65% longer: the median is
+    // their mean, so one is below and one above; with 0 twice and 4 once, the
+    // median is 0's factor and every deviation is at or above it.
+    let (state, id) = state_of(keeping(measured_reconstruction(Some("m")), &[0, 0, 4]));
+    let scale = node_scale(state.node(id).unwrap(), LengthUnit::Metre).expect("a scale");
+    assert!(scale.factors.iter().all(|f| f.deviation_percent >= -1e-6));
+    let edges = deviation_histogram(&scale).edges;
+    assert!(
+        (edges[0] + edges[edges.len() - 1]).abs() < 1e-12,
+        "{edges:?}"
+    );
 }

@@ -4,7 +4,8 @@
 //! The small histogram each `per image` row of the parameter table draws: how
 //! a camera's images' values of one component are spread. The measurement
 //! scale dialog (`crate::measurement_scale_prompt`) draws its measurements'
-//! deviations from their median with the same arithmetic and painter.
+//! deviations from their median with the same painter and bin width, its
+//! bins centred on the median.
 //!
 //! [`Histogram`] is the arithmetic, shared with MCP `get_camera_intrinsics`,
 //! which reports the same bins; [`show_histogram`] paints one and turns a

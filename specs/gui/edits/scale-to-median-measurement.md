@@ -87,10 +87,14 @@ from `app/modals.rs`. From the top:
   same frame.
 - **The factor**, in words and as the multiplier: *1 scene unit = 2.716 mm*
   and *Multiplies every coordinate by 2.716*. Where the file declares a unit, a
-  third line gives the change relative to it, *currently m; ×0.998
-  correction*: the factor times the length of the chosen unit over the length
-  of the file's, which is `1` for measurements that agree with the file
-  exactly. Where it declares none, the line says the coordinates are in scene
+  third line compares the measurements with it: *The file declares m. By these
+  measurements its scale is off by −0.20% (×0.998).* The ratio is the factor
+  times the length of the chosen unit over the length of the file's, `1` for
+  measurements that agree with the file exactly, and it is given as a
+  percentage first. It is not the multiplier the scale applies, which is the
+  line above: a file in feet whose measurements agree with it, scaled to
+  metres, multiplies every coordinate by 0.3048 and is off by +0.00% (×1.000).
+  Where the file declares no unit, the line says the coordinates are in scene
   units.
 - **A histogram** of each usable measurement's signed deviation from the
   median, in percent, with the median as a solid line at `0` and the
@@ -98,8 +102,10 @@ from `app/modals.rs`. From the top:
   lines (below).
 - **How well they agree**: *Used 3 of 5 distance measurements*; the median and
   the mean; the sample standard deviation and its percentage of the median, or
-  *none for a single measurement*; the median absolute deviation, the smallest
-  and the largest factor; and the largest deviation, signed, naming its
+  *none for a single measurement*; the median absolute deviation as a
+  percentage of the median, to two decimals, so measurements that agree to the
+  `float32` they are stored in read `0.00%` rather than a factor's rounding
+  noise; the smallest and the largest factor; and the largest deviation, signed, naming its
   measurement. Where that deviation exceeds the bar, a warning in the warning
   colour says how many measurements are past it and asks for their endpoints
   to be checked before applying.
@@ -125,27 +131,37 @@ notation outside `1e-4` to `1e7` (`measurement_scale_prompt::number_text`).
 
 ### Binning
 
-The histogram reuses the Camera Intrinsics panel's
-([histogram.rs](../../../crates/sfm-explorer/src/intrinsics_detail/histogram.rs)):
-the same `Histogram::new` arithmetic and the same painter, generalised so a bin
+The histogram reuses the Camera Intrinsics panel's painter
+([histogram.rs](../../../crates/sfm-explorer/src/intrinsics_detail/histogram.rs))
+and its rule for the width of a bin, the painter generalised so a bin
 names its items (*measurements* rather than *images*) and so a bin that selects
 nothing senses only the hover. It fits because the two ask the same question,
 how one quantity spreads over a set, with a centre and two bounds to mark.
 
 What is binned is the deviation from the median, not the factor itself, so the
-axis reads the same in every unit and the bar is the same two lines at ±5. The
-bins follow that histogram's rule: about `⌈√n⌉` of them, at least 2 and at most
-20, each as wide as the step of the 1/2/5 ladder nearest the spread over that
-count, running from below the smallest value to past the largest, and past the
-±5 bounds where those lie within a spread of the values. A single measurement,
-or measurements that agree, deviate by `0`, which makes one bin one percent wide
+axis reads the same in every unit and the bar is the same two lines at ±5. A bin
+is as wide as that histogram's rule makes it: the step of the 1/2/5 ladder
+nearest the values' spread over about `⌈√n⌉` bins, at least 2 and at most 20,
+or one percent where every value is the same.
+
+**The bins are centred on the median.** Their edges are at `±w/2, ±3w/2, …`
+for a width `w`, not at multiples of `w` as the Camera Intrinsics panel's are
+(`measurement_scale_prompt::deviation_histogram` builds them rather than
+`Histogram::new`). A deviation of exactly `0` is then in a bar symmetric about
+the median line; with edges at multiples of `w`, measurements that agree
+exactly would fill a bar from `0` to `w` and read as a spread of up to `w`. A
+single measurement, or measurements that agree, make one bin one percent wide
 centred on the median.
+
+**The axis is symmetric about the median.** It reaches the largest deviation
+on either side, and the ±5 bounds where those lie within a spread of the
+values, as far below the median as above it, so the median line is in the
+middle of the axis even where every deviation is at or above it.
 
 Each deviation is rounded to a thousandth of a percent before it is binned. A
 stated distance is stored as a `float32`, so measurements that agree exactly
-still deviate by about `1e-6` percent, and the histogram's test for equal values
-compares their spread with their size, which near `0` is nothing: unrounded,
-they would be spread over bins a millionth of a percent wide.
+still deviate by about `1e-6` percent, which unrounded would be a spread of a
+millionth of a percent and bins to match.
 
 ### Keeping it current
 
@@ -313,10 +329,17 @@ with one endpoint refused and one at infinity:
   count.
 - **The dialog's numbers**: in millimetres the factor is 1020, the mean 1080,
   the paw width's deviation +17.65%, measurements 2 and 3 are left out, the
-  correction is ×1.020 and the measurements disagree; a whole frame of the
+  correction line says the file's scale is off by +2.00% (×1.020), the median
+  absolute deviation reads 0.00% and the measurements disagree; a file in feet
+  whose measurements agree with it, read in metres, is off by +0.00% (×1.000)
+  while the multiplier is 0.3048, and a median absolute deviation of float
+  noise reads 0.00; a whole frame of the
   dialog draws the title, the factor, the correction, the table's rows and the
   reasons left out, and says so when the file declares no unit.
-- **The histogram**: one measurement, and two that agree, make one bin.
+- **The histogram**: one measurement, and two that agree, make one bin; with
+  four measurements that agree, one 17.65% long and one left out, the four are
+  in a bin centred on 0 and the axis is symmetric about it; and with every
+  deviation at or above the median the axis is still symmetric.
 - **The dialog's lifetime**: a node no longer loaded closes it, and a dialog
   left open draws the scaled version's factor after an edit and the original's
   after the undo.
