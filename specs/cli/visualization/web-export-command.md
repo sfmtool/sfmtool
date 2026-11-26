@@ -67,14 +67,14 @@ render; a read of one the render was handed that fails ends the export with
 and the command reports as its failure with exit status 1, the message
 naming the photograph (a refusal is a usage error, exit status 2). The
 command reads the photographs through a
-photograph cache that keeps nothing
-([photograph-cache.md](../../core/camera/photograph-cache.md)). An in-core
-photograph the render is handed holds the tiles of its decode while the
-render reads it, so it is decoded once and not read from its file again. An
-out-of-core photograph's tiles are not kept, so the render decodes each tile
-it reads from the mip level file again; on 8 photographs of 16320 x 12240
-with current mipmaps that takes 41 to 74 s where a cache of the default
-budget takes 1.2 s, at the same peak memory
+photograph cache of the default budget, made for the run
+([photograph-cache.md](../../core/camera/photograph-cache.md)), so a tile
+of an out-of-core photograph that the render reads again is kept rather
+than decoded from its mip level file again. On 8 photographs of 16320 x
+12240 with current mipmaps that takes about 1.2 s, where a cache that keeps
+nothing took 41 to 64 s; in core the cache holds the photographs' tiles
+while the thumbnails decode them whole again, which raised the peak from
+10.0 to 14.9 GB on the same 8
 ([out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
 open question 23).
 A point with no
@@ -401,7 +401,7 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
   passes it on.
 - **Python**: the command in
   [`_commands/web_export.py`](../../../src/sfmtool/_commands/web_export.py),
-  which passes a `PhotographCache(budget_bytes=0)`, and
+  which passes a `PhotographCache()` of the default budget, and
   in [`sfmtool.web_export`](../../../src/sfmtool/web_export/__init__.py) the
   directory checks, the copy of the two static files and the single-file page.
 

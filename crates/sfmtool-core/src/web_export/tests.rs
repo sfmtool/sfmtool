@@ -207,8 +207,8 @@ fn far_demo(points: usize) -> SfmrReconstruction {
     recon
 }
 
-/// `build_web_export` through a cache of its own that keeps nothing, as
-/// `sfm web-export` reads.
+/// `build_web_export` through a cache of its own that keeps nothing, the
+/// least a caller can pass.
 fn build_export(
     recon: &SfmrReconstruction,
     options: &WebExportOptions,

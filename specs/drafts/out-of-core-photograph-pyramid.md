@@ -4259,8 +4259,8 @@ in core. Step 17 turns the tier on.
       `ImagePyramidSet.read` does
       ([fileio/web_export.rs](../../crates/sfmtool-py/src/fileio/web_export.rs));
       `export_reconstruction` passes its `cache` on; and `sfm web-export`
-      passes `PhotographCache(budget_bytes=0)`, so the command reads as
-      before. The harnesses read their photographs with
+      passes `PhotographCache()`, a cache of the default budget, as open
+      question 23 decides. The harnesses read their photographs with
       `ImagePyramidSet.read(recon)`: `track_at_pixel/context.py`, whose
       `images` arrays, which only the plane-sweep candidate reads, are
       decoded the first time one asks;
@@ -4270,9 +4270,7 @@ in core. Step 17 turns the tier on.
       constructor. Choices made in building it: core takes the cache as an
       argument rather than a field of `WebExportOptions`, as
       `render_display_patch_bitmaps` does, so the options stay a plain
-      value; and the command keeps budget 0 rather than the binding's
-      default, since the default holds more memory in core, as open
-      question 23 measures. On the `sfm web-export` of the user's 8
+      value; and the command's budget, which open question 23 decides. On the `sfm web-export` of the user's 8
       photographs of that question, cut to a file with neither bitmaps nor
       thumbnails so that the export reads every photograph, the files
       written before and after are the same bytes, in core and from current
@@ -4341,7 +4339,7 @@ or `read_rgb` pixel by pixel.
 
 ## Open questions
 
-The user has decided every question below but 23; the section records the
+The user has decided every question below; the section records the
 decisions.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
@@ -4894,7 +4892,14 @@ decisions.
       each tile once in either tier; it is a change to the cache in core,
       a step of its own.
 
-    *Waiting on the user.* Recommended: (a), a one-line change to the
-    command, since the tier is the way the draft bounds memory for
-    photographs of this size; (c) if budget 0's in-core peak should be kept
-    in a workspace without the tier.
+    *Decided by the user:* (a). `sfm web-export` passes `PhotographCache()`,
+    a cache of the default budget, which supersedes the budget 0 that
+    [view-region-pyramid.md](view-region-pyramid.md) open question 11 chose
+    for the export (that decision's rule for answers under budget 0 stands
+    for every other caller). From current mipmaps the export of these 8
+    takes about 1.2 s rather than 41 to 64 s, and in core its peak rises by
+    about 4.8 GB, from 10.0 to 14.9 GB; the tier is how the draft bounds
+    memory for photographs of this size. Re-measured after the change, one
+    run each, through the command: in core 10.0 s and 14.98 GB, from
+    current mipmaps 1.7 s and 4.09 GB, each writing the files of the run
+    before 16e, byte for byte.

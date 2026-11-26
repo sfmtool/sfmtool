@@ -857,7 +857,10 @@ decisions.
     `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB=0` decode a photograph once per answer
     rather than once per render. The options considered were `sfm
     web-export` using a cache with the default budget, and accepting a
-    decode on every render. Built in the main draft's step 13e4b.
+    decode on every render. Built in the main draft's step 13e4b. `sfm
+    web-export` has since moved to a cache of the default budget
+    ([out-of-core-photograph-pyramid.md](out-of-core-photograph-pyramid.md)
+    open question 23); the rule for answers under budget 0 stands.
 12. **What a render's decode keeps.** A render that reads a tile its
     kernel's photograph lost decodes the photograph again. As step 13e4b
     built it, that decode kept the tiles the render asked for as used and

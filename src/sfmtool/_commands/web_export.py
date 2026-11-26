@@ -142,9 +142,10 @@ def web_export(
             jpeg_quality=jpeg_quality,
             max_points=max_points,
             start_image=start_image,
-            # The bitmap render and the thumbnails each read a photograph
-            # once, so the cache keeps nothing between them.
-            cache=PhotographCache(budget_bytes=0),
+            # A cache of the default budget: under budget 0 an out-of-core
+            # photograph's tiles are not kept, and the render decodes each
+            # tile it reads from its mip level file again.
+            cache=PhotographCache(),
         )
     except WebExportError as e:
         raise click.UsageError(str(e))
