@@ -75,8 +75,10 @@ note). An earlier measurement of the same design, on the plain score beside
 the leave-one-out ZNCC while the localizer still congealed, set the plain
 `0.65` bar the blur-matched `0.70` replaced; its scripts were not checked in.
 
-`measure.py` reads the photographs with `ImagePyramidSet.read`, as the viewer
-reads them, and also decodes each whole with `datasets.read_image`
-(`sfmtool.fileio.read_image_rgb` at `workspace_dir / image_name`) for the rows
-it plants, whose modified arrays it builds a set from with the
-`ImagePyramidSet` constructor, since `read` reads only files.
+`measure.py` decodes each photograph whole with `datasets.read_image`
+(`sfmtool.fileio.read_image_rgb` at `workspace_dir / image_name`) and builds
+every `ImagePyramidSet` from those arrays with the constructor: the plain set
+and each set with rows planted into a copy of an array. It does not use
+`ImagePyramidSet.read`, which reads only files and, in a workspace with
+`mipmap_options`, the stored mip levels: a track would then be scored on other
+pixels before a plant than after it.

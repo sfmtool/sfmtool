@@ -1083,12 +1083,14 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | P7 | Spherical tile source stacks (`sfmtool-py/src/spherical/tile_source_stack.rs` → `spherical/per_tile_source_stack.rs`) | `remap_bilinear` of the arrays passed | unchanged: they read arrays, not pyramids | no |
 
 The measurement harnesses under `scripts/` (`track_at_pixel/context.py`,
-`add_image_to_tracks/harness.py` and `misses.py`, `bench_bars/measure.py`
-and `reference_view/measure.py`) read their photographs with
-`ImagePyramidSet.read` (built, 16e). `bench_bars/measure.py` also builds sets
-from arrays it has modified, as a P2 caller: a P2 caller that passes arrays
-holds them whole and reads their exact levels; that is the caller's choice of
-input, and `read` is the bounded way.
+`add_image_to_tracks/harness.py` and `misses.py`, and
+`reference_view/measure.py`) read their photographs with
+`ImagePyramidSet.read` (built, 16e). `bench_bars/measure.py` is a P2 caller:
+it plants rows into arrays of the photographs, so every set it scores,
+planted or not, is built from the same arrays with the constructor, and a
+reading changes only by the plant. A P2 caller that passes arrays holds them
+whole and reads their exact levels; that is the caller's choice of input,
+and `read` is the bounded way.
 
 Every reader that reads a pyramid of a photograph now reads the same levels
 whether it runs in the viewer or on the command line, and in any session. A
@@ -4265,10 +4267,14 @@ in core. Step 17 turns the tier on.
       `images` arrays, which only the plane-sweep candidate reads, are
       decoded the first time one asks;
       `add_image_to_tracks/harness.py` and `misses.py`;
-      `reference_view/measure.py`; and `bench_bars/measure.py`, which still
-      decodes the arrays it plants rows into and builds those sets with the
-      constructor. Choices made in building it: core takes the cache as an
-      argument rather than a field of `WebExportOptions`, as
+      and `reference_view/measure.py`. Choices made in building it:
+      `bench_bars/measure.py` stays on the constructor for every set, the
+      plain one included, against the plan below: it plants rows into the
+      photographs' arrays and scores each track before and after, so all its
+      sets must come from the same arrays, where a plain set from `read`
+      would read the stored mip levels once the tier is on, and the script
+      decodes every photograph whole for the plants anyway; core takes the
+      cache as an argument rather than a field of `WebExportOptions`, as
       `render_display_patch_bitmaps` does, so the options stay a plain
       value; and the command's budget, which open question 23 decides. On
       the `sfm web-export` of the user's 8
