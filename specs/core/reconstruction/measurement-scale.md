@@ -77,7 +77,9 @@ pub enum MeasurementScaleExclusion {
     EndpointRefused { endpoint: usize, refusal: EndpointRefusal }, // 0 is A, 1 is B
     EndpointAtInfinity { endpoint: usize },
     UnusableSceneDistance { scene_distance: f64 }, // zero or not finite
+    NoSceneDistance,                               // only in a reading built by hand
     UnusableStatedDistance,                        // only in a value built by hand
+    UnusableFactor { factor: f64 },                // the ratio overflows or underflows
 }
 
 pub enum DistanceMeasurementScaleError {
@@ -178,7 +180,15 @@ the resolver refuses, an endpoint on a point at infinity (a direction, with no
 distance to it), or two endpoints whose distance is zero or not finite. A
 stated length that is not finite and strictly positive, or a unit code that
 names no unit, is left out too; a load refuses such a row, so only a value
-built by hand holds one.
+built by hand holds one. So is a reading whose endpoints are both finite but
+which holds no scene distance, which the resolver never gives. Last, a
+measurement whose stated and scene distances are each finite and positive is
+left out where their ratio is not: a scene distance near the smallest `f64`
+overflows the factor to infinity, and a tiny stated length (a `float32`
+subnormal is a valid stored distance) over a large scene distance underflows
+it to zero. Either would make the median or every deviation infinite or NaN.
+The mean divides each factor by the count before summing, so factors near the
+largest `f64` do not overflow it.
 
 ## Parameters
 
@@ -202,6 +212,10 @@ reading's endpoint outcomes and scene distance:
 - An endpoint refused, an endpoint at infinity, a zero and an infinite scene
   distance, and a stated length that is negative or in no known unit are each
   excluded with their index and reason, a refusal before infinity.
+- A factor that overflows to infinity and one that underflows to zero are
+  excluded while the rest give a finite factor, three factors of `6e307` have a
+  finite mean, and finite endpoints with no scene distance are excluded with a
+  reason that holds no NaN.
 - No usable measurement, no stored measurement, and readings that are not one
   per measurement are errors.
 - On the endpoint resolver's synthetic fixture, two endpoints 3 scene units

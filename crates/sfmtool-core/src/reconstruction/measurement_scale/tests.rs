@@ -311,6 +311,78 @@ fn each_exclusion_names_its_reason() {
     );
 }
 
+/// A ratio that overflows to infinity or underflows to zero is excluded,
+/// though its stated and scene distances are each usable, and the rest give a
+/// finite factor and finite statistics; a mean of factors near `f64::MAX` does
+/// not overflow.
+#[test]
+fn a_factor_that_overflows_or_underflows_is_excluded() {
+    // 1 m over 1e-320 overflows; 1e-45 mm (an f32 subnormal) over 1e300
+    // underflows to zero.
+    let measurements = stored(&[
+        (1.0, LENGTH_UNIT_M),
+        (1.0, LENGTH_UNIT_M),
+        (1.0, LENGTH_UNIT_M),
+        (1e-45, LENGTH_UNIT_MM),
+    ]);
+    let readings = [apart(1e-320), apart(1e-320), apart(0.5), apart(1e300)];
+    let scale = distance_measurement_scale(&measurements, &readings, LengthUnit::Metre).unwrap();
+    assert_eq!(
+        scale.factors.iter().map(|f| f.index).collect::<Vec<_>>(),
+        [2]
+    );
+    assert_eq!(scale.factor(), 2.0);
+    let s = &scale.statistics;
+    assert_eq!((s.mean, s.median_absolute_deviation), (2.0, 0.0));
+    assert_eq!(scale.factors[0].deviation_percent, 0.0);
+    assert_eq!(
+        scale.excluded,
+        [(0, f64::INFINITY), (1, f64::INFINITY), (3, 0.0)].map(|(index, factor)| {
+            ExcludedMeasurement {
+                index,
+                reason: MeasurementScaleExclusion::UnusableFactor { factor },
+            }
+        })
+    );
+
+    // Three factors of 6e307 sum past `f64::MAX`, but their mean is 6e307.
+    let huge: [_; 3] = std::array::from_fn(|_| apart(1.0 / 6e307));
+    let scale = distance_measurement_scale(
+        &stored(&[(1.0, LENGTH_UNIT_M); 3]),
+        &huge,
+        LengthUnit::Metre,
+    )
+    .unwrap();
+    assert_close(
+        scale.statistics.mean,
+        scale.factor(),
+        1e-12 * scale.factor(),
+        "mean of huge factors",
+    );
+    assert!(scale.factor().is_finite());
+
+    // Finite endpoints with no scene distance, which only a reading built by
+    // hand holds, are excluded with a reason that carries no NaN.
+    let no_distance = ResolvedDistanceMeasurement {
+        endpoints: [finite(0.0), finite(1.0)],
+        scene_distance: None,
+    };
+    let scale = distance_measurement_scale(
+        &stored(&[(1.0, LENGTH_UNIT_M); 2]),
+        &[no_distance, apart(1.0)],
+        LengthUnit::Metre,
+    )
+    .unwrap();
+    assert_eq!(
+        scale.excluded,
+        [ExcludedMeasurement {
+            index: 0,
+            reason: MeasurementScaleExclusion::NoSceneDistance
+        }]
+    );
+    assert!(!scale.excluded[0].reason.to_string().contains("NaN"));
+}
+
 /// No usable measurement is an error carrying every exclusion; so is none
 /// stored, and readings that are not one per measurement.
 #[test]

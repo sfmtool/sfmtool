@@ -61,10 +61,20 @@ pub enum MeasurementScaleExclusion {
         /// The distance, in scene units.
         scene_distance: f64,
     },
+    /// Both endpoints have finite positions but the reading holds no scene
+    /// distance. The resolver always gives one there, so only a reading built
+    /// by hand holds this.
+    NoSceneDistance,
     /// The stated distance is not finite and strictly positive, or its unit
     /// code names no unit. A load refuses such a row, so only a value built by
     /// hand holds one.
     UnusableStatedDistance,
+    /// The stated distance and the scene distance are each usable, but their
+    /// ratio overflows to infinity or underflows to zero, which is no scale.
+    UnusableFactor {
+        /// The ratio, `0` or infinite.
+        factor: f64,
+    },
 }
 
 impl std::fmt::Display for MeasurementScaleExclusion {
@@ -87,9 +97,17 @@ impl std::fmt::Display for MeasurementScaleExclusion {
                 f,
                 "its endpoints are {scene_distance} scene units apart, which gives no scale"
             ),
+            Self::NoSceneDistance => write!(
+                f,
+                "its reading holds no distance between its two finite endpoints"
+            ),
             Self::UnusableStatedDistance => write!(
                 f,
                 "its stated distance is not a positive length in a known unit"
+            ),
+            Self::UnusableFactor { factor } => write!(
+                f,
+                "its stated distance over its scene distance is {factor}, which gives no scale"
             ),
         }
     }
@@ -218,8 +236,9 @@ impl std::error::Error for DistanceMeasurementScaleError {}
 /// the file's own coordinates. The factor is the median of those, so
 /// multiplying the reconstruction's coordinates by it puts them in `unit`,
 /// whatever `world_space_unit` the file declares before. A measurement with
-/// an endpoint refused, an endpoint at infinity, or a scene distance that is
-/// zero or not finite is excluded, with its reason.
+/// an endpoint refused, an endpoint at infinity, a scene distance that is
+/// zero or not finite, or a factor that overflows to infinity or underflows
+/// to zero is excluded, with its reason.
 ///
 /// # Errors
 ///
@@ -269,11 +288,11 @@ pub fn distance_measurement_scale(
     let mut excluded = Vec::new();
     for (index, reading) in readings.iter().enumerate() {
         match usable(m, index, reading, unit) {
-            Ok((stated, scene_distance)) => factors.push(MeasurementScaleFactor {
+            Ok((stated, scene_distance, factor)) => factors.push(MeasurementScaleFactor {
                 index,
                 stated,
                 scene_distance,
-                factor: stated / scene_distance,
+                factor,
                 deviation_percent: 0.0,
             }),
             Err(reason) => excluded.push(ExcludedMeasurement { index, reason }),
@@ -289,7 +308,9 @@ pub fn distance_measurement_scale(
         f.deviation_percent = 100.0 * (f.factor / median - 1.0);
     }
     let n = values.len();
-    let mean = values.iter().sum::<f64>() / n as f64;
+    // Each term divided first, so factors near `f64::MAX` do not overflow the
+    // sum.
+    let mean = values.iter().map(|v| v / n as f64).sum::<f64>();
     let sample_std = (n > 1)
         .then(|| (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt());
     let absolute_deviations: Vec<f64> = values.iter().map(|v| (v - median).abs()).collect();
@@ -325,7 +346,7 @@ fn usable(
     index: usize,
     reading: &ResolvedDistanceMeasurement,
     unit: LengthUnit,
-) -> Result<(f64, f64), MeasurementScaleExclusion> {
+) -> Result<(f64, f64, f64), MeasurementScaleExclusion> {
     for (endpoint, resolved) in reading.endpoints.iter().enumerate() {
         if let Err(refusal) = resolved {
             return Err(MeasurementScaleExclusion::EndpointRefused {
@@ -341,18 +362,23 @@ fn usable(
     if let Some(endpoint) = at_infinity {
         return Err(MeasurementScaleExclusion::EndpointAtInfinity { endpoint });
     }
-    let scene_distance = reading
-        .scene_distance
-        .filter(|d| d.is_finite() && *d > 0.0)
-        .ok_or(MeasurementScaleExclusion::UnusableSceneDistance {
-            scene_distance: reading.scene_distance.unwrap_or(f64::NAN),
-        })?;
+    let Some(scene_distance) = reading.scene_distance else {
+        return Err(MeasurementScaleExclusion::NoSceneDistance);
+    };
+    if !(scene_distance.is_finite() && scene_distance > 0.0) {
+        return Err(MeasurementScaleExclusion::UnusableSceneDistance { scene_distance });
+    }
     let stated = m.distances.get(index).map(|&d| f64::from(d));
     let stated_unit = m.units.get(index).and_then(|&c| LengthUnit::from_code(c));
-    match (stated, stated_unit) {
-        (Some(d), Some(u)) if d.is_finite() && d > 0.0 => {
-            Ok((d * u.in_metres() / unit.in_metres(), scene_distance))
-        }
-        _ => Err(MeasurementScaleExclusion::UnusableStatedDistance),
+    let stated = match (stated, stated_unit) {
+        (Some(d), Some(u)) if d.is_finite() && d > 0.0 => d * u.in_metres() / unit.in_metres(),
+        _ => return Err(MeasurementScaleExclusion::UnusableStatedDistance),
+    };
+    // Both are finite and positive, so the ratio is never NaN, but it can
+    // overflow to infinity or underflow to zero.
+    let factor = stated / scene_distance;
+    if !(factor.is_finite() && factor > 0.0) {
+        return Err(MeasurementScaleExclusion::UnusableFactor { factor });
     }
+    Ok((stated, scene_distance, factor))
 }
