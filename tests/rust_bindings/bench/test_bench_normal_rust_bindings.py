@@ -11,6 +11,8 @@ test runs the grown plane normal on a ground-truth point whose repeated
 passes did not settle before the working grid was laid at each stage's plane.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -68,12 +70,8 @@ def edited(embedded):
 
 @pytest.fixture(scope="module")
 def images(embedded):
-    from sfmtool._workspace_image import read_workspace_image
-
-    return [
-        read_workspace_image(embedded.workspace_dir, name)
-        for name in embedded.image_names
-    ]
+    workspace = Path(embedded.workspace_dir)
+    return [read_image_rgb(workspace / name) for name in embedded.image_names]
 
 
 @pytest.fixture(scope="module")

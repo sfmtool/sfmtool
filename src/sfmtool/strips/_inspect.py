@@ -23,6 +23,7 @@ from pathlib import Path
 import click
 import numpy as np
 
+from .._sfmtool.patches import ImagePyramidSet
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._solve import _SolveStrips
 from ._montage import PointRow, assemble_point_strips
@@ -91,20 +92,22 @@ def parse_point_specs(recon: SfmrReconstruction, specs: list[str]) -> list[int]:
 
 
 def _prepare_from_sift(
-    recon: SfmrReconstruction, point_indexes: list[int], at_infinity: np.ndarray
-) -> tuple[SfmrReconstruction, list[np.ndarray]]:
+    recon: SfmrReconstruction,
+    point_indexes: list[int],
+    at_infinity: np.ndarray,
+    cache=None,
+) -> tuple[SfmrReconstruction, ImagePyramidSet]:
     """Convert a ``sift_files`` recon to ``embedded_patches``, turn the listed
     finite points' patches to their grown-plane normals and render the turned
-    points' patch bitmaps. Returns the prepared recon and the loaded workspace
-    images (so the renderer can reuse them)."""
+    points' patch bitmaps. Returns the prepared recon and its photographs, read
+    through ``cache`` (so the renderer reads them through the same set)."""
     from ..bench import refine_normals
-    from .._workspace_image import read_workspace_image
     from ..xform import ToEmbeddedPatchesTransform
 
     # At the strips' own size (a full edge of twice the half-extent factor),
     # not the embedded-patch default, so the tiles are the strips' size.
     emb = ToEmbeddedPatchesTransform(extent_value=2.0 * _EXTENT_FACTOR).apply(recon)
-    images = [read_workspace_image(emb.workspace_dir, name) for name in emb.image_names]
+    images = ImagePyramidSet.read(emb, cache=cache)
 
     # Points at infinity keep their fixed normal; refine only the listed finite
     # points (keeping the work proportional to what is rendered).
@@ -156,19 +159,26 @@ def render_inspect_strips(
     patch extent; 0 renders tight, borderless tiles. The reference patch always
     renders tight.
     """
+    from .._photograph_cache_report import photograph_cache_lines
+    from ..photographs import PhotographCache
+
     hash8 = recon.content_xxh128[:8].lower()
     at_infinity = np.asarray(recon.point_is_at_infinity)
     source = recon.feature_source
-
-    if source == "sift_files":
-        prepared, images = _prepare_from_sift(recon, point_indexes, at_infinity)
-    elif source == "embedded_patches":
-        prepared, images = recon, None
-    else:
+    if source not in ("sift_files", "embedded_patches"):
         raise click.UsageError(
             f"--strips needs a sift_files or embedded_patches reconstruction "
             f"(this one is {source})."
         )
+
+    # Every photograph the run reads goes through this one cache, as the
+    # viewer reads them: in core it keeps the photographs' tiles under its
+    # budget, and out of core it reads the mip level files.
+    cache = PhotographCache()
+    if source == "sift_files":
+        prepared, images = _prepare_from_sift(recon, point_indexes, at_infinity, cache)
+    else:
+        prepared, images = recon, None
 
     engine = _SolveStrips(
         prepared,
@@ -176,6 +186,7 @@ def render_inspect_strips(
         patch=_PATCH,
         extent_factor=_EXTENT_FACTOR,
         exclude_points_at_infinity=False,
+        cache=cache,
     )
     if images is not None:
         engine.prime_images(images)
@@ -224,6 +235,10 @@ def render_inspect_strips(
             ]
         rows.append((labels, ref, strip_img))
 
+    paths = engine.photograph_paths()
+    if paths:
+        for line in photograph_cache_lines(cache, paths, prepared.workspace_dir):
+            print(f"  --strips: {line}")
     if skipped:
         print(f"  --strips: skipped {len(skipped)} point(s) with no observations")
     if not rows:

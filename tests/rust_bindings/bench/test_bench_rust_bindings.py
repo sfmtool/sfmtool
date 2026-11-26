@@ -9,6 +9,8 @@ and the object it was called on is unchanged. These tests hold both halves and
 check exactly that, plus the one step that crosses into the reconstruction.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -38,6 +40,7 @@ from sfmtool.bench import (
     translate_patch_to_pixel,
     unpin_verdict,
 )
+from sfmtool.fileio import read_image_rgb
 from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
 
@@ -64,12 +67,8 @@ def images(embedded):
     Every step that registers pixels takes these: a reconstruction carries
     poses and lenses, and the kernels need what the cameras saw.
     """
-    from sfmtool._workspace_image import read_workspace_image
-
-    return [
-        read_workspace_image(embedded.workspace_dir, name)
-        for name in embedded.image_names
-    ]
+    workspace = Path(embedded.workspace_dir)
+    return [read_image_rgb(workspace / name) for name in embedded.image_names]
 
 
 @pytest.fixture

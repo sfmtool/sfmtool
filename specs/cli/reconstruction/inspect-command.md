@@ -151,6 +151,28 @@ reconstruction's point count is an error.
 - **`embedded_patches`** — rendered as stored (no conversion or refinement); the
   stored patch frames and bitmaps are used directly.
 
+### Photographs
+
+The strips read their photographs through one `PhotographCache` the run makes
+with the default budgets, as the viewer reads them. A `sift_files`
+reconstruction's photographs are all read once, with
+`ImagePyramidSet.read(recon, cache=…)`, for the refinement, the bitmaps and the
+strips; an `embedded_patches` one reads only the photographs its listed points
+are seen in, each when a strip first renders a view of it, with
+`ImagePyramidSet.read([path], cache=…)`. A strip samples a photograph with
+`WarpMap.remap_bilinear(set, image_index=…)`. A photograph out of core, in a
+workspace whose `.sfm-workspace.json` has `mipmap_options`, is read from its
+mipmap, made first when it is missing or stale
+([mipmaps.md](../../core/camera/mipmaps.md)). In core the pixels are those of
+`sfmtool.fileio.read_image_rgb`, so the montage is the one rendered from whole
+decoded arrays, byte for byte. Once the strips are rendered the command prints
+the cache's whole decodes, mipmaps made and budget, and, when it decoded the
+in-core photographs more times than there are of them, the line recommending
+`mipmap_options`, both as
+[`sfm cluster-patches`](../image-feature/cluster-patches-command.md#process)
+prints them, after `--strips: ` (`--strips: Photographs: 17 whole decodes, 0
+mipmaps made, cache budget 15.9 GiB`).
+
 See `specs/core/patch/sift-to-patch-reconstruction.md` for the conversion.
 
 ### Points at infinity
@@ -446,3 +468,11 @@ sfm inspect --strips sfmr/solve_001.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
   `sift_files` reconstruction the grown-plane refinement of the listed points
   (their turned normals and bitmaps, the agreement line, and a refused run
   keeping the stored normals).
+- [`tests/test_strips_photographs.py`](../../../tests/test_strips_photographs.py)
+  — the photographs read through the run's cache: every one for a
+  `sift_files` reconstruction and only those its listed points are seen in
+  for an `embedded_patches` one, each montage in core the one whole decoded
+  arrays render, byte for byte, and with `mipmap_options` every mipmap made
+  and no photograph decoded whole; and the same for `compare --strips`, both
+  reconstructions reading through the one cache, and the recommendation
+  naming both workspace files when they are in two workspaces.

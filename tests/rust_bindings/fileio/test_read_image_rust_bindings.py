@@ -40,17 +40,6 @@ def test_rgb_layout_is_y_x_rgb_uint8_c_contiguous():
     assert (diff > 0).mean() < 0.1
 
 
-def test_workspace_image_reader_is_the_rust_decoder():
-    from sfmtool._workspace_image import read_workspace_image
-
-    workspace = _DATA / "seoul_bull_sculpture"
-    for path in _seoul_bull_images():
-        expected = read_image_rgb(path)
-        actual = read_workspace_image(workspace, path.name)
-        assert actual.flags.c_contiguous
-        np.testing.assert_array_equal(actual, expected)
-
-
 def test_rgba_of_a_jpeg_is_opaque_with_the_rgb_colour():
     path = _seoul_bull_images()[0]
     rgba = read_image_rgba(path)
@@ -121,10 +110,6 @@ def test_exif_orientation_is_ignored(tmp_path):
     assert rgb.shape == (40, 64, 3)
     np.testing.assert_array_equal(rgb, read_image_rgb(plain))
     np.testing.assert_array_equal(read_image_rgba(tagged)[..., :3], rgb)
-
-    from sfmtool._workspace_image import read_workspace_image
-
-    np.testing.assert_array_equal(read_workspace_image(tmp_path, tagged.name), rgb)
 
 
 # A 37 x 23 baseline JPEG at 4:2:0 with each component in a scan of its own,

@@ -1009,6 +1009,18 @@ convention, enabling interop: callers can use the Rust-generated maps with
 The `remap_bilinear` and `remap_aniso` methods accept a numpy `ndarray` (HxWx1,
 HxWx3, or HxWx4, dtype `uint8`) and return a numpy array of the same shape.
 
+`remap_bilinear(pyramids, image_index=i)` samples photograph `i` of an
+`ImagePyramidSet` instead, at full resolution, through
+[`render_source_tile`](../../../crates/sfmtool-core/src/camera/sampler/source.rs)
+with the bilinear sampler: from the tiles of a photograph in core, which give
+the values its array gives, bit for bit, or, for one out of core, from regions
+of its original or its full-resolution mip level file. The strip montages of
+`sfm compare --strips` and `sfm inspect --strips` read their photographs this
+way. `image_index` is required with a set and refused with an array
+(`ValueError`), an index past the set raises `IndexError`, and a read of the
+photograph that fails, such as a file that changed after the set was read,
+raises `RuntimeError` naming the file.
+
 ## Module Organization
 
 In `sfmtool-core`:
