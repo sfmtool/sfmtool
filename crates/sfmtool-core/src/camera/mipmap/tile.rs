@@ -347,8 +347,8 @@ impl OriginalRegions {
     /// on a multiple of 8 px, the scalar part of each line falls on the same
     /// pixels in both.
     ///
-    /// The columns are decoded in strips, each a frame no wider than
-    /// [`DECODED_ON_THE_CALLING_THREAD`] px, whenever the restart interval is
+    /// The columns are decoded in strips, each a frame no wider than 128 px
+    /// (`DECODED_ON_THE_CALLING_THREAD`), whenever the restart interval is
     /// narrow enough for frames that wide to cover them with their margins,
     /// so the decode runs on the calling thread and starts none of its own;
     /// otherwise in one frame as wide as the rectangle and its margins.
