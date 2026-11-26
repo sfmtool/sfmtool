@@ -144,14 +144,6 @@ impl Histogram {
             .iter()
             .position(|bin| bin.iter().any(|(i, _)| *i == image))
     }
-
-    /// The width of one bin.
-    fn step(&self) -> f64 {
-        match self.edges.as_slice() {
-            [a, b, ..] => b - a,
-            _ => 1.0,
-        }
-    }
 }
 
 /// The bin edges for `values` (sorted or not, all finite) whose two
@@ -213,12 +205,34 @@ fn bin_of(edges: &[f64], value: f64) -> Option<usize> {
 }
 
 /// Decimals that tell two edges `step` apart, and no more.
-fn decimals_for(step: f64) -> usize {
+pub(super) fn decimals_for(step: f64) -> usize {
     if step.is_finite() && step > 0.0 {
         (-step.log10() - 1e-9).ceil().clamp(0.0, 9.0) as usize
     } else {
         3
     }
+}
+
+/// The fewest decimals, at most 9, that print every one of `edges` exactly.
+///
+/// For edges at multiples of a step of the 1/2/5 ladder, as the parameter
+/// table's are, that is [`decimals_for`] the step; the measurement scale
+/// dialog's edges are at odd multiples of half a step, which need one more
+/// digit where the step starts with 1 or 5 (`±0.5` for a step of `1`). Each
+/// edge is compared to its print to a millionth of a part, so a multiple of
+/// `0.1` that floating point holds as `0.30000000000000004` still prints with
+/// one decimal.
+pub(crate) fn edge_decimals(edges: &[f64]) -> usize {
+    (0..=9)
+        .find(|&decimals| {
+            edges.iter().all(|&edge| {
+                let printed = format!("{edge:.decimals$}")
+                    .parse::<f64>()
+                    .unwrap_or(f64::NAN);
+                !edge.is_finite() || (printed - edge).abs() <= 1e-6 * 10f64.powi(-(decimals as i32))
+            })
+        })
+        .unwrap_or(9)
 }
 
 /// An edge or tick: `0` for a value that rounds to zero, and a negative one
@@ -299,7 +313,7 @@ pub(crate) fn show_histogram(
         screen_lo: bars.left() + 1.0,
         screen_hi: bars.right() - 1.0,
     };
-    let decimals = decimals_for(histogram.step());
+    let decimals = edge_decimals(&histogram.edges);
     let fullest = histogram
         .bins
         .iter()

@@ -151,7 +151,12 @@ for a width `w`, not at multiples of `w` as the Camera Intrinsics panel's are
 the median line; with edges at multiples of `w`, measurements that agree
 exactly would fill a bar from `0` to `w` and read as a spread of up to `w`. A
 single measurement, or measurements that agree, make one bin one percent wide
-centred on the median.
+centred on the median. A bin's name and tooltip print its edges with the fewest
+decimals that print every edge exactly (`histogram::edge_decimals`), which for
+these half-width edges is one more digit than the width alone gives where the
+width starts with 1 or 5: the single bin reads `−0.5 to 0.5 %`, not
+`0 to 0 %`. For the Camera Intrinsics panel's edges, at multiples of the width,
+it is the width's own count, so those labels read as before.
 
 **The axis is symmetric about the median.** It reaches the largest deviation
 on either side, and the ±5 bounds where those lie within a spread of the
@@ -341,7 +346,9 @@ with one endpoint refused and one at infinity:
 - **The histogram**: one measurement, and two that agree, make one bin; with
   four measurements that agree, one 17.65% long and one left out, the four are
   in a bin centred on 0 and the axis is symmetric about it; and with every
-  deviation at or above the median the axis is still symmetric.
+  deviation at or above the median the axis is still symmetric; and a
+  single measurement's bin is named `deviation from the median −0.5 to 0.5 %:
+  1 measurement`.
 - **The dialog's lifetime**: a node no longer loaded closes it, and a dialog
   left open draws the scaled version's factor after an edit and the original's
   after the undo.

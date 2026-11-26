@@ -338,3 +338,45 @@ fn deviations_on_one_side_leave_the_median_in_the_middle() {
         "{edges:?}"
     );
 }
+
+/// A single measurement makes one bin, from half a percent below the median to
+/// half a percent above, and its name says so rather than rounding both edges
+/// to 0.
+#[test]
+fn a_single_measurements_bin_is_named_by_its_true_edges() {
+    let (mut state, id) = state_of(keeping(measured_reconstruction(Some("m")), &[0]));
+    state.open_measurement_scale(id);
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1200.0, 1000.0),
+        )),
+        ..Default::default()
+    };
+    let mut names = Vec::new();
+    for _ in 0..2 {
+        let mut output = ctx.run_ui(input(), |ui| {
+            let node = crate::scene::node_by_id(&state.scene, id);
+            let _ = state.measurement_scale_prompt.show(ui.ctx(), node, None);
+        });
+        output.textures_delta.clear();
+        let found: Vec<String> = output
+            .platform_output
+            .accesskit_update
+            .expect("AccessKit is on")
+            .nodes
+            .into_iter()
+            .filter_map(|(_, node)| node.label().or(node.value()).map(str::to_string))
+            .filter(|label| label.starts_with("deviation from the median"))
+            .collect();
+        if !found.is_empty() {
+            names = found;
+        }
+    }
+    assert_eq!(
+        names,
+        ["deviation from the median \u{2212}0.5 to 0.5 %: 1 measurement"]
+    );
+}
