@@ -491,7 +491,7 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [flow/optical.rs](../crates/sfmtool-py/src/flow/optical.rs) | `compute_optical_flow`, `compute_optical_flow_with_init`, `compute_optical_flow_timed`, `compose_flow`, `advect_points`, `gpu_available`, `matcher_image_to_gray` | [optical-flow.md](core/features/optical-flow.md), [gpu-optical-flow.md](core/features/gpu-optical-flow.md) |
-| [flow/warp.rs](../crates/sfmtool-py/src/flow/warp.rs) | `WarpMap`, `ImagePyramid` | [image-warping.md](core/camera/image-warping.md) |
+| [flow/warp.rs](../crates/sfmtool-py/src/flow/warp.rs) | `WarpMap`, whose `remap_bilinear(image, *, image_index=None)` samples an array or one photograph of an `ImagePyramidSet` at full resolution (`render_source_tile` with the bilinear sampler), and `ImagePyramid` | [image-warping.md](core/camera/image-warping.md) |
 
 ### `spatial`
 

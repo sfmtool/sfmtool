@@ -1076,7 +1076,7 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | 22 | Image readings at save (`reconstruction/image_readings.rs` `gather_image_readings`) | whole decode of every photograph with no `.sift` row, with the number decoded at once bounded by memory as SIFT's is (built in step 4) | unchanged | no |
 | P1 | `sfmtool.fileio.read_image_rgb` / `read_image_rgba` (`sfmtool-py/src/fileio/image.rs`) | whole decode | unchanged: they read files, not pyramids | no |
 | P2 | `ImagePyramidSet(recon, images)` and the kernels' `images` lists (`sfmtool-py/src/patches/views.rs`) | exact pyramids of the arrays passed | tiled photographs cut from the arrays (`TiledPhotograph::from_image`), the same pixels; a new `ImagePyramidSet.read(recon)` reads by path through the core cache | no for arrays; through `read`, as rows 11–18 |
-| P3 | `embed-patches`, the strip montages, the `xform` steps that read photographs (`src/sfmtool/_commands/embed_patches.py`, `src/sfmtool/strips/`, `src/sfmtool/xform/_apply.py`) | `embed-patches` and the `xform` steps: `ImagePyramidSet.read(recon)` through one cache per run (built, 16c); the strip montages: `read_workspace_image` arrays into the kernels | `ImagePyramidSet.read(recon)` | the stored levels, so they match the viewer |
+| P3 | `embed-patches`, the strip montages, the `xform` steps that read photographs (`src/sfmtool/_commands/embed_patches.py`, `src/sfmtool/strips/`, `src/sfmtool/xform/_apply.py`) | `ImagePyramidSet.read` through one cache per run: `embed-patches` and the `xform` steps (built, 16c), the strip montages (built, 16d) | `ImagePyramidSet.read(recon)` | the stored levels, so they match the viewer |
 | P4 | `sfm cluster-patches` (`src/sfmtool/_cluster_patches.py`) | `ImagePyramidSet.read` over the paths the file names, `get_many` through a cache of its own, as #19 reads them (built, 16b); before 16b, `read_image_rgb` arrays, full depth, every photograph held at once | through the same reader as #19 | the stored levels |
 | P5 | The view-tile binding (`sfmtool-py/src/patches/view_tile.rs`) | an exact pyramid of the array passed | a tiled photograph cut from the array | no |
 | P6 | Optical flow's pyramids (`sfmtool-py/src/flow/warp.rs`) | a grey pyramid of its own from an array | unchanged; flow reads level 0 from its array | no |
@@ -4164,7 +4164,83 @@ in core. Step 17 turns the tier on.
       `seoul_bull_workspace` fixture, and with the small threshold equal
       to the viewer's conversion to embedded patches and *Refine all
       normals* for the same reconstruction.
-    - **16d, the strips.** `compare --strips` and `inspect --strips`
+    - **16d, the strips.** **Built.** `sfm compare --strips` and
+      `sfm inspect --strips` read their photographs through one
+      `PhotographCache` the run makes, in
+      [strips/_compare.py](../../src/sfmtool/strips/_compare.py) and
+      [strips/_inspect.py](../../src/sfmtool/strips/_inspect.py), shared by
+      `compare`'s two reconstructions; the engine in
+      [strips/_solve.py](../../src/sfmtool/strips/_solve.py) samples each
+      view with `WarpMap.remap_bilinear(set, image_index=i)`, which now takes
+      an `ImagePyramidSet` and reads level 0 with `render_source_tile` and
+      the bilinear sampler
+      ([flow/warp.rs](../../crates/sfmtool-py/src/flow/warp.rs)); and both
+      commands print the `Photographs:` line and the recommendation through
+      `photograph_cache_lines`, after `--strips: `, as 16c's commands do.
+      `read_workspace_image` and its module, which only the strips read in
+      `src/`, are deleted, as `load_workspace_images` was in 16c, and the
+      tests that read arrays with it read `read_image_rgb`. Choices made in
+      building it: the strips sample through the binding they called
+      already, `remap_bilinear`, given the set, rather than through
+      `OrientedPatch.render_view_tile`, which takes a set too but anchors
+      on a keypoint, picks its sampler by rule and reads each tile's
+      clipped share from the photograph, none of which a strip uses; and a
+      strip reads a photograph only when it first renders a view of it,
+      with `ImagePyramidSet.read([path], cache=…)`, as it read one
+      `read_workspace_image` array at a time before, rather than
+      `read(recon)` for every view, since in core a read decodes every
+      photograph it names whole and `inspect --strips` on an
+      `embedded_patches` reconstruction reads only the photographs its
+      listed points are seen in. The normal refinement, and `inspect
+      --strips` on a `sift_files` reconstruction, read every photograph
+      once with `read(recon, cache=…)`, and the strips then read that set.
+      In core every montage is the one before, byte for byte: on copies of
+      the `seoul_bull_workspace` fixture, seven montages (`inspect --strips`
+      on the `sift_files` file, tight with every view, on its
+      `embedded_patches` conversion and with a point at infinity;
+      `compare --strips` in the overview, on one axis without refinement,
+      and ranked by NCC without context) were the same files before and
+      after; and so were `inspect --strips` and `compare --strips` on the
+      user's 8 photographs below. Out of core, with a threshold of 64 px on
+      the fixture, the tiles read the full-resolution mip level files
+      (quality 95), and a montage without refinement differs from in core by
+      at most 4 grey levels (mean 1.0 over the pixels that differ); with
+      refinement the turned normals, the NCC labels and so the tiles
+      differ more, since the refinement reads the stored levels. On the
+      user's 8 photographs (16320 x 12240, region-readable originals),
+      the `inspect --strips` montage from current mipmaps is the in-core one
+      but for its title, which names its file.
+      Measured on the first 8 of the user's photographs with the copied
+      solve cut to them (an `embedded_patches` file with bitmaps), one run
+      each, wall clock and peak working set, `inspect --strips` of points
+      0-15 and `compare --strips` of the file against itself (its
+      refinement reading every photograph of both columns):
+
+      | Run | `inspect --strips` | `compare --strips` |
+      |-----|--------------------|--------------------|
+      | before 16d: `read_workspace_image` arrays | 1.6 s, 1.56 GB | 100.4 s, 21.3 GB |
+      | 16d, in core | 1.6 s, 1.69 GB (1 whole decode) | 12.5 s, 7.85 GB (8 whole decodes) |
+      | 16d, `mipmap_options`, mipmaps current | 0.4 s, 0.25 GB (0 whole decodes) | 3.2 s, 1.66 GB (0 whole decodes) |
+
+      Before 16d each of `compare`'s two columns decoded every photograph
+      for its refinement and cut a set from the arrays, so the 8 were
+      decoded 16 times and held twice; with one cache they are decoded once.
+      Tests: in
+      [test_warp_map_remap_bilinear_rust_bindings.py](../../tests/rust_bindings/flow/test_warp_map_remap_bilinear_rust_bindings.py),
+      a photograph of a set in core sampled as its array is, one out of core
+      sampled from its full-resolution level and not from the original's
+      pixels, and `image_index` required with a set, refused with an array
+      and past the set; in
+      [test_strips_photographs.py](../../tests/test_strips_photographs.py),
+      `compare --strips` reading through one cache, each photograph decoded
+      once, and its montage the one a set of `read_image_rgb` arrays
+      renders, byte for byte; `inspect --strips` decoding every photograph
+      of a `sift_files` reconstruction and only the photographs its listed
+      points are seen in for an `embedded_patches` one, both montages the
+      arrays' byte for byte; and `inspect --strips` with `mipmap_options`
+      making every mipmap and decoding none whole.
+      The plan as written:
+      `compare --strips` and `inspect --strips`
       (`src/sfmtool/strips/`), which read `read_workspace_image` arrays,
       every photograph at once in `_inspect.py` and one at a time in
       `_solve.py`, on `ImagePyramidSet.read` (P3). Tests: the montages
@@ -4185,7 +4261,8 @@ in core. Step 17 turns the tier on.
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
     viewer's one-line notice for a workspace without it, the line
     recommending the object (open question 21) that `sfm cluster-patches`,
-    `sfm embed-patches` and `sfm xform` print naming `sfm ws mipmaps
+    `sfm embed-patches`, `sfm xform`, `sfm compare --strips` and
+    `sfm inspect --strips` print naming `sfm ws mipmaps
     --enable` in place of the object to add by hand, and the workspace
     spec gains the object. Tests: a new workspace has the object with 4096,
     95 and 95; `--enable` writes the object and refuses a file that has one;

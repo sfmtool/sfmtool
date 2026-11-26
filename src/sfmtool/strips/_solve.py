@@ -12,15 +12,16 @@ assembly live in ``_compare``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 
 from ._ncc import gauss_window, render_track_strip
 from .._sfmtool.reconstruction import SfmrReconstruction
-from .._sfmtool.patches import OrientedPatch, PatchCloud
+from .._sfmtool.patches import ImagePyramidSet, OrientedPatch, PatchCloud
 from .._sfmtool.geometry import RigidTransform
 from .._sfmtool.flow import WarpMap
-from .._workspace_image import read_workspace_image
 
 # One rendered strip: (strip image, mean pairwise NCC, number of views shown).
 Strip = tuple[np.ndarray, float, int]
@@ -41,7 +42,14 @@ def _corner_label(tile: np.ndarray, text: str) -> None:
 
 
 class _SolveStrips:
-    """Renders one reconstruction's points as oriented-surfel patch strips."""
+    """Renders one reconstruction's points as oriented-surfel patch strips.
+
+    Reads its photographs through ``cache``, a ``PhotographCache`` the command
+    makes for the run and shares between the reconstructions it renders, so a
+    photograph two of them read is decoded, or has its mipmap made, once. A
+    strip reads a photograph only when it renders a view of it, one at a time,
+    and the normal refinement reads every photograph of the reconstruction.
+    """
 
     def __init__(
         self,
@@ -52,9 +60,11 @@ class _SolveStrips:
         extent_factor: float,
         k_neighbors: int = 12,
         exclude_points_at_infinity: bool = True,
+        cache=None,
     ) -> None:
         self.recon = recon
         self.workspace = workspace
+        self.cache = cache
         self.patch = patch
         self.extent_factor = extent_factor
         self.names = list(recon.image_names)
@@ -72,7 +82,11 @@ class _SolveStrips:
         ]
         # World-space camera centers (center = -R^T t for x_cam = R x_world + t).
         self.centers = [-self.rot_of[i].T @ trans[i] for i in range(len(self.names))]
-        self._images: dict[int, np.ndarray] = {}
+        # The set each image index reads its photograph from, with its index
+        # in that set: one photograph read on its own, or the set of every
+        # photograph once the refinement or a caller has read it.
+        self._views: dict[int, tuple[ImagePyramidSet, int]] = {}
+        self._all: ImagePyramidSet | None = None
         self._feat_sizes: dict[int, np.ndarray] = {}
         # Stored per-point RGBA patch bitmaps (embedded_patches with bitmaps),
         # indexed by 3D-point id; None when the recon carries no bitmaps. Used as
@@ -135,23 +149,44 @@ class _SolveStrips:
                     float(kxy[k, 1]),
                 )
 
-    def image(self, i: int) -> np.ndarray:
-        if i not in self._images:
-            try:
-                self._images[i] = read_workspace_image(self.workspace, self.names[i])
-            except FileNotFoundError as e:
-                raise FileNotFoundError(
-                    f"{e}. --strips renders patches from each reconstruction's "
-                    "workspace images; ensure that workspace is present alongside "
-                    "the .sfmr."
-                ) from e
-        return self._images[i]
+    def photograph_paths(self) -> list[Path]:
+        """The paths of the photographs this engine has read."""
+        return [Path(self.workspace) / self.names[i] for i in sorted(self._views)]
 
-    def prime_images(self, images: list[np.ndarray]) -> None:
-        """Seed the image cache with already-loaded frames (parallel to
-        ``recon.image_names``), so callers that loaded the images for refinement
-        avoid reading them a second time."""
-        self._images = {i: images[i] for i in range(len(images))}
+    def _read(self, recon_or_paths) -> ImagePyramidSet:
+        """Read a list of photograph paths, or the reconstruction's photographs
+        under this engine's workspace, through the cache."""
+        is_recon = not isinstance(recon_or_paths, list)
+        workspace_dir = self.workspace if is_recon else None
+        try:
+            return ImagePyramidSet.read(
+                recon_or_paths, workspace_dir=workspace_dir, cache=self.cache
+            )
+        except FileNotFoundError as e:
+            raise FileNotFoundError(
+                f"{e}. --strips renders patches from each reconstruction's "
+                "workspace images; ensure that workspace is present alongside "
+                "the .sfmr."
+            ) from e
+
+    def _view(self, i: int) -> tuple[ImagePyramidSet, int]:
+        """The set image ``i``'s photograph is read from and its index there."""
+        if i not in self._views:
+            self._views[i] = (self._read([Path(self.workspace) / self.names[i]]), 0)
+        return self._views[i]
+
+    def photographs(self) -> ImagePyramidSet:
+        """Every photograph of the reconstruction, read through the cache once."""
+        if self._all is None:
+            self.prime_images(self._read(self.recon))
+        return self._all
+
+    def prime_images(self, images: ImagePyramidSet) -> None:
+        """Render from ``images``, the set of every photograph (parallel to
+        ``recon.image_names``), so a caller that read them for refinement
+        reads them through the same set."""
+        self._all = images
+        self._views = {i: (images, i) for i in range(len(images))}
 
     def refine(self, point_ids) -> float:
         """Turn the listed points to their grown-plane normals and return the
@@ -171,7 +206,7 @@ class _SolveStrips:
             # At the strips' own size, the size their tiles are cut at, not the
             # embedded-patch default.
             recon = recon.to_embedded_patches(extent_value=self.extent_factor)
-        images = [self.image(i) for i in range(len(self.names))]
+        images = self.photographs()
         refined, report = refine_normals(
             recon, images, point_indexes=[int(p) for p in point_ids]
         )
@@ -217,7 +252,8 @@ class _SolveStrips:
     def _render_view(self, patch: OrientedPatch, i: int, res: int) -> np.ndarray:
         """Render image ``i``'s ``res``x``res`` tile of ``patch`` as float32."""
         wm = WarpMap.from_patch(patch, self.cam_of[i], self.pose_of[i], res)
-        return np.asarray(wm.remap_bilinear(self.image(i)), np.float32)
+        images, index = self._view(i)
+        return np.asarray(wm.remap_bilinear(images, image_index=index), np.float32)
 
     def _stored_bitmap(self, pid: int) -> np.ndarray | None:
         """The raw stored patch bitmap for ``pid`` (RGBA, colour channels RGB),

@@ -4,15 +4,19 @@
 //! Python wrapper for the sfmtool-core WarpMap type.
 
 use numpy::{PyArrayMethods, PyUntypedArrayMethods};
+use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 
 use sfmtool_core::camera::image::{ImageU8, ImageU8Pyramid};
 
 use sfmtool_core::camera::remap::{remap_aniso, remap_aniso_with_pyramid, remap_bilinear};
+use sfmtool_core::camera::sampler::{render_source_tile, RegionPool, Sampler, ViewRegions};
 use sfmtool_core::camera::WarpMap;
+use sfmtool_core::progress::Progress;
 
 use crate::geometry::rigid_transform::PyRigidTransform;
 use crate::geometry::rot_quaternion::PyRotQuaternion;
+use crate::patches::views::PyImagePyramidSet;
 use crate::patches::PyOrientedPatch;
 use crate::PyCameraIntrinsics;
 
@@ -249,17 +253,68 @@ impl PyWarpMap {
 
     /// Apply the warp map to an image using bilinear interpolation.
     ///
+    /// The image is a numpy array, or one photograph of an
+    /// :class:`ImagePyramidSet`, named by ``image_index``, whose full
+    /// resolution is read through the set: from the tiles of a photograph in
+    /// core, or, for one out of core, by regions of the original or from its
+    /// full-resolution mip level file. A photograph in core gives the values
+    /// its array gives, bit for bit.
+    ///
     /// Args:
-    ///     image: Input image as HxWxC or HxW numpy uint8 array.
+    ///     image: Input image as HxWxC or HxW numpy uint8 array, or an
+    ///         :class:`ImagePyramidSet`.
+    ///     image_index: The photograph's index in ``image`` when that is an
+    ///         :class:`ImagePyramidSet`; given with an array, it is refused.
     ///
     /// Returns:
     ///     Warped image as numpy uint8 array with the same number of channels.
-    #[pyo3(signature = (image))]
+    ///
+    /// Raises:
+    ///     ValueError: ``image_index`` is missing for an
+    ///         :class:`ImagePyramidSet` or given for an array.
+    ///     IndexError: ``image_index`` is past the set's photographs.
+    ///     RuntimeError: a read of the photograph failed, such as a file that
+    ///         changed after the set was read, naming the file.
+    // This is a Python docstring (rendered by `help()`), not Rust prose: its
+    // indented `Args:` continuation paragraphs read as Markdown indented code
+    // blocks, which rustdoc then tries to parse as Rust.
+    #[allow(rustdoc::invalid_rust_codeblocks)]
+    #[pyo3(signature = (image, *, image_index=None))]
     fn remap_bilinear<'py>(
-        &self,
+        &mut self,
         py: Python<'py>,
         image: &Bound<'py, pyo3::types::PyAny>,
+        image_index: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
+        if let Ok(set) = image.cast::<PyImagePyramidSet>() {
+            let index = image_index.ok_or_else(|| {
+                PyValueError::new_err("an ImagePyramidSet needs image_index to name the photograph")
+            })?;
+            let pyramids = std::sync::Arc::clone(&set.get().pyramids);
+            let source = pyramids.get(index).ok_or_else(|| {
+                PyIndexError::new_err(format!(
+                    "image_index {index} is past the set's {} images",
+                    pyramids.len()
+                ))
+            })?;
+            // `render_source_tile` takes the map mutably, to compute the SVD a
+            // sampler needs; the bilinear sampler needs none, so the map is
+            // left as it was.
+            let map = &mut self.inner;
+            let result = py
+                .detach(|| {
+                    let pool = RegionPool::for_kernel_call();
+                    let mut regions = ViewRegions::new(source, &pool);
+                    render_source_tile(&mut regions, map, Sampler::Bilinear, &Progress::none())
+                })
+                .map_err(crate::helpers::kernel_err)?;
+            return image_u8_to_pyobject(py, &result);
+        }
+        if let Some(index) = image_index {
+            return Err(PyValueError::new_err(format!(
+                "image_index {index} names a photograph of an ImagePyramidSet, but image is                  an array; pass the set, or leave image_index out"
+            )));
+        }
         let src = extract_image_u8(image)?;
         let result = remap_bilinear(&src, &self.inner);
         image_u8_to_pyobject(py, &result)

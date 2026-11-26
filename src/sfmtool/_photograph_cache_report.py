@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The lines a command that reads photographs through a photograph cache
-prints once its reads are done: `sfm cluster-patches`, `sfm embed-patches`
-and the `sfm xform` steps that read photographs.
+prints once its reads are done: `sfm cluster-patches`, `sfm embed-patches`,
+the `sfm xform` steps that read photographs, and the strip montages of
+`sfm compare --strips` and `sfm inspect --strips`.
 
 See `specs/cli/image-feature/cluster-patches-command.md` § "Process" and the
 out-of-core draft's open question 21.

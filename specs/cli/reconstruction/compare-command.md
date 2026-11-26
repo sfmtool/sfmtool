@@ -173,6 +173,23 @@ Images and `.sift` files are resolved from each reconstruction's `workspace_dir`
 photometric `xform` filters), so the workspaces must still hold them. Points at infinity
 (`w = 0`) are skipped — they have no finite surfel to render.
 
+Both reconstructions read their photographs through one `PhotographCache` the run makes with
+the default budgets, as the viewer reads them, so a photograph both read is decoded, or has its
+mipmap made, once. A strip reads a photograph when it first renders a view of it, with
+`ImagePyramidSet.read([path], cache=…)`, and samples it with `WarpMap.remap_bilinear(set,
+image_index=…)`; the normal refinement reads every photograph of its reconstruction with
+`ImagePyramidSet.read(recon, cache=…)` and hands the set to `refine_normals`, and the strips
+then read that set. A photograph out of core, in a workspace whose `.sfm-workspace.json` has
+`mipmap_options`, is read from its mipmap, made first when it is missing or stale
+([mipmaps.md](../../core/camera/mipmaps.md)). In core the pixels are those of
+`sfmtool.fileio.read_image_rgb`, so the montage is the one rendered from whole decoded arrays,
+byte for byte. Once the strips are rendered the command prints the cache's whole decodes,
+mipmaps made and budget, and, when it decoded the in-core photographs more times than there are
+of them, the line recommending `mipmap_options` naming the first reconstruction's workspace
+file, both as [`sfm cluster-patches`](../image-feature/cluster-patches-command.md#process)
+prints them, after `--strips: ` (`--strips: Photographs: 17 whole decodes, 0 mipmaps made,
+cache budget 15.9 GiB`).
+
 Each row is annotated with the post-alignment distance (as % of scene scale), and per solve
 the patch photoconsistency NCC and the point's triangulation angle (`a=…°`, small = depth
 weakly constrained by parallax).

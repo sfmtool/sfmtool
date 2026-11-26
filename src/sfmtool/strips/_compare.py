@@ -14,7 +14,8 @@ so a clean column means the solve placed a real, photoconsistent surface point
 there.
 
 Images and ``.sift`` files are resolved from each reconstruction's
-``workspace_dir`` (as with the photometric ``xform`` filters). The NCC scoring
+``workspace_dir`` (as with the photometric ``xform`` filters), the images read
+through one photograph cache for the run. The NCC scoring
 and strip rendering live in ``_ncc``; the montage layout in ``_montage``.
 """
 
@@ -264,11 +265,25 @@ def render_comparison_strips(
     ids2 = list(_corr.values())
     distances = np.linalg.norm((transform @ pos2) - pos1, axis=1)
 
+    # Both reconstructions read their photographs through this one cache, as
+    # the viewer reads them, so a photograph both read is decoded, or has its
+    # mipmap made, once.
+    from ..photographs import PhotographCache
+
+    cache = PhotographCache()
     r1 = _SolveStrips(
-        recon1, recon1.workspace_dir, patch=_PATCH, extent_factor=_EXTENT_FACTOR
+        recon1,
+        recon1.workspace_dir,
+        patch=_PATCH,
+        extent_factor=_EXTENT_FACTOR,
+        cache=cache,
     )
     r2 = _SolveStrips(
-        recon2, recon2.workspace_dir, patch=_PATCH, extent_factor=_EXTENT_FACTOR
+        recon2,
+        recon2.workspace_dir,
+        patch=_PATCH,
+        extent_factor=_EXTENT_FACTOR,
+        cache=cache,
     )
 
     # Points at infinity (homogeneous w == 0) have no finite position, distance,
@@ -441,6 +456,12 @@ def render_comparison_strips(
                 s2[0] if s2 is not None else None,
             )
         )
+    paths = {*r1.photograph_paths(), *r2.photograph_paths()}
+    if paths:
+        from .._photograph_cache_report import photograph_cache_lines
+
+        for line in photograph_cache_lines(cache, paths, recon1.workspace_dir):
+            print(f"  --strips: {line}")
     if not montage_rows:
         return None
 

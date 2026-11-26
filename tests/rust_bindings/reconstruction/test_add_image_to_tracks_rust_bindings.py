@@ -13,9 +13,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from sfmtool.fileio import read_image_rgb
 from sfmtool.patches import ImagePyramidSet
 from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
-from sfmtool._workspace_image import read_workspace_image
 
 GROUND_TRUTH = (
     Path(__file__).parents[3]
@@ -35,8 +35,7 @@ def ground_truth():
 @pytest.fixture(scope="module")
 def pyramids(ground_truth):
     images = [
-        read_workspace_image(GROUND_TRUTH.parent, name)
-        for name in ground_truth.image_names
+        read_image_rgb(GROUND_TRUTH.parent / name) for name in ground_truth.image_names
     ]
     return ImagePyramidSet(ground_truth, images)
 
