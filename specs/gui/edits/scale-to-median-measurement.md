@@ -8,8 +8,8 @@ action asks for a physical unit (millimetres, centimetres, metres, inches or
 feet), shows in a dialog how well the measurements agree on the size of a scene
 unit in it, and on `Apply` multiplies every coordinate by the median of their
 factors and declares the unit, as one version: listed in the Edit History
-panel, stepped back by `Ctrl+Z`, and written by a save. The 3D view is not touched, so the scene is drawn larger or
-smaller from where the camera stands.
+panel, stepped back by `Ctrl+Z`, and written by a save. The 3D view is not
+touched, so the scene is drawn larger or smaller from where the camera stands.
 
 Related specs: [../../core/reconstruction/measurement-scale.md](../../core/reconstruction/measurement-scale.md)
 (the factor and the statistics, `distance_measurement_scale`),
@@ -243,12 +243,16 @@ more:
 - The scene scale the frustums and the target indicator are drawn at
   (`AppState::length_scale`) is not measured again. It is re-seeded only when a
   node arrives or a display transform changes, and this edit does neither, so
-  the frustums keep their size on screen against a scene `s` times larger. The
-  HUD's *Scene scale* slider sets it.
+  the frustums keep their size in the world, small against a scene `s` times
+  larger. The HUD's *Scene scale* slider sets it.
 - Camera view stays on its image but is not snapped to the image's scaled pose:
   only a move of the cursor (undo, redo, a jump) snaps it again
-  (`camera_lock::resnap_camera_view`). Leaving camera view and entering it
-  again looks through the scaled camera.
+  (`camera_lock::resnap_camera_view`). Until then the viewport is at the
+  image's old centre, not its scaled one, so the photograph drawn behind the
+  scene no longer lines up with the points drawn over it, though both keep the
+  image's orientation. Leaving camera view and entering it again, or stepping
+  to another image and back, looks through the scaled camera, where the two
+  line up again.
 
 A camera held in hand for Move Camera on the node is ended before the edit, as
 a commit where it has moved, as any other edit of the node ends it: its pending
