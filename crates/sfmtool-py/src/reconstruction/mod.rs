@@ -18,6 +18,7 @@ pub mod demo_scene;
 pub mod drop_image_adjustments;
 pub mod edited;
 pub mod measurement_endpoint;
+pub mod measurement_scale;
 pub mod range_expr;
 pub mod sfmr_reconstruction;
 pub mod switch_camera_model;
