@@ -761,3 +761,125 @@ fn create_bench_measurement_starts_an_item_the_other_tools_finish() {
          which is [0, 640) x [0, 480)."
     );
 }
+
+// ── The measurement scale ───────────────────────────────────────────────
+
+/// `get_measurement_scale` gives the dialog's numbers: the median factor in
+/// the unit, its statistics, each usable measurement's factor and deviation,
+/// and each excluded one with its reason.
+#[test]
+fn get_measurement_scale_gives_the_factor_the_statistics_and_the_exclusions() {
+    let (mut state, _, mut viewer) = measured();
+    let scale = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement_scale",
+        json!({ "unit": "mm" }),
+    );
+    assert_eq!(scale["unit"], "mm");
+    assert_eq!(scale["world_space_unit"], "m");
+    assert_eq!(scale["refusal"], Value::Null);
+    assert_eq!(scale["apply_refusal"], Value::Null);
+    let factor = scale["factor"].as_f64().expect("a factor");
+    assert!((factor - 1020.0).abs() < 1e-3, "{factor}");
+    assert_eq!(scale["scale_text"], "1 scene unit = 1020 mm");
+    let correction = scale["correction"].as_f64().expect("a correction");
+    assert!((correction - 1.02).abs() < 1e-6, "{correction}");
+    assert_eq!(scale["statistics"]["count"], 3);
+    assert_eq!(scale["statistics"]["total"], 5);
+    assert_eq!(scale["statistics"]["disagrees"], true);
+    let indexes: Vec<u64> = scale["factors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["measurement_index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(indexes, [0, 1, 4]);
+    let bad = &scale["factors"][2];
+    assert_eq!(bad["label"], "paw width");
+    assert_eq!(bad["stated_unit"], "m");
+    assert!((bad["stated_in_unit"].as_f64().unwrap() - 1800.0).abs() < 1e-3);
+    let deviation = bad["deviation_percent"].as_f64().unwrap();
+    assert!(
+        (deviation - 100.0 * (1.2 / 1.02 - 1.0)).abs() < 1e-4,
+        "{deviation}"
+    );
+    let excluded = scale["excluded"].as_array().unwrap();
+    assert_eq!(excluded.len(), 2);
+    assert_eq!(excluded[1]["measurement_index"], 3);
+    assert_eq!(
+        excluded[1]["reason"],
+        "Endpoint B lies on a point at infinity, so no distance can be measured to it."
+    );
+}
+
+/// Naming no unit reads the one the dialog opens on, the file's own.
+#[test]
+fn get_measurement_scale_defaults_to_the_dialogs_unit() {
+    let (mut state, _, mut viewer) = measured();
+    let scale = call(&mut state, &mut viewer, "get_measurement_scale", json!({}));
+    assert_eq!(scale["unit"], "m");
+    assert_eq!(scale["scale_text"], "1 scene unit = 1.020 m");
+}
+
+/// `scale_reconstruction_to_median_measurement` is the dialog's Apply: one
+/// edit, the unit declared, and the scale's own reading afterwards agreeing
+/// with it.
+#[test]
+fn scaling_to_the_median_measurement_is_one_edit() {
+    let (mut state, id, mut viewer) = measured();
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "scale_reconstruction_to_median_measurement",
+        json!({ "reconstruction_label": "measured", "unit": "mm" }),
+    );
+    assert_eq!(reply["changed"], true);
+    assert!(
+        reply["report"]
+            .as_str()
+            .is_some_and(|r| r.starts_with("Scaled measured to mm by the median of 3")),
+        "{reply}"
+    );
+    let node = state.node(id).expect("loaded");
+    assert_eq!(
+        node.recon().metadata.world_space_unit.as_deref(),
+        Some("mm")
+    );
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement_scale",
+        json!({ "unit": "mm" }),
+    );
+    assert!(
+        (after["factor"].as_f64().unwrap() - 1.0).abs() < 1e-6,
+        "{after}"
+    );
+}
+
+/// A reconstruction with no measurement is refused in the greyed menu
+/// entry's words, and nothing is pushed.
+#[test]
+fn scaling_a_reconstruction_with_no_measurement_is_refused_in_the_menus_words() {
+    let mut state = AppState::new();
+    let id = state.append_node(crate::scene::SceneNode::from_path(
+        std::path::Path::new("plain.sfmr"),
+        sfmtool_core::SfmrReconstruction::demo(10),
+    ));
+    let mut viewer = Viewer3D::new();
+    let versions = state.node(id).unwrap().history.versions().len();
+    let why = refused_call(
+        &mut state,
+        &mut viewer,
+        "scale_reconstruction_to_median_measurement",
+        json!({ "reconstruction_label": "plain" }),
+    );
+    let menu = crate::measurement_scale_prompt::refusal(state.node(id).unwrap())
+        .expect("the entry is greyed");
+    assert_eq!(why.to_string(), menu);
+    assert_eq!(state.node(id).unwrap().history.versions().len(), versions);
+    let read = call(&mut state, &mut viewer, "get_measurement_scale", json!({}));
+    assert_eq!(read["refusal"], json!(menu));
+    assert_eq!(read["factor"], Value::Null);
+}

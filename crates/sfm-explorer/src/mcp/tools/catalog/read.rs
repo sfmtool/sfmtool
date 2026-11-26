@@ -318,6 +318,35 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[("reconstruction_label", reconstruction_label_schema())], &[]),
         },
         ToolSpec {
+            name: "get_measurement_scale",
+            description: "The scale one reconstruction's stored distance measurements give it \
+                          in a physical unit, as the Scale to Median Measurement dialog shows \
+                          it: factor, the median of the per-measurement factors (stated \
+                          distance in the unit over scene distance), which \
+                          scale_reconstruction_to_median_measurement multiplies every \
+                          coordinate by; scale_text (\"1 scene unit = 2.716 mm\"); where the \
+                          file declares a world_space_unit, correction, the factor relative to \
+                          it, and correction_text; statistics (count of total, median, mean, \
+                          sample_std and sample_std_percent of the median, \
+                          median_absolute_deviation, min, max, max_abs_deviation_percent, and \
+                          disagrees, past disagreement_percent); factors, one per usable \
+                          measurement with its stated distance in its own unit and in the unit, \
+                          its scene_distance, factor and signed deviation_percent; and excluded, \
+                          each measurement that gives no factor with its reason. Where the \
+                          measurements give no scale the factor and statistics are null and \
+                          refusal says why. apply_refusal is why the scale would be refused \
+                          now, null when it would run. Readings are in the file's own \
+                          coordinates: a display transform never scales them.",
+            kind: Read,
+            schema: object(
+                &[
+                    ("reconstruction_label", reconstruction_label_schema()),
+                    ("unit", scale_unit_schema()),
+                ],
+                &[],
+            ),
+        },
+        ToolSpec {
             name: "get_measurement",
             description: "One measurement whole, as Measurement View shows it: \
                           list_measurements' fields, then each endpoint with its camera image, \

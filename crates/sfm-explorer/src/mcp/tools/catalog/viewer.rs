@@ -308,6 +308,30 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
+            name: "scale_reconstruction_to_median_measurement",
+            description: "Scale one reconstruction to a physical unit by the median of the \
+                          factors its stored distance measurements imply, as one version: the \
+                          Scale to Median Measurement dialog's Apply. Every coordinate, camera \
+                          centre and bench patch frame is multiplied by the factor \
+                          get_measurement_scale reports, and world_space_unit becomes the \
+                          unit. A bulk edit that renumbers nothing unless a point edit is \
+                          pending, in which case the deleted slots close up first, as \
+                          delete_point describes; undo puts the data, the bench and the \
+                          display transform back. The picture does not move: a reconstruction \
+                          drawn under a display transform, or sharing the scene with another, \
+                          gets the transform divided by the factor, and one alone at the \
+                          identity keeps it while the 3D view's camera and scene scale are \
+                          multiplied by the factor about the origin. Refused, in the words of \
+                          the greyed menu entry and Apply button, on a reconstruction with no \
+                          stored distance measurement, one none of whose measurements gives a \
+                          factor, and while a background task holds it.",
+            kind: Write,
+            schema: object(
+                &[("unit", scale_unit_schema())],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
             name: "solo_reconstruction",
             description: "Draw only one reconstruction, or end the solo. At most one is soloed at \
                           a time and soloing a second moves the solo. Solo is independent of \

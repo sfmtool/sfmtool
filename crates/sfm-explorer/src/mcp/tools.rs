@@ -190,6 +190,10 @@ pub(crate) fn parse(
         "list_measurements" => Command::ListMeasurements {
             reconstruction_label: args.optional_string("reconstruction_label")?,
         },
+        "get_measurement_scale" => Command::GetMeasurementScale {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            unit: args.length_unit()?,
+        },
         "get_measurement" => Command::GetMeasurement {
             reconstruction_label: args.optional_string("reconstruction_label")?,
             measurement_kind: args.measurement_kind()?,
@@ -320,6 +324,12 @@ pub(crate) fn parse(
         "bake_reconstruction_transform" => Command::BakeReconstructionTransform {
             reconstruction_label: args.required_string("reconstruction_label")?,
         },
+        "scale_reconstruction_to_median_measurement" => {
+            Command::ScaleReconstructionToMedianMeasurement {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                unit: args.length_unit()?,
+            }
+        }
         "solo_reconstruction" => Command::SoloReconstruction {
             reconstruction_label: args.optional_string("reconstruction_label")?,
         },
@@ -1442,6 +1452,21 @@ impl Args<'_> {
                 "does not know the endpoint {name:?} — expected a or b."
             ))
         })
+    }
+
+    /// The physical length unit a call names as `unit`, or `None` where it
+    /// names none.
+    fn length_unit(&self) -> Result<Option<sfmtool_core::LengthUnit>, ToolError> {
+        match self.optional_string("unit")? {
+            None => Ok(None),
+            Some(name) => sfmtool_core::LengthUnit::from_name(&name)
+                .map(Some)
+                .ok_or_else(|| {
+                    self.error(format!(
+                        "does not know the unit {name:?} — expected mm, cm, m, in or ft."
+                    ))
+                }),
+        }
     }
 
     /// The `measurement_kind` a measurement tool names, `distance` when it

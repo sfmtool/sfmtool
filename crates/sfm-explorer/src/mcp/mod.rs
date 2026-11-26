@@ -164,6 +164,13 @@ pub(crate) enum Command {
         measurement_index: Option<usize>,
         item: Option<String>,
     },
+    /// The scale one reconstruction's stored distance measurements give it in
+    /// one unit, as the Scale to Median Measurement dialog shows it. `None`
+    /// for the unit is the one the dialog opens on.
+    GetMeasurementScale {
+        reconstruction_label: Option<String>,
+        unit: Option<sfmtool_core::LengthUnit>,
+    },
     /// The offers of Measurement View's *Switch image…* popup for one
     /// endpoint of a measurement item. `None` is the focused item.
     GetMeasurementEndpointViews {
@@ -247,6 +254,13 @@ pub(crate) enum Command {
     /// Write the display transform into the node's data, as one version.
     BakeReconstructionTransform {
         reconstruction_label: String,
+    },
+    /// Scale the node to a physical unit by the median of the factors its
+    /// distance measurements imply, as one version: the dialog's Apply.
+    /// `None` for the unit is the one the dialog opens on.
+    ScaleReconstructionToMedianMeasurement {
+        reconstruction_label: String,
+        unit: Option<sfmtool_core::LengthUnit>,
     },
     SoloReconstruction {
         reconstruction_label: Option<String>,
@@ -1550,6 +1564,14 @@ pub(crate) fn apply_with_window(
             state,
             reconstruction_label.as_deref(),
         )),
+        Command::GetMeasurementScale {
+            reconstruction_label,
+            unit,
+        } => done(measurements::get_measurement_scale(
+            state,
+            reconstruction_label.as_deref(),
+            unit,
+        )),
         Command::GetMeasurement {
             reconstruction_label,
             measurement_kind,
@@ -1661,6 +1683,15 @@ pub(crate) fn apply_with_window(
         } => done(edit::bake_reconstruction_transform(
             state,
             &reconstruction_label,
+        )),
+        Command::ScaleReconstructionToMedianMeasurement {
+            reconstruction_label,
+            unit,
+        } => done(edit::scale_reconstruction_to_median_measurement(
+            state,
+            viewer,
+            &reconstruction_label,
+            unit,
         )),
         Command::SoloReconstruction {
             reconstruction_label,

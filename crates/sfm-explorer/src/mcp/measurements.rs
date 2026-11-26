@@ -64,6 +64,119 @@ pub(super) fn list_measurements(state: &AppState, reconstruction_label: Option<&
     }))
 }
 
+/// `get_measurement_scale`: the scale one reconstruction's stored distance
+/// measurements give it in `unit`, or in the unit the Scale to Median
+/// Measurement dialog opens on, with what the dialog shows of it.
+///
+/// The factor and the statistics are `null` where the scale is an error, and
+/// `refusal` then says why; `excluded` lists every measurement that gives no
+/// factor either way. `apply_refusal` is why
+/// `scale_reconstruction_to_median_measurement` would be refused right now,
+/// in the words the greyed `Apply` carries.
+pub(super) fn get_measurement_scale(
+    state: &AppState,
+    reconstruction_label: Option<&str>,
+    unit: Option<sfmtool_core::LengthUnit>,
+) -> JsonReply {
+    use crate::measurement_scale_prompt::{self as prompt, ScaleView};
+    let id = resolve_reconstruction(state, reconstruction_label)?;
+    let node = state.node(id).expect("just resolved");
+    let unit = unit.unwrap_or_else(|| prompt::default_unit(node));
+    let view = ScaleView::of(node, unit);
+    let label = |index: usize| view.rows.get(index).map(|row| row.label.clone());
+    let excluded =
+        |list: &[sfmtool_core::reconstruction::measurement_scale::ExcludedMeasurement]| {
+            list.iter()
+                .map(|e| {
+                    json!({
+                        "measurement_kind": MeasurementKind::Distance.name(),
+                        "measurement_index": e.index,
+                        "label": label(e.index),
+                        "reason": prompt::sentence(&e.reason),
+                    })
+                })
+                .collect::<Vec<Value>>()
+        };
+    let apply_refusal = state
+        .edit_refusal(id)
+        .or_else(|| prompt::refusal(node))
+        .or_else(|| view.scale_refusal());
+    let mut reply = json!({
+        "reconstruction_label": node.label,
+        "world_space_unit": view.file_unit,
+        "unit": unit.name(),
+        "disagreement_percent":
+            sfmtool_core::reconstruction::measurement_scale::SCALE_DISAGREEMENT_PERCENT,
+        "apply_refusal": apply_refusal,
+    });
+    let fields = match &view.scale {
+        Ok(scale) => {
+            let s = &scale.statistics;
+            let file_unit = view
+                .file_unit
+                .as_deref()
+                .and_then(sfmtool_core::LengthUnit::from_name);
+            json!({
+                "refusal": null,
+                "factor": scale.factor(),
+                "scale_text": prompt::scale_text(unit, scale.factor()),
+                "correction": file_unit.map(|f| prompt::correction(f, unit, scale.factor())),
+                "correction_text":
+                    prompt::correction_text(view.file_unit.as_deref(), unit, scale.factor()),
+                "statistics": {
+                    "count": s.count,
+                    "total": s.count + scale.excluded.len(),
+                    "median": s.median,
+                    "mean": s.mean,
+                    "sample_std": s.sample_std,
+                    "sample_std_percent": s.sample_std_percent,
+                    "median_absolute_deviation": s.median_absolute_deviation,
+                    "min": s.min,
+                    "max": s.max,
+                    "max_abs_deviation_percent": s.max_abs_deviation_percent,
+                    "disagrees": s.disagrees,
+                },
+                "factors": scale.factors.iter().map(|f| {
+                    let row = view.rows.get(f.index);
+                    json!({
+                        "measurement_kind": MeasurementKind::Distance.name(),
+                        "measurement_index": f.index,
+                        "label": label(f.index),
+                        "stated_distance": row.map(|r| r.stated),
+                        "stated_unit": row.map(|r| r.unit.name()),
+                        "stated_in_unit": f.stated,
+                        "scene_distance": f.scene_distance,
+                        "factor": f.factor,
+                        "deviation_percent": f.deviation_percent,
+                    })
+                }).collect::<Vec<Value>>(),
+                "excluded": excluded(&scale.excluded),
+            })
+        }
+        Err(e) => {
+            let list = match e {
+                sfmtool_core::reconstruction::measurement_scale::DistanceMeasurementScaleError::NoUsableMeasurement { excluded } => excluded.as_slice(),
+                _ => &[],
+            };
+            json!({
+                "refusal": prompt::sentence(e),
+                "factor": null,
+                "scale_text": null,
+                "correction": null,
+                "correction_text": null,
+                "statistics": null,
+                "factors": [],
+                "excluded": excluded(list),
+            })
+        }
+    };
+    let object = reply.as_object_mut().expect("an object");
+    for (key, value) in fields.as_object().expect("an object") {
+        object.insert(key.clone(), value.clone());
+    }
+    Ok(reply)
+}
+
 /// `get_measurement`: one measurement whole. For a distance, both endpoints'
 /// images, pixels and resolutions with every candidate, the result block and
 /// the header's comparison line.

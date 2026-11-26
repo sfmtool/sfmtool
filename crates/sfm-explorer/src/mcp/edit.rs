@@ -1060,6 +1060,26 @@ pub(super) fn bake_reconstruction_transform(state: &mut AppState, label: &str) -
     edited(state, id, |state| state.bake_node_transform(id))
 }
 
+/// `scale_reconstruction_to_median_measurement`: the Scale to Median
+/// Measurement dialog's `Apply`, in `unit` or the unit the dialog opens on,
+/// with the picture kept still as the dialog keeps it.
+pub(super) fn scale_reconstruction_to_median_measurement(
+    state: &mut AppState,
+    viewer: &mut crate::viewer_3d::Viewer3D,
+    label: &str,
+    unit: Option<sfmtool_core::LengthUnit>,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    let unit = unit.unwrap_or_else(|| {
+        crate::measurement_scale_prompt::default_unit(state.node(id).expect("just resolved"))
+    });
+    // The edit refuses in the words the greyed menu entry and the dialog's
+    // greyed Apply carry.
+    edited(state, id, |state| {
+        crate::display_transform::scale_to_median_measurement(viewer, state, id, unit)
+    })
+}
+
 // ── What an edit and a cursor move answer with ──────────────────────────
 
 /// Run one edit and report the version it pushed.
