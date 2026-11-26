@@ -312,7 +312,8 @@ impl PyWarpMap {
         }
         if let Some(index) = image_index {
             return Err(PyValueError::new_err(format!(
-                "image_index {index} names a photograph of an ImagePyramidSet, but image is                  an array; pass the set, or leave image_index out"
+                "image_index {index} names a photograph of an ImagePyramidSet, but image is \
+                 an array; pass the set, or leave image_index out"
             )));
         }
         let src = extract_image_u8(image)?;

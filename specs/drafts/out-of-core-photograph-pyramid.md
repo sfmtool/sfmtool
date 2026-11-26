@@ -4234,7 +4234,9 @@ in core. Step 17 turns the tier on.
       [test_strips_photographs.py](../../tests/test_strips_photographs.py),
       `compare --strips` reading through one cache, each photograph decoded
       once, and its montage the one a set of `read_image_rgb` arrays
-      renders, byte for byte; `inspect --strips` decoding every photograph
+      renders, byte for byte, and, with its two reconstructions in two
+      workspaces and a cache too small for their photographs, the
+      recommendation naming both workspace files; `inspect --strips` decoding every photograph
       of a `sift_files` reconstruction and only the photographs its listed
       points are seen in for an `embedded_patches` one, both montages the
       arrays' byte for byte; and `inspect --strips` with `mipmap_options`

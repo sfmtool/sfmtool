@@ -6,6 +6,7 @@ strip montages read their photographs. See ``specs/python-bindings.md`` and
 ``specs/core/camera/image-warping.md`` § "Python API"."""
 
 import json
+import os
 from pathlib import Path
 
 import cv2
@@ -88,5 +89,26 @@ def test_an_index_is_given_with_a_set_and_only_with_a_set(tmp_path):
         warp.remap_bilinear(pyramids)
     with pytest.raises(IndexError, match="image_index 1 is past the set's 1 images"):
         warp.remap_bilinear(pyramids, image_index=1)
-    with pytest.raises(ValueError, match="image_index 0 names a photograph"):
+    with pytest.raises(
+        ValueError,
+        match="image_index 0 names a photograph of an ImagePyramidSet, but image is an array",
+    ):
         warp.remap_bilinear(read_image_rgb(path), image_index=0)
+
+
+def test_a_photograph_changed_after_the_read_fails_naming_it(tmp_path):
+    path = _photograph(tmp_path / "first.png", 64, 48)
+    second = _photograph(tmp_path / "second.png", 64, 48)
+    # A budget of one byte keeps no tile of the first photograph once the
+    # second is read, so the sampling decodes the file again.
+    pyramids = ImagePyramidSet.read(
+        [path, second], cache=PhotographCache(budget_bytes=1)
+    )
+    _photograph(path, 70, 50)
+    later = os.stat(path).st_mtime + 10
+    os.utime(path, (later, later))
+
+    with pytest.raises(
+        RuntimeError, match=r"first\.png changed while it was being read"
+    ):
+        _map(64, 48).remap_bilinear(pyramids, image_index=0)

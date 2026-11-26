@@ -460,7 +460,9 @@ def render_comparison_strips(
     if paths:
         from .._photograph_cache_report import photograph_cache_lines
 
-        for line in photograph_cache_lines(cache, paths, recon1.workspace_dir):
+        for line in photograph_cache_lines(
+            cache, paths, recon1.workspace_dir, recon2.workspace_dir
+        ):
             print(f"  --strips: {line}")
     if not montage_rows:
         return None

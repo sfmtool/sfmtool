@@ -474,4 +474,5 @@ sfm inspect --strips sfmr/solve_001.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
   for an `embedded_patches` one, each montage in core the one whole decoded
   arrays render, byte for byte, and with `mipmap_options` every mipmap made
   and no photograph decoded whole; and the same for `compare --strips`, both
-  reconstructions reading through the one cache.
+  reconstructions reading through the one cache, and the recommendation
+  naming both workspace files when they are in two workspaces.

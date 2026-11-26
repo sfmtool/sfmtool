@@ -164,3 +164,34 @@ def test_inspect_strips_read_out_of_core_photographs_from_their_mipmaps(
 
     assert "--strips: Photographs: 0 whole decodes, 17 mipmaps made" in output
     assert out.is_file()
+
+
+def test_compare_strips_recommend_mipmaps_in_each_reconstructions_workspace(
+    seoul_bull_workspace, tmp_path, monkeypatch
+):
+    """Two reconstructions in two workspaces, with a cache too small for their
+    photographs: the recommendation names both workspaces' files."""
+    import shutil
+
+    other_workspace = tmp_path / "other"
+    shutil.copytree(seoul_bull_workspace.parent, other_workspace)
+    other = other_workspace / seoul_bull_workspace.name
+    # 4 MB holds about half of the tiles of the 17 270 x 480 photographs.
+    monkeypatch.setenv("SFM_EXPLORER_PHOTOGRAPH_CACHE_MB", "4")
+
+    output = _invoke(
+        [
+            "compare",
+            str(seoul_bull_workspace),
+            str(other),
+            "--strips",
+            str(tmp_path / "strips.png"),
+            "--strips-num",
+            "1",
+        ]
+    )
+
+    assert "--strips: The cache decoded 34 photographs whole" in output
+    first = seoul_bull_workspace.parent / ".sfm-workspace.json"
+    second = other_workspace / ".sfm-workspace.json"
+    assert f"object to {first} and {second}, such as" in output
