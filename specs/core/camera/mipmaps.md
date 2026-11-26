@@ -499,9 +499,9 @@ give 64 px each from a 128 px frame, so a tile decodes about twice its pixels;
 one strip costs more than a share of the one wide frame, about 13 ms for a
 514 px tile on one idle thread, but a kernel's threads no longer wait on
 threads that cannot run. When the interval is too wide for 128 px frames to
-cover the columns with their margins (more than 64 px with MCUs 16 px wide,
-or 64 px with MCUs 8 px wide; rule 6 allows up to 1024 px), the region is one
-frame as wide as it needs, as before.
+cover the columns with their margins (more than 64 px, with MCUs 8 or 16 px
+wide; rule 6 allows up to 1024 px), the region is one frame as wide as it
+needs.
 
 `OriginalRegions::from_bytes` runs the region test, so it is made only for a
 region-readable original and its `Err` names the rule failed. A rectangle that

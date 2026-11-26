@@ -308,6 +308,7 @@ fn every_region_of_an_original_equals_the_same_pixels_of_read_rgb() {
         // photographs the out-of-core draft measures.
         ("4:2:0", SamplingFactor::F_2_2, 320, 211, 4),
         ("4:2:2", SamplingFactor::F_2_1, 333, 211, 7),
+        ("4:2:2", SamplingFactor::F_2_1, 333, 211, 3),
         ("4:4:0", SamplingFactor::F_1_2, 333, 211, 6),
         ("4:4:0", SamplingFactor::F_1_2, 37, 29, 5),
         ("4:4:4", SamplingFactor::F_1_1, 333, 211, 3),

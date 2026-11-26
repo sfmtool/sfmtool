@@ -4217,8 +4217,8 @@ or `read_rgb` pixel by pixel.
 
 ## Open questions
 
-The user has decided every question below but 22, which waits on the
-user's decision; the section records the decisions.
+The user has decided every question below; the section records the
+decisions.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
    original file name followed by the suffix, as a `.sift` is named
@@ -4657,6 +4657,7 @@ user's decision; the section records the decisions.
     - (c) leave it: from current mipmaps the commands hold a third to a half
       of the in-core memory and take up to 1.5 times as long on Windows.
 
-    Recommended: (a), measured on Linux and macOS as well before it is
-    adopted, since their allocators differ from Windows' heap. *Not decided
-    yet.*
+    *Decided by the user:* (a). `mimalloc` becomes the global allocator of
+    `sfmtool-py` and of the viewer's own binary, after the same runs are
+    measured on Linux and macOS, since their allocators differ from
+    Windows' heap. It is a change of its own, made before step 17.
