@@ -37,7 +37,9 @@ item, its origin and its commit, in the viewer) and
 [core/bench/editable-measurement.md](../core/bench/editable-measurement.md)
 (in core), [scene-graph.md](scene-graph.md) (the tree the
 rows go in), [panel-layout.md](panel-layout.md) (the tab),
-[mcp-server.md](mcp-server.md) (the tools), and
+[edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)
+(scaling the reconstruction by the median of every measurement's factor, from
+the reconstruction row's menu), [mcp-server.md](mcp-server.md) (the tools), and
 [formats/sfmr-file-format.md](../formats/sfmr-file-format.md) § 10
 "Measurements" (what the file stores).
 
@@ -441,7 +443,13 @@ link that selects it, so the panel is usable without the tree.
   +0.4%`). It does not read the file's unit, so it is the same check with one
   and without one, and it is the one that catches a bad measurement among good
   ones. A measurement with no reading gets the line with *this one has no
-  reading*.
+  reading*. The line is the same median that Scale to Median Measurement
+  applies ([edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)),
+  but it is computed here (`measurements::scale_comparison`) rather than by
+  core's `distance_measurement_scale`, because the edited mode draws it for a
+  bench item, which is in no stored measurements, at the stated distance the
+  item holds as an `f64` before a commit stores it as a `float32`, and because
+  it is drawn for a measurement that has no reading of its own.
 
 ### The distance body
 

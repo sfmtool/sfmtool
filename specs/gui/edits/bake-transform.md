@@ -203,5 +203,6 @@ Python side (`tests/xform/test_transforms.py`).
   `sfm xform --scale` has first: clearing it loses information a caller may have
   meant to keep, leaving it keeps a claim that is false, and taking a unit
   beside the transform hands the decision to callers who mostly do not know
-  either. Only `--scale-by-measurements` sets it, because it knows the unit it
-  scaled to.
+  either. Only `--scale-by-measurements` and the viewer's Scale to Median
+  Measurement set it, because each knows the unit it scaled to
+  ([scale-to-median-measurement.md](scale-to-median-measurement.md)).

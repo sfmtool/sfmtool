@@ -23,7 +23,11 @@ a misplaced endpoint or a distorted reconstruction.
 `sfm xform --scale-by-measurements`
 ([cli/reconstruction/xform/scale-by-measurements-command.md](../../cli/reconstruction/xform/scale-by-measurements-command.md))
 computes the same factor from a YAML file of Point IDs in its own Python code;
-it does not call this operation.
+it does not call this operation. SfM Explorer calls it for `Scale to Median
+Measurement...` on a reconstruction's Scene tree row, whose dialog shows the
+factor, the statistics, each measurement's factor and the exclusions, and whose
+edit applies the factor
+([gui/edits/scale-to-median-measurement.md](../../gui/edits/scale-to-median-measurement.md)).
 
 ## Rust API
 
@@ -93,7 +97,8 @@ pub enum DistanceMeasurementScaleError {
 reconstruction. Resolving the endpoints is the expensive part, and SfM Explorer
 already resolves every stored measurement once per version and keeps the
 result on the scene node (`SceneNode::measurement_readings`,
-[gui/measurement-view.md](../../gui/measurement-view.md) § "The readings");
+[gui/measurement-view.md](../../gui/measurement-view.md) § "The readings"),
+where its Scale to Median Measurement dialog reads them afresh every frame;
 taking `&[ResolvedDistanceMeasurement]` lets a caller holding them reuse them,
 and one that does not makes them with one call to
 `resolve_distance_measurements`. It takes `MeasurementsData`, the whole
@@ -127,7 +132,8 @@ carries every exclusion.
 **Why no histogram.** The factors are in the result, and the bins a histogram
 draws are a choice of the drawing: the CLI's text histogram uses five equal
 bins from the smallest factor to the largest, and a plot sized to a panel
-would choose its own count. Binning is a few lines over `factors`, `min` and
+would choose its own count, as SfM Explorer's dialog does over each
+measurement's deviation. Binning is a few lines over `factors`, `min` and
 `max`, so it stays with whoever draws it.
 
 Example:
