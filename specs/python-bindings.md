@@ -97,9 +97,10 @@ for byte but the write record.
 before returning them to the system, which is where most of the extra
 memory comes from. `MIMALLOC_PURGE_DELAY=0` in the environment returns them
 at once and brings the peak back to the system allocator's, but measured
-the same way it multiplied the kernel-mode time by three to eight and gave
-back much of the gain (`embed_patches` from mipmaps at 0.8 GiB: 105 s on
-Windows, 89 s on Linux), so the extension keeps the default; the variable
+the same way it multiplied the kernel-mode time of the `xform` and
+`embed_patches` runs by 5 to 18 and gave back much of the gain
+(`embed_patches` from mipmaps at 0.8 GiB: 105 s on Windows, 89 s on
+Linux), so the extension keeps the default; the variable
 stays available to a user short of memory, as do mimalloc's other
 `MIMALLOC_*` options.
 
