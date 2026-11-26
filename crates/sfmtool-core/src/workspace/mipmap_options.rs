@@ -8,7 +8,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::camera::mipmap::MipmapOptions;
+use crate::camera::mipmap::{MipmapOptions, DEFAULT_OUT_OF_CORE_LONG_SIDE};
 
 use super::WORKSPACE_FILE_NAME;
 
@@ -49,6 +49,35 @@ impl fmt::Display for WorkspaceConfigError {
 }
 
 impl std::error::Error for WorkspaceConfigError {}
+
+/// The `mipmap_options` a new workspace records: photographs with a side
+/// over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] are out of core, and every mip
+/// level file is encoded at quality 95. The reasons are in
+/// `specs/core/camera/mipmaps.md` § "The workspace setting".
+pub const NEW_WORKSPACE_MIPMAP_OPTIONS: MipmapOptions = MipmapOptions {
+    out_of_core_long_side: DEFAULT_OUT_OF_CORE_LONG_SIDE,
+    jpeg_quality: 95,
+    full_resolution_jpeg_quality: 95,
+};
+
+/// `options` as the `mipmap_options` object of `.sfm-workspace.json` holds
+/// them, which [`read_mipmap_options`] reads back to `options`.
+///
+/// ```
+/// use sfmtool_core::workspace::{mipmap_options_json, NEW_WORKSPACE_MIPMAP_OPTIONS};
+///
+/// let object = mipmap_options_json(&NEW_WORKSPACE_MIPMAP_OPTIONS);
+/// assert_eq!(object["out_of_core_long_side"], 1536);
+/// assert_eq!(object["jpeg_quality"], 95);
+/// assert_eq!(object["full_resolution_jpeg_quality"], 95);
+/// ```
+pub fn mipmap_options_json(options: &MipmapOptions) -> serde_json::Value {
+    serde_json::json!({
+        "out_of_core_long_side": options.out_of_core_long_side,
+        "jpeg_quality": options.jpeg_quality,
+        "full_resolution_jpeg_quality": options.full_resolution_jpeg_quality,
+    })
+}
 
 /// The keys of `mipmap_options`, each with its smallest and largest value.
 const KEYS: [(&str, u64, u64); 3] = [

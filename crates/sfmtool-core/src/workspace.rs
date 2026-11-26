@@ -35,7 +35,9 @@ pub use marker::{
     sfmtool_workspace_marker, write_sfmtool_workspace_marker, SfmtoolWorkspaceOptions,
     NEW_WORKSPACE_DOUBLE_IMAGE_BELOW_LONG_SIDE,
 };
-pub use mipmap_options::{read_mipmap_options, WorkspaceConfigError};
+pub use mipmap_options::{
+    mipmap_options_json, read_mipmap_options, WorkspaceConfigError, NEW_WORKSPACE_MIPMAP_OPTIONS,
+};
 pub use named_image_lists::{
     is_named_image_list_name, split_named_image_list_value, DuplicateMatch, NamedImageList,
     NamedImageListEntry, NamedImageListMember, NamedImageListSlice, NamedImageListSliceError,

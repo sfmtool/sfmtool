@@ -133,7 +133,7 @@ consumer reads the cells.
    then prints a line saying how many photographs were decoded how many
    times, and recommending a `mipmap_options` object in the workspace's
    `.sfm-workspace.json`, naming the file and giving the object with an
-   `out_of_core_long_side` of 4096 and both JPEG qualities 95, so the
+   `out_of_core_long_side` of 1536 and both JPEG qualities 95, so the
    photographs are read from their mipmaps a tile at a time.
    Present the seed geometry from step 2 in images-section order, and call
    `sfmtool.matching.refine_cluster_patches` (the

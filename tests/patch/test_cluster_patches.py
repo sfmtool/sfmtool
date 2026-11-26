@@ -577,4 +577,7 @@ def test_cluster_patches_recommends_mipmaps_when_it_decodes_photographs_again(
     hint = f"The cache decoded 17 photographs whole {decodes} times"
     assert hint in result.output
     assert str(workspace_dir / ".sfm-workspace.json") in result.output
-    assert '"mipmap_options": {"out_of_core_long_side": 4096' in result.output
+    assert (
+        '"mipmap_options": {"out_of_core_long_side": 1536, "jpeg_quality": 95, '
+        '"full_resolution_jpeg_quality": 95}.' in result.output
+    )

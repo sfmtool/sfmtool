@@ -51,6 +51,9 @@ def init(
 
     Creates a .sfm-workspace.json file in the specified directory (or current
     directory if not specified) with default feature extraction settings.
+    The file's mipmap_options have each photograph with a side over 1536 px
+    read from mipmaps under .sfm-mipmaps/, a tile at a time, rather than
+    decoded whole.
 
     Example usage:
 

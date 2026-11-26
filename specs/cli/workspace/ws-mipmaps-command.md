@@ -14,10 +14,12 @@ whose reconstruction is not open in the viewer. With `--check` it reports
 which mipmaps are missing or stale and which files are orphans, writing
 nothing; with `--prune` it deletes the orphan files.
 
-`sfm ws init` does not yet write `mipmap_options`, and the command's
+`sfm ws init` writes `mipmap_options` into every new workspace
+([ws-init-command.md](ws-init-command.md#persisted-settings)). The command's
 `--enable`, which adds the object to an existing workspace, is planned in
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
-(step 17); until then a workspace has the object only when its owner wrote it.
+(step 17b); until then a workspace made before `sfm ws init` wrote the object
+has it only when its owner wrote it.
 
 ## Command Syntax
 

@@ -31,7 +31,10 @@ way, and with `--check` reports which are missing or stale through
 `check_mipmaps`, and with `--prune` deletes a mipmap directory's orphan files
 through `prune_mipmaps`
 ([ws-mipmaps-command.md](../../cli/workspace/ws-mipmaps-command.md)).
-No command writes `mipmap_options` yet; its writers come in the steps of
+`sfm ws init` writes `mipmap_options` into every new workspace
+([§ "The workspace setting"](#the-workspace-setting)). A workspace made
+before it has no object until its owner adds one; `sfm ws mipmaps --enable`,
+which adds it, is planned in step 17b of
 [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
 which also has the measurements behind the choices below.
 
@@ -44,7 +47,7 @@ names, `sfmtool_core::camera`; the workspace object's reader is
 
 ```rust
 pub const MIPMAP_DIR_NAME: &str = ".sfm-mipmaps";
-pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 4096; // what `sfm ws init` is to write
+pub const DEFAULT_OUT_OF_CORE_LONG_SIDE: u32 = 1536; // what `sfm ws init` writes
 pub const MAX_JPEG_SIDE: u32 = 65535;
 pub const PHOTOGRAPH_TILE_SIZE: u32 = 512;
 pub const MIPMAP_RESTART_INTERVAL_MCUS: u16 = 16;
@@ -57,6 +60,12 @@ pub struct MipmapOptions { pub out_of_core_long_side: u32, pub jpeg_quality: u8,
 /// `sfmtool_core::workspace`: the object in `<root>/.sfm-workspace.json`,
 /// `None` when the file has none, an error naming file, key and value.
 pub fn read_mipmap_options(root: &Path) -> Result<Option<MipmapOptions>, WorkspaceConfigError>;
+
+/// `sfmtool_core::workspace`: the object a new workspace records (1536, 95
+/// and 95), and an object as the file holds it, which `read_mipmap_options`
+/// reads back.
+pub const NEW_WORKSPACE_MIPMAP_OPTIONS: MipmapOptions;
+pub fn mipmap_options_json(options: &MipmapOptions) -> serde_json::Value;
 
 /// Level sizes, the tier, and `K`, the coarsest stored level. `None` for a
 /// side over `MAX_JPEG_SIDE`.
@@ -297,7 +306,7 @@ nothing outside sfmtool reads the record, so it has no format crate and no
 
 ```json
 "mipmap_options": {
-  "out_of_core_long_side": 4096,
+  "out_of_core_long_side": 1536,
   "jpeg_quality": 95,
   "full_resolution_jpeg_quality": 95
 }
@@ -313,6 +322,29 @@ Without the object there are no mipmaps. The photograph cache reads the object
 once per workspace root and again when the file changes, and refuses every
 photograph of a workspace whose object is invalid until the file is fixed
 ([photograph-cache.md § "A changed file and remembered failures"](photograph-cache.md#a-changed-file-and-remembered-failures)).
+
+`sfm ws init` writes the object above, `NEW_WORKSPACE_MIPMAP_OPTIONS`, into
+every new workspace, after `feature_prefix_dir`, for each feature tool
+([ws-init-command.md](../../cli/workspace/ws-init-command.md#persisted-settings)).
+The threshold of 1536 px keeps memory bounded for a job that reads many
+photographs of a few megapixels, such as those of a 24-megapixel camera or a
+phone: an in-core photograph is decoded whole, all its pixels at once, when a
+tile of it is needed and the cache holds none, and decoded whole again once
+its tiles are evicted, while an out-of-core one decodes only the tiles a read
+needs, about 3 ms each, at the cost of one encode of its levels. The
+threshold is separate from `double_image_below_long_side`, which a new
+workspace sets to 4096: a photograph whose longer side is 1537 to 4095 px is
+out of core and is doubled for SIFT. SIFT decodes the original whole in either
+tier, and the mipmap is made from the photograph, not the doubled image: the
+Rust `.sift` build makes it from its decode before the extraction
+([sift.md § "Building `.sift` files"](../features/sift.md#building-sift-files)),
+and `sfm sift` decodes the original again once the files are written. Quality
+95 re-encodes a JPEG original's full-resolution copy closest to the original
+among the qualities measured (0.07 to 0.09 grey levels), and no quality
+depends on the original's format; a workspace of PNG or TIFF photographs can
+set `full_resolution_jpeg_quality` higher itself. Each workspace keeps the
+values in its own file, so a later change of these defaults does not change
+which pixels an existing workspace's kernels read.
 
 ## How a mipmap is made
 

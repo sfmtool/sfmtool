@@ -202,6 +202,13 @@ def create_workspace(workspace_dir: Path, **options) -> None:
         click.echo(f"  nfeatures: {options_dict.get('nfeatures', 0)}")
     click.echo(f"  image_to_gray: {describe_image_to_gray(options_dict)}")
     click.echo(f"  feature_prefix_dir: {workspace['feature_prefix_dir']}")
+    mipmap_options = workspace["mipmap_options"]
+    click.echo(
+        f"  mipmap_options: photographs with a side over "
+        f"{mipmap_options['out_of_core_long_side']} px are read from mipmaps, "
+        f"JPEG quality {mipmap_options['jpeg_quality']} "
+        f"({mipmap_options['full_resolution_jpeg_quality']} at full resolution)"
+    )
 
 
 def describe_image_to_gray(feature_options: dict) -> str:

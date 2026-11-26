@@ -3,9 +3,10 @@
 
 use super::*;
 
-/// What `sfm ws init` wrote for a default `sfmtool` workspace before this
-/// writer existed: Python's `json.dump(record, f, indent=2)` of the record
-/// `init_workspace` built, with `\n` line breaks.
+/// What `sfm ws init` writes for a default `sfmtool` workspace: Python's
+/// `json.dump(record, f, indent=2)` of the record `init_workspace` built
+/// before this writer existed, with `\n` line breaks, and the
+/// `mipmap_options` object after it.
 const DEFAULT_MARKER: &str = r#"{
   "version": 2,
   "feature_tool": "sfmtool",
@@ -30,7 +31,12 @@ const DEFAULT_MARKER: &str = r#"{
       "formula": "0.2126*R + 0.7152*G + 0.0722*B"
     }
   },
-  "feature_prefix_dir": "features/sift-sfmtool-fc19c88d9c98d94ebff1b97f2a345bb6"
+  "feature_prefix_dir": "features/sift-sfmtool-fc19c88d9c98d94ebff1b97f2a345bb6",
+  "mipmap_options": {
+    "out_of_core_long_side": 1536,
+    "jpeg_quality": 95,
+    "full_resolution_jpeg_quality": 95
+  }
 }"#;
 
 /// The same for `sfm ws init --max-features 4000 --image-to-gray G
@@ -60,7 +66,12 @@ const CUSTOM_MARKER: &str = r#"{
       "quantize_bits": 6
     }
   },
-  "feature_prefix_dir": "features/sift-sfmtool-3c0cb5ee50910f836de546984da60395"
+  "feature_prefix_dir": "features/sift-sfmtool-3c0cb5ee50910f836de546984da60395",
+  "mipmap_options": {
+    "out_of_core_long_side": 1536,
+    "jpeg_quality": 95,
+    "full_resolution_jpeg_quality": 95
+  }
 }"#;
 
 fn custom() -> SfmtoolWorkspaceOptions {
@@ -88,6 +99,26 @@ fn the_feature_options_read_back_to_the_parameters_they_record() {
         assert_eq!(read.double_image_below_long_side, Some(4096));
         assert_eq!(read.max_num_features, Some(options.max_num_features));
     }
+}
+
+#[test]
+fn a_new_workspace_reads_back_the_new_workspace_mipmap_options() {
+    let dir = tempfile::tempdir().unwrap();
+    for options in [SfmtoolWorkspaceOptions::default(), custom()] {
+        write_sfmtool_workspace_marker(dir.path(), &options).unwrap();
+        assert_eq!(
+            crate::workspace::read_mipmap_options(dir.path()).unwrap(),
+            Some(NEW_WORKSPACE_MIPMAP_OPTIONS)
+        );
+    }
+    assert_eq!(
+        NEW_WORKSPACE_MIPMAP_OPTIONS,
+        crate::camera::mipmap::MipmapOptions {
+            out_of_core_long_side: 1536,
+            jpeg_quality: 95,
+            full_resolution_jpeg_quality: 95,
+        }
+    );
 }
 
 #[test]

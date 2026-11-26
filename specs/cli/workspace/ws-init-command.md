@@ -73,6 +73,16 @@ No flag sets it. Editing the key in `.sfm-workspace.json` changes the options
 the next extraction uses, but not the recorded `feature_prefix_dir`, which
 keeps the name of the options `sfm ws init` wrote.
 
+Every tool's file ends with the `mipmap_options` object of
+[mipmaps.md § "The workspace setting"](../../core/camera/mipmaps.md#the-workspace-setting),
+`out_of_core_long_side` 1536 and both qualities 95, so the new workspace reads
+each photograph with a side over 1536 px from its mipmaps under
+`.sfm-mipmaps/`, a tile at a time, rather than decoding it whole. No flag sets
+it; a workspace changes the values by editing the object, and
+`sfm ws mipmaps --prune` then deletes the files made at an old quality
+([ws-mipmaps-command.md](ws-mipmaps-command.md)). `--force` writes the
+object too, as part of the fresh file.
+
 The `sfmtool` tool's file is written by `write_sfmtool_workspace_marker` in
 [workspace/marker.rs](../../../crates/sfmtool-core/src/workspace/marker.rs),
 the one writer of a new `sfmtool` workspace, which Python's `init_workspace`
@@ -80,7 +90,8 @@ calls through its binding and whose options
 `get_default_sfmtool_feature_options` returns. It writes the record as
 Python's `json.dump(record, f, indent=2)` writes it, with LF line breaks on
 every platform. The `colmap` and `opencv` files are written by
-`init_workspace` itself.
+`init_workspace` itself, which takes their `mipmap_options` from the binding
+`new_workspace_mipmap_options`, so every tool records the one object.
 
 `use_gpu` is the one option excluded from the feature-cache hash
 (`feature_prefix_dir`): GPU vs CPU is a hardware/performance choice, so toggling
@@ -91,8 +102,12 @@ always differs from one a version 1 workspace named. `--force` writes fresh
 options from the tool's defaults and the flags, dropping any hand-edited option;
 the old folder stays on disk, and the named image lists file is not touched.
 
-The command prints the tool, its main options, the `image_to_gray` conversion
-and the `feature_prefix_dir`.
+The command prints the tool, its main options, the `image_to_gray` conversion,
+the `feature_prefix_dir` and the `mipmap_options`:
+
+```
+  mipmap_options: photographs with a side over 1536 px are read from mipmaps, JPEG quality 95 (95 at full resolution)
+```
 
 ## Usage Examples
 

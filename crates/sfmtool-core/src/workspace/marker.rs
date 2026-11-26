@@ -9,8 +9,8 @@
 //! it through its binding, so the options a new workspace records cannot
 //! differ between Rust and Python. The text is what Python's `json.dump(...,
 //! indent=2)` writes for the record, with the keys in the order `sfm ws init`
-//! has always written them, so a workspace made by this writer is the same
-//! file, byte for byte, as one made before it existed on Linux and macOS.
+//! has always written them and `mipmap_options` last, so the file is the one
+//! Python's writer would write for the same record on Linux and macOS.
 
 use std::path::Path;
 
@@ -20,6 +20,7 @@ use super::feature_options::{
     feature_prefix_dir, feature_type_for_tool, write_python_float, write_python_string,
     SFMTOOL_TOOL, WORKSPACE_VERSION,
 };
+use super::mipmap_options::{mipmap_options_json, NEW_WORKSPACE_MIPMAP_OPTIONS};
 use crate::features::sift::{ImageToGray, SiftParams};
 
 /// The `double_image_below_long_side` a new workspace records: an image
@@ -91,14 +92,16 @@ impl SfmtoolWorkspaceOptions {
 }
 
 /// The keys of the record in the order `sfm ws init` writes them: the
-/// record's own, then the feature options', then `image_to_gray`'s. A key
-/// not listed would follow the listed ones in sorted order.
+/// record's own, then the feature options', then `image_to_gray`'s, then
+/// `mipmap_options`'. A key not listed would follow the listed ones in sorted
+/// order.
 const KEY_ORDER: &[&str] = &[
     "version",
     "feature_tool",
     "feature_type",
     "feature_options",
     "feature_prefix_dir",
+    "mipmap_options",
     "octave_layers",
     "sigma",
     "blur_radius_factor",
@@ -117,12 +120,17 @@ const KEY_ORDER: &[&str] = &[
     "image_to_gray",
     "formula",
     "quantize_bits",
+    "out_of_core_long_side",
+    "jpeg_quality",
+    "full_resolution_jpeg_quality",
 ];
 
 /// The text of a new `sfmtool` workspace's `.sfm-workspace.json`: version
 /// [`WORKSPACE_VERSION`], the `sfmtool` tool, its `feature_type`, the
 /// options' [`feature_options`](SfmtoolWorkspaceOptions::feature_options),
-/// and the `feature_prefix_dir` [`feature_prefix_dir`] names from them.
+/// the `feature_prefix_dir` [`feature_prefix_dir`] names from them, and the
+/// `mipmap_options` object of [`NEW_WORKSPACE_MIPMAP_OPTIONS`], which turns
+/// the out-of-core tier on for the new workspace.
 ///
 /// It is written as Python's `json.dump(record, f, indent=2)` writes it: two
 /// spaces an indent level, `", "` and `": "` separators with no space before
@@ -136,6 +144,7 @@ const KEY_ORDER: &[&str] = &[
 /// let text = sfmtool_workspace_marker(&SfmtoolWorkspaceOptions::default());
 /// let record: serde_json::Value = serde_json::from_str(&text).unwrap();
 /// assert_eq!(record["feature_options"]["double_image_below_long_side"], 4096);
+/// assert_eq!(record["mipmap_options"]["out_of_core_long_side"], 1536);
 /// assert!(text.starts_with("{\n  \"version\": 2,\n  \"feature_tool\": \"sfmtool\",\n"));
 /// ```
 pub fn sfmtool_workspace_marker(options: &SfmtoolWorkspaceOptions) -> String {
@@ -148,6 +157,7 @@ pub fn sfmtool_workspace_marker(options: &SfmtoolWorkspaceOptions) -> String {
         "feature_type": feature_type,
         "feature_options": feature_options,
         "feature_prefix_dir": prefix_dir,
+        "mipmap_options": mipmap_options_json(&NEW_WORKSPACE_MIPMAP_OPTIONS),
     });
     let mut text = String::new();
     write_indented(&record, 0, &mut text);

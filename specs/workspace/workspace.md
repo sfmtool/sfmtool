@@ -124,12 +124,30 @@ carry the `image_to_gray` object
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
 
-The file has one other key, which no command writes: a `mipmap_options` object,
-which turns on stored reduced copies of large photographs and holds their size
-threshold and JPEG qualities, read and validated by `read_mipmap_options`
-([mipmaps.md](../core/camera/mipmaps.md#the-workspace-setting)). `sfm ws init`
-writing it is proposed in
+The file `sfm ws init` writes has one more key, after `feature_prefix_dir`: a
+`mipmap_options` object, which turns on stored reduced copies of large
+photographs, their mipmaps, and holds their size threshold and JPEG
+qualities, read and validated by `read_mipmap_options`
+([mipmaps.md](../core/camera/mipmaps.md#the-workspace-setting)):
+
+```json
+"mipmap_options": {
+  "out_of_core_long_side": 1536,
+  "jpeg_quality": 95,
+  "full_resolution_jpeg_quality": 95
+}
+```
+
+`sfm ws init` writes it with these values for every feature tool. The key is
+optional: a file without it, such as one made before `sfm ws init` wrote it,
+decodes every photograph whole, and `sfm ws upgrade` leaves it absent, since
+adding it changes which pixels the kernels read for every photograph over
+the threshold. `sfm ws mipmaps --enable`, which adds it to an existing
+workspace, is planned in step 17b of
 [out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+The key needs no new version of the file: version 2 readers read it, and a
+reader that does not know it, as sfmtool 0.4.1's does not, reads every
+photograph whole, which misreads nothing the file holds.
 `sfm ws mipmaps` makes, checks and prunes the files under the workspace's
 `.sfm-mipmaps/`
 ([ws-mipmaps-command.md](../cli/workspace/ws-mipmaps-command.md)).

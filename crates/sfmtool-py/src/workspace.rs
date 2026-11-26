@@ -4,8 +4,9 @@
 //! Bindings for the files in a workspace root that configure the workspace as
 //! a whole (`sfmtool_core::workspace`): its named image lists and their slices,
 //! the rules of the feature options its `.sfm-workspace.json` records, the
-//! upward search that finds the workspace a path is in, and the upgrade that
-//! brings a workspace's files to the current versions.
+//! upward search that finds the workspace a path is in, the `mipmap_options`
+//! a new workspace records, and the upgrade that brings a workspace's files
+//! to the current versions.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -17,7 +18,7 @@ use sfmtool_core::workspace::{
     is_named_image_list_name, sfmtool_workspace_marker, split_named_image_list_value,
     write_sfmtool_workspace_marker, NamedImageList, NamedImageListEntry, NamedImageListMember,
     NamedImageListSlice, NamedImageLists, NamedImageListsError, SfmtoolWorkspaceOptions,
-    NAMED_IMAGE_LISTS_FILE_NAME, WORKSPACE_VERSION,
+    NAMED_IMAGE_LISTS_FILE_NAME, NEW_WORKSPACE_MIPMAP_OPTIONS, WORKSPACE_VERSION,
 };
 
 use crate::helpers::py_to_serde;
@@ -504,8 +505,9 @@ fn sfmtool_workspace_options(
 /// The record is version 2 for the ``sfmtool`` feature tool: its default
 /// SIFT options with ``double_image_below_long_side`` at 4096, the feature
 /// cap ``max_num_features`` (8192 when ``None``) and the grey conversion
-/// ``image_to_gray`` (BT.709 luma, unrounded, when ``None``), and the
-/// ``feature_prefix_dir`` named from them. It is written as
+/// ``image_to_gray`` (BT.709 luma, unrounded, when ``None``), the
+/// ``feature_prefix_dir`` named from them, and the ``mipmap_options`` of
+/// ``new_workspace_mipmap_options``. It is written as
 /// ``json.dump(record, f, indent=2)`` writes it, with ``\n`` line breaks, so
 /// ``json.loads`` of it gives the record with its keys in the order written.
 ///
@@ -540,6 +542,27 @@ fn write_sfmtool_workspace_marker_py(
 ) -> PyResult<String> {
     let options = sfmtool_workspace_options(max_num_features, image_to_gray);
     Ok(write_sfmtool_workspace_marker(&workspace_dir, &options)?)
+}
+
+/// The ``mipmap_options`` object a new workspace records, as a dict with its
+/// keys in the order they are written: ``out_of_core_long_side`` 1536,
+/// ``jpeg_quality`` 95 and ``full_resolution_jpeg_quality`` 95.
+///
+/// ``sfmtool_workspace_marker`` writes it for the ``sfmtool`` tool, and
+/// ``init_workspace`` writes it for the ``colmap`` and ``opencv`` tools. A new
+/// dict is returned on each call. See ``specs/core/camera/mipmaps.md`` § "The
+/// workspace setting".
+#[pyfunction(name = "new_workspace_mipmap_options")]
+fn new_workspace_mipmap_options_py(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
+    let options = NEW_WORKSPACE_MIPMAP_OPTIONS;
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("out_of_core_long_side", options.out_of_core_long_side)?;
+    dict.set_item("jpeg_quality", options.jpeg_quality)?;
+    dict.set_item(
+        "full_resolution_jpeg_quality",
+        options.full_resolution_jpeg_quality,
+    )?;
+    Ok(dict)
 }
 
 /// Bring the tree of workspaces at `path` to the current file versions, and
@@ -719,6 +742,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(recorded_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(sfmtool_workspace_marker_py, m)?)?;
     m.add_function(wrap_pyfunction!(write_sfmtool_workspace_marker_py, m)?)?;
+    m.add_function(wrap_pyfunction!(new_workspace_mipmap_options_py, m)?)?;
     m.add_function(wrap_pyfunction!(upgrade_workspace_py, m)?)?;
     m.add("NAMED_IMAGE_LISTS_FILE_NAME", NAMED_IMAGE_LISTS_FILE_NAME)?;
     m.add("WORKSPACE_VERSION", WORKSPACE_VERSION)?;
