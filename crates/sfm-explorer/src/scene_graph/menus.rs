@@ -6,7 +6,8 @@
 //!
 //! One menu per row kind. The reconstruction row's ([`node_context_menu`])
 //! carries the whole-node actions (select, zoom to fit, align, reset and bake
-//! transform, tint, bundle adjust, retriangulate, refit, prune covered
+//! transform, scale to the median measurement, tint, bundle adjust,
+//! retriangulate, refit, prune covered
 //! observations, build the .sift files and the index files, convert to embedded
 //! patches, close),
 //! the three
@@ -110,6 +111,51 @@ fn show_transform_entries(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOut
         );
     if out.hit(row_id(node.id, "bake_transform"), bake).clicked() {
         out.response.bake_transform = Some(node.id);
+        ui.close();
+    }
+    show_scale_to_median_measurement_entry(ui, node, out);
+}
+
+/// What the entry that scales a node to the unit its stored distance
+/// measurements imply is called, in the menu and in the tests that aim at it.
+pub(crate) const SCALE_TO_MEDIAN_MEASUREMENT: &str = "Scale to Median Measurement...";
+
+/// `Scale to Median Measurement...`, directly under `Bake Transform`: like the
+/// bake it writes a similarity into the reconstruction's own numbers as one
+/// version, here the uniform scale the measurements give, behind a dialog that
+/// asks for the unit and shows how well the measurements agree.
+///
+/// Greyed rather than hidden when it cannot run: a busy node and an open
+/// camera model proposal first, on their own sentences, as on every sibling
+/// entry that makes a version, then the gate the wire asks too
+/// (`measurement_scale_prompt::refusal`): no stored distance measurement, or
+/// none that gives a factor.
+fn show_scale_to_median_measurement_entry(
+    ui: &mut egui::Ui,
+    node: &SceneNode,
+    out: &mut TreeOutput,
+) {
+    let refusal = out
+        .edit_refusal(node.id)
+        .map(str::to_string)
+        .or_else(|| crate::measurement_scale_prompt::refusal(node));
+    let entry = ui
+        .add_enabled(
+            refusal.is_none(),
+            egui::Button::new(SCALE_TO_MEDIAN_MEASUREMENT),
+        )
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Scale this reconstruction to a physical unit by the median of the factors its \
+             distance measurements imply, as one version. Asks first for the unit, and shows \
+             how well the measurements agree. The picture does not move; Undo (Ctrl+Z) puts \
+             the scale back.",
+        );
+    if out
+        .hit(row_id(node.id, "scale_to_median_measurement"), entry)
+        .clicked()
+    {
+        out.response.scale_to_median_measurement = Some(node.id);
         ui.close();
     }
 }

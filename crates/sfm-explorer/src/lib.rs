@@ -53,6 +53,7 @@ mod layout;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod measurement_marks;
+mod measurement_scale_prompt;
 mod measurement_view;
 mod measurements;
 mod metrics;

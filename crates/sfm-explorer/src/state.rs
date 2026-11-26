@@ -791,6 +791,10 @@ pub(crate) struct AppState {
     /// [`crate::bundle_adjust_prompt`].
     pub(crate) bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt,
 
+    /// The dialog `Scale to Median Measurement...` opens, and the unit it
+    /// asks for. See [`crate::measurement_scale_prompt`].
+    pub(crate) measurement_scale_prompt: crate::measurement_scale_prompt::MeasurementScalePrompt,
+
     /// The camera model proposal open on one camera, or `None`. Viewer state,
     /// like the Move Camera lock's pending pose: nothing of it is in a version
     /// until it is applied. See [`crate::camera_model_proposal`].
@@ -1131,6 +1135,8 @@ impl AppState {
             goto_point: GotoPointDialog::default(),
             close_prompt: crate::close_prompt::ClosePrompt::default(),
             bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt::default(),
+            measurement_scale_prompt:
+                crate::measurement_scale_prompt::MeasurementScalePrompt::default(),
             camera_model_proposal: None,
             camera_model_switched: None,
             field_before_proposal: None,
@@ -1819,6 +1825,18 @@ impl AppState {
         let label = node.label.clone();
         let gates = crate::bundle_adjust_prompt::BundleAdjustGates::of(node.edited());
         self.bundle_adjust_prompt.ask(id, label, gates);
+    }
+
+    /// Open the Scale to Median Measurement dialog on `id`, on the unit the
+    /// file declares or, where it declares none, the one most of its usable
+    /// measurements are stated in (`measurement_scale_prompt::default_unit`).
+    ///
+    /// The one entry point, so whatever opens the dialog opens it on the same
+    /// unit.
+    pub(crate) fn open_measurement_scale(&mut self, id: ReconId) {
+        let Some(node) = self.node(id) else { return };
+        let unit = crate::measurement_scale_prompt::default_unit(node);
+        self.measurement_scale_prompt.ask(id, unit);
     }
 
     /// Select a 3D point, and with it the reconstruction that owns it.

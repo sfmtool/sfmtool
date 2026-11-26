@@ -185,6 +185,11 @@ pub(crate) struct SceneGraphResponse {
     /// `Bake Transform` chosen: write this node's display transform into its
     /// reconstruction and return it to its own frame, as one version.
     pub(crate) bake_transform: Option<ReconId>,
+    /// `Scale to Median Measurement...` chosen from a reconstruction's context
+    /// menu: ask, through `AppState::open_measurement_scale`, which unit to
+    /// scale this node to, and on `Apply` scale it by the median of the
+    /// factors its distance measurements imply, as its next version.
+    pub(crate) scale_to_median_measurement: Option<ReconId>,
     /// `Convert to Embedded Patches` chosen from a reconstruction's context
     /// menu: give every point a patch frame and carry each observation's
     /// keypoint inline, as the node's next version. A bulk edit, and a long

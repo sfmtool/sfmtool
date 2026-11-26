@@ -227,6 +227,36 @@ pub(crate) fn measured_reconstruction(world_space_unit: Option<&str>) -> SfmrRec
     recon
 }
 
+/// `recon`, a reconstruction made by [`measured_reconstruction`], with only
+/// its distance measurements at `keep`, in that order.
+pub(crate) fn keeping(mut recon: SfmrReconstruction, keep: &[usize]) -> SfmrReconstruction {
+    let m = recon
+        .image_set
+        .measurements
+        .distance
+        .take()
+        .expect("the fixture stores distance measurements");
+    let n = keep.len();
+    let mut image_indexes = Array2::<u32>::zeros((n, 2));
+    let mut endpoints_xy = Array3::<f32>::zeros((n, 2, 2));
+    for (row, &i) in keep.iter().enumerate() {
+        for k in 0..2 {
+            image_indexes[[row, k]] = m.image_indexes[[i, k]];
+            for c in 0..2 {
+                endpoints_xy[[row, k, c]] = m.endpoints_xy[[i, k, c]];
+            }
+        }
+    }
+    recon.image_set.measurements.distance = Some(DistanceMeasurementsData {
+        distances: Array1::from_iter(keep.iter().map(|&i| m.distances[i])),
+        units: Array1::from_iter(keep.iter().map(|&i| m.units[i])),
+        image_indexes,
+        endpoints_xy,
+        labels: keep.iter().map(|&i| m.labels[i].clone()).collect(),
+    });
+    recon
+}
+
 /// The fixture in a fresh viewer state, as its one node, with its id.
 pub(crate) fn measured_state(
     world_space_unit: Option<&str>,
