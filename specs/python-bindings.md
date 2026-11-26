@@ -110,7 +110,12 @@ loads the extension with `dlopen`, and a shared library built with
 Linux with "cannot allocate memory in static TLS block". On Windows the
 feature changes nothing. `mimalloc` is MIT-licensed and compiles its C
 sources with the `cc` crate, which needs a C compiler on every platform the
-extension builds on, as `zstd-sys` and `libsqlite3-sys` already do.
+extension builds on, as `zstd-sys` and `libsqlite3-sys` already do. On
+Linux the pixi environments set `CC_x86_64_unknown_linux_gnu` to the conda
+compiler that the conda `rust` package links with, so C code is compiled
+against the same glibc 2.28 sysroot it is linked against: compiled with the
+system `cc` against glibc 2.38 or later, `mimalloc` calls `__isoc23_strtol`,
+which that sysroot lacks, and the viewer binary fails to link.
 
 ## Where Python code reads a binding
 
