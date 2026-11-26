@@ -1658,7 +1658,7 @@ tiles. Steps 14 to 16 build the out-of-core tier, step 14 in seven pull
 requests, without turning it on anywhere but in tests: until step 17, neither
 `sfm ws init` nor any other command writes `mipmap_options`, so no workspace
 has the object unless its owner writes it by hand, and every photograph stays
-in core. Step 17 turns the tier on.
+in core. Step 17 turns the tier on. Every step is built.
 
 1. **Depth by size.** Built: photograph pyramids of `full_levels` depth
    everywhere, `PhotographCache::new` without `levels`, and no
@@ -4320,7 +4320,8 @@ in core. Step 17 turns the tier on.
       `read` reads only the files. Tests: a cache passed to
       `write_web_export` and to `ImagePyramidSet.read` makes each mipmap
       once.
-17. **The tier on.** `sfm ws init` writes `mipmap_options` with its three
+17. **The tier on.** **Built**, in 17a to 17d below, so every step of the
+    plan is built. `sfm ws init` writes `mipmap_options` with its three
     values, `sfm ws mipmaps --enable` adds it to an existing workspace, the
     viewer's one-line notice for a workspace without it, the line
     recommending the object (open question 21) that `sfm cluster-patches`,
@@ -4454,7 +4455,24 @@ in core. Step 17 turns the tier on.
       `sfm inspect --strips` names `sfm ws mipmaps --enable <workspace>` for
       each workspace without the object, in place of the object to add by
       hand. Tests: the line names the command and the workspace.
-    - **17d, the viewer's notice.** The first time in a session the
+    - **17d, the viewer's notice.** **Built**
+      ([photograph_tier_notice.rs](../../crates/sfm-explorer/src/state/photograph_tier_notice.rs),
+      [action-log.md § What gets logged](../gui/action-log.md#what-gets-logged),
+      [photograph-cache.md § In the viewer](../core/camera/photograph-cache.md#in-the-viewer)),
+      with these choices the plan left open. The viewer says it as one
+      Action Log row of its own, kind `Session`, as it reports the system
+      font search, so the 3D view's status line shows it until the next
+      entry; nothing has to be dismissed. The cache notes the photograph:
+      `request_layout` and `read_layout` keep the first one they find with a
+      side over `DEFAULT_OUT_OF_CORE_LONG_SIDE` in a workspace whose file
+      has no object, and `PhotographCache::large_photograph_without_mipmap_options`
+      answers it, reading nothing and taking no lock, so the frame asks
+      every time, before the MCP drain, and `AppState` remembers that the
+      session has said it. A photograph in no workspace is not one, nor is
+      one of a workspace whose object has a threshold that keeps it in core.
+      The notice comes when a panel first reads such a photograph's layout,
+      as when an image is selected, not at open. The plan as written: the
+      first time in a session the
       photograph cache's layout read finds a photograph with a side over
       1536 px in a workspace without the object, the viewer says once, with
       the text the draft's § "Mip level files" gives it, *This workspace

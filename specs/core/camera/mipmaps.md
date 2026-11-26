@@ -336,7 +336,10 @@ photograph of a workspace whose object is invalid until the file is fixed
 every new workspace, after `feature_prefix_dir`, for each feature tool
 ([ws-init-command.md](../../cli/workspace/ws-init-command.md#persisted-settings)),
 and `sfm ws mipmaps --enable` adds it, with these values unless its options
-give others, to a workspace that has none.
+give others, to a workspace that has none. The viewer names that command the
+first time in a session it shows a photograph with a side over 1536 px in a
+workspace without the object
+([action-log.md § "What gets logged"](../../gui/action-log.md#what-gets-logged)).
 The threshold of 1536 px keeps memory bounded for a job that reads many
 photographs of a few megapixels, such as those of a 24-megapixel camera or a
 phone: an in-core photograph is decoded whole, all its pixels at once, when a

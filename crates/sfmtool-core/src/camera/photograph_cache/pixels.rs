@@ -64,6 +64,7 @@ impl PhotographCache {
     pub fn read_layout(&self, path: &Path) -> Result<PhotographLayout, GetError> {
         let setting = self.setting_for(path);
         let (width, height) = header(path, &setting)?;
+        self.note_large_in_core(path, &setting, width, height);
         let layout = match self.check_files(path, &setting) {
             Checked::InCore => PhotographLayout {
                 layout: Arc::new(self.layout_for(width, height)),

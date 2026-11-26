@@ -36,13 +36,16 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use rayon::prelude::*;
 
 use crate::camera::image::{image_dimensions, ImageU8};
-use crate::camera::mipmap::{MipmapOptions, PyramidLayout, MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
+use crate::camera::mipmap::{
+    MipmapOptions, PyramidLayout, DEFAULT_OUT_OF_CORE_LONG_SIDE, MAX_JPEG_SIDE,
+    PHOTOGRAPH_TILE_SIZE,
+};
 use crate::camera::tiled_photograph::{
     cut_image, tile_count, CutImage, PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
 };
@@ -1056,6 +1059,10 @@ struct Shared {
     /// current, which a check of the coarsest file alone does not show
     /// ([`files::Stale`]). Its lock is taken with no other lock held.
     stale: Mutex<HashMap<PathBuf, files::Stale>>,
+    /// The first photograph a layout read of this cache found with a side
+    /// over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in a workspace whose file has
+    /// no `mipmap_options`, kept for the cache's life.
+    large_in_core: OnceLock<PathBuf>,
     /// How many times a workspace file has been read for its
     /// `mipmap_options`.
     #[cfg(test)]
@@ -1162,6 +1169,7 @@ impl PhotographCache {
                 sources: Mutex::new(HashMap::new()),
                 not_written: Mutex::new(HashMap::new()),
                 stale: Mutex::new(HashMap::new()),
+                large_in_core: OnceLock::new(),
                 #[cfg(test)]
                 workspace_reads: AtomicU64::new(0),
                 #[cfg(test)]
@@ -1592,6 +1600,32 @@ impl PhotographCache {
         }
         lock_ignoring_poison(&self.shared.stale).clear();
         lock_ignoring_poison(&self.shared.not_written).clear();
+    }
+
+    /// The first photograph a layout read of this cache
+    /// ([`Self::request_layout`] or [`Self::read_layout`]) found with a side
+    /// over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in a workspace whose file has
+    /// no `mipmap_options`, so that it is decoded whole where a new
+    /// workspace would read it a tile at a time; `None` until a read finds
+    /// one. A photograph in no workspace is not one, since there is no
+    /// workspace file to add the object to. Reads nothing and takes no lock,
+    /// so the viewer asks every frame; neither [`Self::forget`] nor
+    /// [`Self::clear`] drops it.
+    pub fn large_photograph_without_mipmap_options(&self) -> Option<&Path> {
+        self.shared.large_in_core.get().map(PathBuf::as_path)
+    }
+
+    /// Keep `path` as [`Self::large_photograph_without_mipmap_options`]'
+    /// answer when it is the first such photograph: `width` x `height` read
+    /// under `setting`.
+    fn note_large_in_core(&self, path: &Path, setting: &WorkspaceSetting, width: u32, height: u32) {
+        if setting.root.is_some()
+            && matches!(setting.options, Ok(None))
+            && width.max(height) > DEFAULT_OUT_OF_CORE_LONG_SIDE
+            && self.shared.large_in_core.get().is_none()
+        {
+            let _ = self.shared.large_in_core.set(path.to_path_buf());
+        }
     }
 
     /// Tiles, file entries and bytes kept, the budget, the hit, miss and

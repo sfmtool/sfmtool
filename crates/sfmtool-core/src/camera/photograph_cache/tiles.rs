@@ -361,6 +361,7 @@ impl PhotographCache {
         let layout = match header(path, &setting) {
             Err(e) => PeekedLayout::Unreadable(e),
             Ok((width, height)) => {
+                self.note_large_in_core(path, &setting, width, height);
                 let in_core = || PeekedLayout::Known(Arc::new(self.layout_for(width, height)));
                 if !is_out_of_core(&setting, width, height) {
                     in_core()

@@ -38,6 +38,7 @@ pub(crate) use photograph_requests::{
 pub(crate) mod build_mipmaps;
 mod ops;
 mod photograph_requests;
+mod photograph_tier_notice;
 mod save;
 pub(crate) mod thumbnail_fills;
 
@@ -1000,6 +1001,10 @@ pub(crate) struct AppState {
     /// [`thumbnail_fills`].
     pub(crate) thumbnail_fills: thumbnail_fills::ThumbnailFills,
 
+    /// Whether this session has said that a workspace decodes large
+    /// photographs whole. See [`photograph_tier_notice`].
+    pub(crate) photograph_tier_notice_given: bool,
+
     /// The Track Table panel's reference picks: the references picked for
     /// visible points that store none, for the version at their node's
     /// cursor, and the quiet task picking them. Session state, not part of
@@ -1165,6 +1170,7 @@ impl AppState {
             track_table_jobs: Default::default(),
             build_mipmaps: Default::default(),
             thumbnail_fills: Default::default(),
+            photograph_tier_notice_given: false,
             reference_picks: Default::default(),
             filter_3d: None,
             track_table_query: Default::default(),
