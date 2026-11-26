@@ -1061,11 +1061,9 @@ pub(super) fn bake_reconstruction_transform(state: &mut AppState, label: &str) -
 }
 
 /// `scale_reconstruction_to_median_measurement`: the Scale to Median
-/// Measurement dialog's `Apply`, in `unit` or the unit the dialog opens on,
-/// with the picture kept still as the dialog keeps it.
+/// Measurement dialog's `Apply`, in `unit` or the unit the dialog opens on.
 pub(super) fn scale_reconstruction_to_median_measurement(
     state: &mut AppState,
-    viewer: &mut crate::viewer_3d::Viewer3D,
     label: &str,
     unit: Option<sfmtool_core::LengthUnit>,
 ) -> JsonReply {
@@ -1076,7 +1074,7 @@ pub(super) fn scale_reconstruction_to_median_measurement(
     // The edit refuses in the words the greyed menu entry and the dialog's
     // greyed Apply carry.
     edited(state, id, |state| {
-        crate::display_transform::scale_to_median_measurement(viewer, state, id, unit)
+        state.scale_node_to_median_measurement(id, unit)
     })
 }
 

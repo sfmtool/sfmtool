@@ -123,7 +123,8 @@ pub(crate) const SCALE_TO_MEDIAN_MEASUREMENT: &str = "Scale to Median Measuremen
 /// `Scale to Median Measurement...`, directly under `Bake Transform`: like the
 /// bake it writes a similarity into the reconstruction's own numbers as one
 /// version, here the uniform scale the measurements give, behind a dialog that
-/// asks for the unit and shows how well the measurements agree.
+/// asks for the unit and shows how well the measurements agree. Unlike the
+/// bake it moves the picture, since the view is left where it is.
 ///
 /// Greyed rather than hidden when it cannot run: a busy node and an open
 /// camera model proposal first, on their own sentences, as on every sibling
@@ -148,8 +149,8 @@ fn show_scale_to_median_measurement_entry(
         .on_hover_text(
             "Scale this reconstruction to a physical unit by the median of the factors its \
              distance measurements imply, as one version. Asks first for the unit, and shows \
-             how well the measurements agree. The picture does not move; Undo (Ctrl+Z) puts \
-             the scale back.",
+             how well the measurements agree. The 3D view stays where it is, so the scene is \
+             drawn larger or smaller; Z frames it again. Undo (Ctrl+Z) puts the scale back.",
         );
     if out
         .hit(row_id(node.id, "scale_to_median_measurement"), entry)

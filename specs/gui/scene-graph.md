@@ -396,8 +396,9 @@ fixed-height for virtualization.
   the panel reports it as `SceneGraphResponse::scale_to_median_measurement` and
   `dock.rs` answers with `AppState::open_measurement_scale`. It sits directly
   under `Bake Transform` because, like the bake, it writes a similarity into
-  the node's own numbers as one version and keeps the picture still: the four
-  entries of that group set where a reconstruction is and how large. It is
+  the node's own numbers as one version: the four entries of that group set where
+  a reconstruction is and how large. Unlike the bake it leaves the 3D view where
+  it is, so the scene is drawn larger or smaller and `Z` frames it again. It is
   greyed with the reason on a busy node, under a camera model proposal, on a
   version that stores no distance measurement, and where no measurement gives
   a factor in any unit; past the busy and proposal sentences, the gate is
@@ -1252,13 +1253,10 @@ version does not make a step an edit.
 The field lives on the history rather than on the node, and the node offers it
 read-only. An assignment that skipped the push would be invisible until someone
 pressed `Ctrl+Z`, so there is none to make: `History::push_transform` is the
-reframe, `History::push_pair` with a transform is the bake and Scale to Median
-Measurement, and nothing else writes one. Scale to Median Measurement does not
-cross the door the bake is: it writes a scale of its own into the value, and
-states in the same version the transform that draws the scaled value where the
-old one was drawn, the old transform with its scale divided by the factor
-([edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)
-§ "Keeping the picture still").
+reframe, `History::push_pair` with a transform is the bake, and nothing else
+changes one. Scale to Median Measurement pushes its version through
+`History::push_pair` too, stating the transform the node already has, unchanged
+([edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)).
 
 ### Align to…
 

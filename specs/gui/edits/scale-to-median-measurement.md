@@ -8,8 +8,8 @@ action asks for a physical unit (millimetres, centimetres, metres, inches or
 feet), shows in a dialog how well the measurements agree on the size of a scene
 unit in it, and on `Apply` multiplies every coordinate by the median of their
 factors and declares the unit, as one version: listed in the Edit History
-panel, stepped back by `Ctrl+Z`, and written by a save. The picture on screen
-does not move.
+panel, stepped back by `Ctrl+Z`, and written by a save. The 3D view is not touched, so the scene is drawn larger or
+smaller from where the camera stands.
 
 Related specs: [../../core/reconstruction/measurement-scale.md](../../core/reconstruction/measurement-scale.md)
 (the factor and the statistics, `distance_measurement_scale`),
@@ -17,7 +17,7 @@ Related specs: [../../core/reconstruction/measurement-scale.md](../../core/recon
 readings and the per-measurement median line), [bake-transform.md](bake-transform.md)
 (the closest edit, whose mechanism this shares), [bundle-adjust.md](bundle-adjust.md)
 (the closest dialog), [../scene-graph.md](../scene-graph.md) § "The transform"
-(the display transform this edit sets to keep the picture still),
+(the display transform, which this edit leaves as it is),
 [../document-model.md](../document-model.md) and
 [../edit-history.md](../edit-history.md) (the version it pushes),
 [../../cli/reconstruction/xform/scale-by-measurements-command.md](../../cli/reconstruction/xform/scale-by-measurements-command.md)
@@ -33,9 +33,10 @@ in the Scene Graph panel, directly under `Bake Transform`, in the separator
 group of `Align to ▸`, `Reset Transform` and `Bake Transform`. The four are the
 entries that set where and how large a reconstruction is: compute a transform,
 discard it, keep it, and here give it a physical size. Like the bake, this one
-writes a similarity into the reconstruction's own numbers as one version and
-leaves the picture where it was. Its spelling follows the menu's other entry
-that opens a dialog, `Bundle Adjust...`.
+writes a similarity into the reconstruction's own numbers as one version;
+unlike the bake, it moves the picture, since it leaves the view where it is.
+Its spelling follows the menu's other entry that opens a dialog, `Bundle
+Adjust...`.
 
 It acts on the node whose row was right-clicked, whatever the selection is,
 because the edit is of the whole reconstruction and the row is where one is
@@ -171,33 +172,24 @@ on screen is the one that gets answered.
 
 ```rust
 impl AppState {
-    /// Scale `id` to `unit` by the median measurement factor, as one version;
-    /// `Ok(Some(s))` when the caller is to scale the 3D view by `s`.
+    /// Scale `id` to `unit` by the median measurement factor, as one version.
     pub(crate) fn scale_node_to_median_measurement(
         &mut self,
         id: ReconId,
         unit: LengthUnit,
-    ) -> Result<Option<f64>, String>;
+    ) -> Result<(), String>;
 }
-
-/// The same, with the 3D view scaled where the edit says to: the one entry
-/// point for the dialog and the wire.
-pub(crate) fn scale_to_median_measurement(
-    viewer: &mut Viewer3D,
-    state: &mut AppState,
-    id: ReconId,
-    unit: LengthUnit,
-) -> Result<(), String>;
 ```
 
 In [display_transform.rs](../../../crates/sfm-explorer/src/display_transform.rs),
-beside the bake, whose push it shares (`AppState::push_similarity`). A **bulk
-edit**:
+beside the bake, whose push it shares (`AppState::push_similarity`). The dialog
+and the wire both call it. A **bulk edit**:
 
 1. Refuse a busy node, a node a camera model proposal is open on, a node that
    is no longer loaded, the menu entry's gate, and a scale that is an error in
    `unit`, each in the words the greyed entry or `Apply` carries; and a scale
-   that would carry the node's bounds to where their squared distance is not a
+   that would carry the node's bounds, in its own coordinates or where its
+   display transform draws them, to where their squared distance is not a
    finite number, in the words the transform's own range check uses.
 2. Compute the scale with `distance_measurement_scale` over the measurements of
    the version on screen and its cached readings
@@ -208,8 +200,8 @@ edit**:
    `metadata.world_space_unit` to the unit's name; and put the bench's patch
    frames through `S` with `display_transform::bake_bench`.
 4. Push one version stating every half through `History::push_pair`: the scaled
-   value, the scaled bench, and the display transform the picture rule below
-   gives.
+   value, the scaled bench, and the display transform the node already has,
+   unchanged.
 
 `apply_se3_transform` is the one whole-reconstruction similarity, what `sfm
 xform --scale-by-measurements` reaches too: point positions, camera centres,
@@ -227,67 +219,44 @@ version and found again for the old one after an undo. Measurement View, the
 Scene tree's Measurements rows and the wire read those. The 3D view's and Image
 Detail's measurement layers are keyed by the document serial and the display
 transform, so they are built again. The GPU bundle sees a new base by pointer
-and a new transform by comparison, as after the bake. The panels' own caches
-(`forget_recon`) are dropped after the edit, by `app/modals.rs` and by the
-MCP drain (`Command::renumbers`), as after every bulk edit.
+and re-uploads it, as after the bake. The panels' own caches (`forget_recon`)
+are dropped after the edit, by `app/modals.rs` and by the MCP drain
+(`Command::renumbers`), as after every bulk edit.
 
 ---
 
-## Keeping the picture still
+## The view
 
-The factor is often near 1000, as for a reconstruction in metres scaled to
-millimetres, and a 3D view left where it was would suddenly sit a thousand
-times too close. So the edit keeps the picture still, by one of two means.
+The edit does not touch the 3D view. The viewport camera stays where it is,
+with its orientation, its orbit distance and its field of view, and the node's
+display transform is the one it had, so the scene is drawn `s` times larger
+about the transform's origin, from the same camera. A factor near 1000, as for
+a reconstruction in metres scaled to millimetres, puts the camera deep inside
+the scene; `Z` frames it again, and so does a double-click on the row.
 
-**A node drawn under a display transform `T` other than the identity**, aligned
-to another node or set from a patch, is drawn under `T·S⁻¹` afterwards: `T`'s
-rotation and translation with its scale divided by `s`. Every point, camera and
-bench patch is then drawn where it was, to rounding, and the node stays aligned
-with its partner. The camera is not touched; the scene scale is measured again
-from the loaded nodes, as after any change of a transform, so a scene scale set
-by hand on the HUD's slider goes back to the measured one.
+What the viewer does with any new version, it does with this one, and nothing
+more:
 
-**A node at the identity that is the only one loaded** keeps the identity, and
-`scale_to_median_measurement` scales the 3D view about the world origin by `s`:
-the viewport camera's position, its orbit distance and its near plane, and the
-scene scale the frustums and the target indicator are drawn at
-(`AppState::length_scale`, held to its slider's range as a seed is). The
-camera's orientation and field of view are not lengths and stay. A transition
-in flight is dropped, since its ends are in the old lengths. The picture is the
-same, and the numbers are in the new unit: the node's coordinates, and the
-view's own, since the view's world-space unit is the selected reconstruction's
-([../../GLOSSARY.md](../../GLOSSARY.md), "view's world-space unit") and a node
-alone is the selected one.
+- The scene's bounds are measured again from the uploaded value, and the near
+  plane follows them over the next frames (`ViewportCamera::update_clip_planes`
+  in `app.rs`), as it does every frame.
+- The scene scale the frustums and the target indicator are drawn at
+  (`AppState::length_scale`) is not measured again. It is re-seeded only when a
+  node arrives or a display transform changes, and this edit does neither, so
+  the frustums keep their size on screen against a scene `s` times larger. The
+  HUD's *Scene scale* slider sets it.
+- Camera view stays on its image but is not snapped to the image's scaled pose:
+  only a move of the cursor (undo, redo, a jump) snaps it again
+  (`camera_lock::resnap_camera_view`). Leaving camera view and entering it
+  again looks through the scaled camera.
 
-**A node at the identity sharing the scene with another loaded node** takes the
-first path, `T·S⁻¹` with `T` the identity, and the view is not touched. Scaling
-the view would draw every other node `s` times smaller, and would break an
-alignment another node holds to this one; the shared world's frame is not this
-node's to change. That holds for a hidden node too, which is still in the world
-and is drawn there again when its eye is turned on.
+A camera held in hand for Move Camera on the node is ended before the edit, as
+a commit where it has moved, as any other edit of the node ends it: its pending
+pose is in the old scale.
 
-**Camera view** keeps working on either path. On the first the camera's centre
-is drawn where it was. On the second the scaled viewport camera is at the
-image's scaled centre, and the view is snapped to it again
-(`camera_lock::resnap_camera_view`), as after an undo. A camera held in hand for
-Move Camera on the node is ended before the edit, as a commit where it has
-moved, as any other edit of the node ends it.
-
-**Undo** puts back the value, the bench and the transform half together. On the
-first path that leaves the picture where it was, since the old transform and
-the old value draw the same scene. On the second it does not put back the
-view's scale: the camera and the scene scale stay where the edit left them, as
-every undo leaves the view, and the reconstruction is drawn `1/s` the size, the
-frustums and the target indicator `s` times larger than before against it. `Z`
-frames it again and the HUD's *Scene scale* slider resizes the frustums. Undoing
-the view along with the value would make the view a fourth half of the version,
-which no other edit has.
-
-A file whose transform was divided by `s` and is then baked gets its old
-numbers back under the new unit's name, since the bake leaves
-`world_space_unit` alone ([bake-transform.md](bake-transform.md) § "Non-goals").
-That is the bake's rule, and it holds for any bake of a node aligned to a
-partner in another unit.
+**Undo** puts back the value and the bench, and the transform half, which the
+edit left as it was. The view is left where the edit left it, as every undo
+leaves it, so the scene is drawn at its old size again from the same camera.
 
 ---
 
@@ -315,8 +284,8 @@ writes both. The display transform is not written: it never is.
 
 `get_measurement_scale` reads what the dialog shows, in a unit or in the one
 the dialog opens on, and `scale_reconstruction_to_median_measurement` is
-`Apply`, through `scale_to_median_measurement`, so it keeps the picture still
-the same way and refuses in the same words
+`Apply`, through the same `AppState` call, so it leaves the view alone the same
+way and refuses in the same words
 ([../mcp-server.md](../mcp-server.md)). No tool opens the dialog, as none opens
 the Bundle Adjust dialog: a right-click on the row through `click` and a click
 on the entry put it up for a screenshot.
@@ -350,12 +319,9 @@ with one endpoint refused and one at infinity:
 - **The edit** (`display_transform/tests.rs`): every finite point and camera
   centre is multiplied by the factor, the unit becomes `mm`, the node goes
   dirty, and the measurements then give a factor of 1; the bench's patch frame
-  is scaled; an aligned node's picture and bench figure do not move and its
-  transform's scale is divided by the factor; a node sharing the scene keeps
-  its picture and leaves the camera alone; a node alone at the identity keeps
-  it, and the view's position, orbit distance, near plane and scene scale are
-  multiplied while a point's place in the view does not move; camera view
-  stays on its image at the image's scaled centre; an undo puts back the base,
+  is scaled; a node under a display transform keeps it bit for bit, and every
+  point and camera centre it draws is the factor times as far from the
+  transform's translation; an undo puts back the base,
   the unit, the transform bit for bit and the bench; the Action Log row names
   the node, the unit, the count and the factor; and a node with no measurement
   and a busy one are refused, the first in the menu's words, with no version.
@@ -366,7 +332,9 @@ with one endpoint refused and one at infinity:
 - **MCP** (`mcp/tests/measurements.rs`): the read's factor, statistics,
   factors and exclusions, its default unit, the write as one edit after which
   the read gives 1, and the refusal of a node with no measurement in the menu's
-  words, with the read's `refusal` the same.
+  words, with the read's `refusal` the same; and the write leaves the 3D
+  camera's position, orientation, orbit distance, near plane, field of view and
+  up direction, the scene scale and the display transform exactly as they were.
 
 `ui_basic` finds the entry in the reconstruction row's menu in a real window,
 enabled on the demo scene, which stores a distance measurement.
@@ -382,4 +350,6 @@ enabled on the demo scene, which stores a distance measurement.
 - **A scale other than the median.** The mean is shown beside it for the
   spread, as core reports it, and is not offered: one misplaced endpoint moves
   it, which is the failure the measurements are there to catch.
-- **Undoing the view with the value.** See § "Keeping the picture still".
+- **Moving the view with the scale.** Keeping the picture still, through the
+  camera or the display transform, was weighed and left out: the view stays
+  where it is, and `Z` frames the scaled scene.

@@ -169,7 +169,7 @@ Quit does (§ "`quit`").
 | `set_reconstruction_transform` | write | Set one reconstruction's display transform outright, the identity included |
 | `set_reconstruction_transform_from_patch` | write | Set it from the focused item's patch, in one of the four ways the viewport's patch menu offers |
 | `bake_reconstruction_transform` | write | Write the display transform into the reconstruction and return it to its own frame, as one version |
-| `scale_reconstruction_to_median_measurement` | write | Scale the reconstruction to a physical unit by the median of its distance measurements' factors, as one version, keeping the picture still |
+| `scale_reconstruction_to_median_measurement` | write | Scale the reconstruction to a physical unit by the median of its distance measurements' factors, as one version, leaving the 3D view where it is |
 | `solo_reconstruction` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
@@ -1771,11 +1771,10 @@ usable. `apply_refusal` is why the write would be refused right now, in the
 words of the greyed `Apply` button, and null when it would run.
 
 `scale_reconstruction_to_median_measurement` is the dialog's `Apply`, through
-the same function, so it keeps the picture still the same way: a node under a
-display transform, or sharing the scene with another node, is drawn under its
-transform divided by the factor, and a node alone at the identity keeps the
-identity while the 3D view's camera, orbit distance, near plane and scene
-scale are multiplied by the factor about the origin. It replies in the shape
+the same `AppState` call. It leaves the 3D view's camera, the scene scale and
+the node's display transform as they are, so the reconstruction is drawn the
+factor times larger from the same camera, and a `set_view` with `fit` frames it
+again. It replies in the shape
 of an edit (§ "Editing reconstruction data"), records `Kind::Edit`, and is
 refused while a background task holds the node, on a node that stores no
 distance measurement, and on one none of whose measurements gives a factor,

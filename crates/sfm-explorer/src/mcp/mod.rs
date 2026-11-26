@@ -1689,7 +1689,6 @@ pub(crate) fn apply_with_window(
             unit,
         } => done(edit::scale_reconstruction_to_median_measurement(
             state,
-            viewer,
             &reconstruction_label,
             unit,
         )),

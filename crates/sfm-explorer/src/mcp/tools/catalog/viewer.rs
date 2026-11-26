@@ -316,12 +316,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           get_measurement_scale reports, and world_space_unit becomes the \
                           unit. A bulk edit that renumbers nothing unless a point edit is \
                           pending, in which case the deleted slots close up first, as \
-                          delete_point describes; undo puts the data, the bench and the \
-                          display transform back. The picture does not move: a reconstruction \
-                          drawn under a display transform, or sharing the scene with another, \
-                          gets the transform divided by the factor, and one alone at the \
-                          identity keeps it while the 3D view's camera and scene scale are \
-                          multiplied by the factor about the origin. Refused, in the words of \
+                          delete_point describes; undo puts the data and the bench back. The \
+                          display transform and the 3D view's camera are left as they are, so \
+                          the reconstruction is drawn the factor times larger from the same \
+                          camera; set_view with fit frames it again. Refused, in the words of \
                           the greyed menu entry and Apply button, on a reconstruction with no \
                           stored distance measurement, one none of whose measurements gives a \
                           factor, and while a background task holds it.",

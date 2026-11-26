@@ -883,3 +883,54 @@ fn scaling_a_reconstruction_with_no_measurement_is_refused_in_the_menus_words() 
     assert_eq!(read["refusal"], json!(menu));
     assert_eq!(read["factor"], Value::Null);
 }
+
+/// The scale leaves the 3D view and the display transform exactly as they
+/// were: the camera, its orbit distance, its near plane and the scene scale
+/// are not touched, so the reconstruction is drawn larger from the same place.
+#[test]
+fn scaling_to_the_median_measurement_leaves_the_camera_and_the_transform_alone() {
+    let (mut state, id, mut viewer) = measured();
+    let transform = sfmtool_core::Se3Transform::new(
+        sfmtool_core::RotQuaternion::from_axis_angle(nalgebra::Vector3::new(0.0, 0.6, 0.8), 0.7)
+            .unwrap(),
+        nalgebra::Vector3::new(1.5, -2.0, 0.25),
+        2.0,
+    );
+    state
+        .set_node_transform(id, transform.clone())
+        .expect("a reframe");
+    viewer.camera.camera.position = nalgebra::Point3::new(3.0, -4.0, 5.0);
+    viewer.camera.camera.target_distance = 7.0;
+    viewer.camera.near = 0.2;
+    state.length_scale = 0.05;
+    let camera = viewer.camera.camera.clone();
+    let (near, fov, up) = (
+        viewer.camera.near,
+        viewer.camera.fov,
+        viewer.camera.world_up,
+    );
+
+    call(
+        &mut state,
+        &mut viewer,
+        "scale_reconstruction_to_median_measurement",
+        json!({ "reconstruction_label": "measured", "unit": "mm" }),
+    );
+    assert_eq!(viewer.camera.camera.position, camera.position);
+    assert_eq!(viewer.camera.camera.orientation, camera.orientation);
+    assert_eq!(viewer.camera.camera.target_distance, camera.target_distance);
+    assert_eq!(
+        (
+            viewer.camera.near,
+            viewer.camera.fov,
+            viewer.camera.world_up
+        ),
+        (near, fov, up)
+    );
+    assert_eq!(state.length_scale, 0.05);
+    let after = state.node(id).unwrap().transform();
+    assert_eq!(
+        (&after.rotation, after.translation, after.scale),
+        (&transform.rotation, transform.translation, transform.scale)
+    );
+}

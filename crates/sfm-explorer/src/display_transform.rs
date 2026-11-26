@@ -14,9 +14,8 @@
 //! identity.
 //!
 //! Scale to Median Measurement shares the bake's push: it writes the uniform
-//! scale a reconstruction's distance measurements imply into its value, and
-//! keeps the picture still through the display transform or, for a node alone
-//! at the identity, through the 3D view
+//! scale a reconstruction's distance measurements imply into its value, keeps
+//! the display transform the node has, and leaves the 3D view where it is
 //! (`specs/gui/edits/scale-to-median-measurement.md`).
 //!
 //! Four of the ways to set a transform read the focused item's patch
@@ -671,20 +670,15 @@ impl AppState {
     /// measurements imply, as one version: `Scale to Median Measurement...`.
     ///
     /// A **bulk edit** through `SfmrReconstruction::apply_se3_transform` with
-    /// the uniform scale `S` the measurements give
+    /// the uniform scale the measurements give
     /// ([`crate::measurement_scale_prompt::node_scale`], read from the node's
     /// cached readings), its `world_space_unit` set to `unit`, and the bench's
     /// patch frames put through the same scale, in one version that states
-    /// every half, so an undo puts back the value, the bench and the transform
-    /// together.
+    /// every half, the display transform being the one the node already has,
+    /// so an undo puts back the value and the bench together.
     ///
-    /// The display transform keeps the picture still. A node drawn under a
-    /// transform `T` other than the identity, or one that shares the world
-    /// with another loaded node, is drawn under `T·S⁻¹` afterwards, so every
-    /// point stays where it was drawn. A node at the identity that is the only
-    /// one loaded stays at the identity, and the `Ok` carries the factor the
-    /// caller scales the 3D view by about the world origin
-    /// ([`scale_to_median_measurement`]); otherwise it carries `None`.
+    /// Nothing of the view is touched: the camera stays where it is, and the
+    /// scene is drawn the factor times larger from it.
     ///
     /// Refused on a busy node, on one a camera model proposal is open on, on
     /// one no longer loaded, where the measurements give no scale in `unit`,
@@ -694,14 +688,14 @@ impl AppState {
         &mut self,
         id: ReconId,
         unit: LengthUnit,
-    ) -> Result<Option<f64>, String> {
+    ) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
         match self.scale_node_inner(id, unit, &collector) {
-            Ok((text, camera)) => {
+            Ok(text) => {
                 self.action_log
                     .record_done(Kind::Edit, started, text, collector.take());
-                Ok(camera)
+                Ok(())
             }
             Err(why) => {
                 self.action_log.fail(Kind::Edit, why.clone());
@@ -710,14 +704,14 @@ impl AppState {
         }
     }
 
-    /// The scale itself: `Ok` carries the Action Log's sentence and the factor
-    /// the view is to be scaled by, `Err` the refusal's sentence.
+    /// The scale itself: `Ok` carries the Action Log's sentence, `Err` the
+    /// refusal's.
     fn scale_node_inner(
         &mut self,
         id: ReconId,
         unit: LengthUnit,
         collector: &Collector,
-    ) -> Result<(String, Option<f64>), String> {
+    ) -> Result<String, String> {
         if let Some(why) = self.edit_refusal(id) {
             return Err(why);
         }
@@ -732,7 +726,10 @@ impl AppState {
             .map_err(crate::measurement_scale_prompt::sentence)?;
         let factor = scale.factor();
         let similarity = Se3Transform::new(RotQuaternion::identity(), Vector3::zeros(), factor);
-        if let Some(far) = out_of_range(node, &similarity) {
+        // Both the value's own coordinates and where the node is drawn, under
+        // the transform it keeps.
+        let drawn = similarity.compose(node.transform());
+        if let Some(far) = out_of_range(node, &similarity).or_else(|| out_of_range(node, &drawn)) {
             return Err(format!(
                 "Cannot scale {} to {}: it moves the reconstruction out to {} scene units, too \
                  far for its distances to be measured.",
@@ -741,22 +738,7 @@ impl AppState {
                 Readable(far)
             ));
         }
-        // The picture rule (`specs/gui/edits/scale-to-median-measurement.md`
-        // § "Keeping the picture still").
-        let current = node.transform().clone();
-        let alone = self.scene.len() == 1;
-        let (transform, camera) = if is_identity(&current) && alone {
-            (current, Some(factor))
-        } else {
-            (
-                Se3Transform::new(
-                    current.rotation.clone(),
-                    current.translation,
-                    current.scale / factor,
-                ),
-                None,
-            )
-        };
+        let transform = node.transform().clone();
         let count = scale.statistics.count;
         let text = format!(
             "Scaled {} to {} by the median of {count} distance measurement{}: x{}",
@@ -765,52 +747,8 @@ impl AppState {
             if count == 1 { "" } else { "s" },
             crate::measurement_scale_prompt::number_text(factor)
         );
-        let text =
-            self.push_similarity(index, &similarity, transform, Some(unit), &text, collector);
-        Ok((text, camera))
+        Ok(self.push_similarity(index, &similarity, transform, Some(unit), &text, collector))
     }
-}
-
-/// `Scale to Median Measurement...` with the picture kept still: scale `id` to
-/// `unit` ([`AppState::scale_node_to_median_measurement`]), and where the node
-/// stays at the identity, scale the 3D view about the world origin by the
-/// same factor.
-///
-/// The view's camera position, its orbit distance and its near plane are
-/// world lengths, and so is the scene scale the frustums and the target
-/// indicator are drawn at (`AppState::length_scale`); each is multiplied by the
-/// factor, so every node is drawn where it was, only its numbers in the new
-/// unit. A transition in flight is dropped, since its ends are in the old
-/// lengths, and camera view snaps to the image's scaled pose, which is where
-/// the scaled camera already is. The one entry point for the dialog and the
-/// wire, so both keep the picture still the same way.
-pub(crate) fn scale_to_median_measurement(
-    viewer: &mut crate::viewer_3d::Viewer3D,
-    state: &mut AppState,
-    id: ReconId,
-    unit: LengthUnit,
-) -> Result<(), String> {
-    if let Some(factor) = state.scale_node_to_median_measurement(id, unit)? {
-        scale_view(viewer, state, factor);
-    }
-    Ok(())
-}
-
-/// Scale the 3D view's world lengths about the world origin by `factor`
-/// ([`scale_to_median_measurement`]).
-pub(crate) fn scale_view(
-    viewer: &mut crate::viewer_3d::Viewer3D,
-    state: &mut AppState,
-    factor: f64,
-) {
-    viewer.cancel_transition();
-    let camera = &mut viewer.camera;
-    camera.camera.position = Point3::from(camera.camera.position.coords * factor);
-    camera.camera.target_distance *= factor;
-    camera.near *= factor;
-    let length_scale = (f64::from(state.length_scale) * factor) as f32;
-    crate::viewer_3d::display::seed_length_scale(state, length_scale);
-    crate::camera_lock::resnap_camera_view(viewer, state);
 }
 
 /// Why `Bake Transform` and `Reset Transform` are greyed on a node at the

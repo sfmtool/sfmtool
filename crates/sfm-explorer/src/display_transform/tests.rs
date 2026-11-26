@@ -585,10 +585,9 @@ fn relative(a: f64, b: f64, tolerance: f64) {
 fn the_scale_multiplies_the_value_and_declares_the_unit() {
     let (mut state, id, _) = measured();
     let before = state.node(id).expect("loaded").recon().clone();
-    let camera = state
+    state
         .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
         .expect("a scale");
-    relative(camera.expect("alone at the identity"), TO_MM, 1e-9);
 
     let node = state.node(id).expect("loaded");
     assert!(node.is_dirty());
@@ -636,94 +635,27 @@ fn the_scale_puts_the_bench_patch_frames_through_it() {
 }
 
 #[test]
-fn an_aligned_node_keeps_its_picture_through_its_transform() {
-    let (mut state, id, label) = measured();
+fn the_scale_keeps_the_display_transform_and_draws_the_node_larger() {
+    let (mut state, id, _) = measured();
     state.set_node_transform(id, prior()).expect("a reframe");
-    let (picture_before, figure_before) = (picture(&state, id), figure(&state, id, &label));
-    let camera = state
+    let before = picture(&state, id);
+    state
         .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
         .expect("a scale");
-    assert_eq!(
-        camera, None,
-        "an aligned node asked for the view to be scaled"
-    );
-    same_picture(&picture_before, &picture(&state, id));
-    same_figure(&figure_before, &figure(&state, id, &label));
-    let transform = transform_of(&state, id);
-    assert_eq!(transform.rotation, prior().rotation);
-    assert_eq!(transform.translation, prior().translation);
-    relative(transform.scale, prior().scale / TO_MM, 1e-12);
-}
-
-#[test]
-fn a_node_sharing_the_world_keeps_its_picture_and_the_camera() {
-    let (mut state, id, _) = measured();
-    state.append_node(crate::scene::SceneNode::demo(
-        sfmtool_core::SfmrReconstruction::demo(10),
-    ));
-    let before = picture(&state, id);
-    let mut viewer = crate::viewer_3d::Viewer3D::new();
-    let (position, distance) = (
-        viewer.camera.camera.position,
-        viewer.camera.camera.target_distance,
-    );
-    scale_to_median_measurement(&mut viewer, &mut state, id, LengthUnit::Millimetre)
-        .expect("a scale");
-    same_picture(&before, &picture(&state, id));
-    relative(transform_of(&state, id).scale, 1.0 / TO_MM, 1e-12);
-    assert_eq!(viewer.camera.camera.position, position);
-    assert_eq!(viewer.camera.camera.target_distance, distance);
-}
-
-#[test]
-fn a_node_alone_at_the_identity_scales_the_view_instead() {
-    let (mut state, id, _) = measured();
-    let mut viewer = crate::viewer_3d::Viewer3D::new();
-    viewer.camera.camera.position = Point3::new(3.0, -4.0, 5.0);
-    viewer.camera.camera.target_distance = 7.0;
-    viewer.camera.near = 0.2;
-    let orientation = viewer.camera.camera.orientation;
-    state.length_scale = 0.05;
-    // Where a point lies in the viewport camera's frame, over its depth: what
-    // the picture is made of.
-    let seen = |viewer: &crate::viewer_3d::Viewer3D, state: &AppState| {
-        let p = state.node(id).expect("loaded").recon().point_set.points[1].position;
-        let camera = &viewer.camera.camera;
-        let local = camera.orientation * (p - camera.position);
-        local / local.z
-    };
-    let seen_before = seen(&viewer, &state);
-
-    scale_to_median_measurement(&mut viewer, &mut state, id, LengthUnit::Millimetre)
-        .expect("a scale");
-    assert!(!state.node(id).expect("loaded").has_transform());
-    close(
-        &viewer.camera.camera.position.coords,
-        &(Vector3::new(3.0, -4.0, 5.0) * TO_MM),
-        1e-9 * TO_MM,
-    );
-    relative(viewer.camera.camera.target_distance, 7.0 * TO_MM, 1e-12);
-    relative(viewer.camera.near, 0.2 * TO_MM, 1e-12);
-    assert_eq!(viewer.camera.camera.orientation, orientation);
-    relative(f64::from(state.length_scale), 51.0, 1e-6);
-    close(&seen(&viewer, &state), &seen_before, 1e-9);
-}
-
-#[test]
-fn camera_view_follows_the_scaled_camera() {
-    let (mut state, id, _) = measured();
-    let image = crate::scene::ImageRef::new(id, 1);
-    let mut viewer = crate::viewer_3d::Viewer3D::new();
-    viewer.jump_to_camera_view(image, state.node(id).expect("loaded"));
-    scale_to_median_measurement(&mut viewer, &mut state, id, LengthUnit::Millimetre)
-        .expect("a scale");
-    assert_eq!(viewer.camera_view.as_ref().map(|v| v.image), Some(image));
-    let centre = state.node(id).expect("loaded").recon().image_set.images[1].camera_center();
-    close(
-        &viewer.camera.camera.position.coords,
-        &centre.coords,
-        1e-9 * TO_MM,
-    );
+    same_transform(&transform_of(&state, id), &prior(), 0.0);
+    // Drawn under the same transform, every place is its scaled self: the
+    // transform's scale and the factor multiply, about the transform's
+    // translation.
+    let t = prior().translation;
+    let after = picture(&state, id);
+    assert_eq!(before.len(), after.len());
+    for (a, b) in before.iter().zip(&after) {
+        close(
+            &(b.coords - t),
+            &((a.coords - t) * TO_MM),
+            1e-9 * TO_MM * a.coords.norm().max(1.0),
+        );
+    }
 }
 
 #[test]

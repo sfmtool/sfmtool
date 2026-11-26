@@ -297,11 +297,6 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
         "delegates: the edit that applies the median `distance_measurement_scale` takes with the shared median",
     ),
     (
-        "sfm-explorer/src/display_transform.rs",
-        "scale_to_median_measurement",
-        "delegates: that edit with the 3D view kept still, named for the menu entry",
-    ),
-    (
         "sfm-explorer/src/mcp/edit.rs",
         "scale_reconstruction_to_median_measurement",
         "delegates: the wire's name for that edit",
