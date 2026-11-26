@@ -4387,14 +4387,16 @@ in core. Step 17 turns the tier on.
       hand. Tests: the line names the command and the workspace.
     - **17d, the viewer's notice.** The first time in a session the
       photograph cache's layout read finds a photograph with a side over
-      4096 px in a workspace without the object, the viewer says once, in
-      the place the draft's § "Mip level files" gives it, *This workspace
+      4096 px in a workspace without the object, the viewer says once, with
+      the text the draft's § "Mip level files" gives it, *This workspace
       decodes large photographs whole. Run `sfm ws mipmaps --enable` to read
       them a tile at a time.* Tests: the notice is given once for two such
       photographs and not for a workspace with the object.
-      The docs site's pages that describe `sfm ws init`'s file and
-      `sfm ws mipmaps` change in a pull request to
-      `sfmtool/sfmtool.github.io` beside 17b.
+      The docs site changes in pull requests to
+      `sfmtool/sfmtool.github.io`: beside 17a, the getting-started
+      tutorial's `sfm ws init` output, which ends with the new
+      `mipmap_options` line; beside 17b, the pages that describe
+      `sfm ws mipmaps`.
 
 ## Measurements
 

@@ -124,7 +124,7 @@ carry the `image_to_gray` object
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
 
-A new workspace's file has one more key, after `feature_prefix_dir`: a
+The file `sfm ws init` writes has one more key, after `feature_prefix_dir`: a
 `mipmap_options` object, which turns on stored reduced copies of large
 photographs, their mipmaps, and holds their size threshold and JPEG
 qualities, read and validated by `read_mipmap_options`

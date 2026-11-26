@@ -72,9 +72,10 @@ def init_workspace(
     settings: the tool's default options, the given overrides, and the tool's
     ``image_to_gray`` object, with a new ``feature_prefix_dir`` named from
     them, and the ``mipmap_options`` object of
-    ``sfmtool.workspace.new_workspace_mipmap_options``, which reads
-    photographs with a side over 4096 px from mipmaps. An existing file is
-    replaced; its folder and the named image lists file stay on disk. The ``sfmtool`` tool's file is written by
+    ``sfmtool.workspace.new_workspace_mipmap_options``, under which
+    photographs with a side over 4096 px are read from mipmaps. An existing
+    file is replaced; its folder and the named image lists file stay on disk.
+    The ``sfmtool`` tool's file is written by
     ``sfmtool.workspace.write_sfmtool_workspace_marker``.
 
     Args:
