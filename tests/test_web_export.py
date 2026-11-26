@@ -177,3 +177,33 @@ def test_a_failed_photograph_read_is_reported_as_the_failure(tmp_path, monkeypat
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit), result.exception
     assert "Error: images/a.jpg: no such file" in result.output
+
+
+def test_a_cache_passed_to_the_export_and_to_a_read_makes_each_mipmap_once(
+    seoul_bull_ground_truth_sfmr, tmp_path
+):
+    """The export makes the out-of-core photographs' mipmaps in the cache it
+    is given, and ``ImagePyramidSet.read`` through that cache makes none."""
+    from sfmtool.fileio import write_web_export
+    from sfmtool.patches import ImagePyramidSet
+    from sfmtool.photographs import PhotographCache
+    from sfmtool.reconstruction import SfmrReconstruction
+
+    marker = seoul_bull_ground_truth_sfmr.parent / ".sfm-workspace.json"
+    config = json.loads(marker.read_text())
+    # Every 270 x 480 photograph has a side over 64 px.
+    config["mipmap_options"] = {
+        "out_of_core_long_side": 64,
+        "jpeg_quality": 95,
+        "full_resolution_jpeg_quality": 95,
+    }
+    marker.write_text(json.dumps(config))
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    cache = PhotographCache()
+
+    report = write_web_export(recon, tmp_path / "site", cache=cache)
+    assert report["patch_bitmaps_rendered"]
+    assert cache.stats()["mipmaps_made"] == recon.image_count
+
+    ImagePyramidSet.read(recon, cache=cache)
+    assert cache.stats()["mipmaps_made"] == recon.image_count

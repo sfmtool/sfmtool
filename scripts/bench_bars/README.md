@@ -75,6 +75,8 @@ note). An earlier measurement of the same design, on the plain score beside
 the leave-one-out ZNCC while the localizer still congealed, set the plain
 `0.65` bar the blur-matched `0.70` replaced; its scripts were not checked in.
 
-sfmtool has no public reader for a workspace image, so `datasets.read_image`
-reads it with OpenCV as the package's own loader does (`workspace_dir /
-image_name`, converted from BGR to RGB).
+`measure.py` reads the photographs with `ImagePyramidSet.read`, as the viewer
+reads them, and also decodes each whole with `datasets.read_image`
+(`sfmtool.fileio.read_image_rgb` at `workspace_dir / image_name`) for the rows
+it plants, whose modified arrays it builds a set from with the
+`ImagePyramidSet` constructor, since `read` reads only files.

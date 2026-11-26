@@ -207,6 +207,19 @@ fn far_demo(points: usize) -> SfmrReconstruction {
     recon
 }
 
+/// `build_web_export` through a cache of its own that keeps nothing, as
+/// `sfm web-export` reads.
+fn build_export(
+    recon: &SfmrReconstruction,
+    options: &WebExportOptions,
+) -> Result<WebExport, WebExportError> {
+    let photographs = PhotographCache::new(crate::camera::PhotographCacheOptions {
+        budget_bytes: 0,
+        ..Default::default()
+    });
+    build_web_export(recon, options, &photographs, &Progress::none())
+}
+
 fn scene_of(export: &WebExport) -> Value {
     assert_eq!(export.files[0].name, "scene.json");
     serde_json::from_slice(&export.files[0].bytes).unwrap()
@@ -249,7 +262,7 @@ fn f32s(bytes: &[u8]) -> Vec<f32> {
 #[test]
 fn point_arrays_sit_at_their_offsets_and_positions_shift_back_to_the_file() {
     let recon = far_demo(50);
-    let export = build_web_export(&recon, &WebExportOptions::default(), &Progress::none()).unwrap();
+    let export = build_export(&recon, &WebExportOptions::default()).unwrap();
     let scene = scene_of(&export);
     let block = decode(&scene, "points_b64");
     let centre: Vec<f64> = scene["center"]
@@ -341,7 +354,7 @@ fn a_point_at_infinity_keeps_its_stored_patch_and_one_without_is_a_splat() {
         point.position = nalgebra::Point3::new(0.6, 0.0, 0.8);
         point.w = 0.0;
     }
-    let export = build_web_export(&recon, &WebExportOptions::default(), &Progress::none()).unwrap();
+    let export = build_export(&recon, &WebExportOptions::default()).unwrap();
     let scene = scene_of(&export);
     let block = decode(&scene, "points_b64");
     assert_eq!(scene["points"]["at_infinity"], 2);
@@ -386,7 +399,7 @@ fn max_points_keeps_the_most_observed_and_records_where_they_came_from() {
         thumbnails: false,
         ..WebExportOptions::default()
     };
-    let export = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let export = build_export(&recon, &options).unwrap();
     let scene = scene_of(&export);
     assert_eq!(scene["points"]["count"], 10);
     assert_eq!(scene["points"]["left_out"], 30);
@@ -415,7 +428,7 @@ fn patch_size_resamples_the_tiles() {
         patch_size: Some(4),
         ..WebExportOptions::default()
     };
-    let export = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let export = build_export(&recon, &options).unwrap();
     let scene = scene_of(&export);
     assert_eq!(scene["atlases"]["patches"]["size"], 4);
     assert_eq!(scene["atlases"]["patches"]["tile"], 6);
@@ -429,7 +442,7 @@ fn start_image_opens_through_that_camera_and_an_unknown_one_is_refused() {
         start_image: Some("image_002.jpg".into()),
         ..WebExportOptions::default()
     };
-    let scene = scene_of(&build_web_export(&recon, &options, &Progress::none()).unwrap());
+    let scene = scene_of(&build_export(&recon, &options).unwrap());
     assert_eq!(scene["view"]["start_image"], "image_002.jpg");
     assert_eq!(scene["view"]["eye"], scene["cameras"][2]["center"]);
 
@@ -438,7 +451,7 @@ fn start_image_opens_through_that_camera_and_an_unknown_one_is_refused() {
         ..WebExportOptions::default()
     };
     assert!(matches!(
-        build_web_export(&recon, &options, &Progress::none()),
+        build_export(&recon, &options),
         Err(WebExportError::UnknownStartImage(_))
     ));
 }
@@ -451,7 +464,7 @@ fn many_patches_spill_onto_several_pages_and_the_report_counts_their_memory() {
         thumbnails: false,
         ..WebExportOptions::default()
     };
-    let export = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let export = build_export(&recon, &options).unwrap();
     let scene = scene_of(&export);
     // A 50-texel page holds five 10-texel tiles a side, 25 a page: 119 patches
     // take five pages.
@@ -505,7 +518,7 @@ fn a_point_has_a_patch_frame_when_its_u_is_nonzero() {
         thumbnails: false,
         ..WebExportOptions::default()
     };
-    let export = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let export = build_export(&recon, &options).unwrap();
     let drawn: Vec<bool> = patch_cells(&export)
         .iter()
         .map(|&c| c != u32::MAX)
@@ -568,7 +581,7 @@ fn a_column_not_parallel_to_the_points_is_refused_naming_it() {
     for (what, spoil, message) in cases {
         let mut recon = far_demo(5);
         spoil(&mut recon);
-        match build_web_export(&recon, &WebExportOptions::default(), &Progress::none()) {
+        match build_export(&recon, &WebExportOptions::default()) {
             Err(WebExportError::InvalidReconstruction(m)) => {
                 assert!(m.starts_with(message), "{what}: {m}");
             }
@@ -637,7 +650,7 @@ fn an_image_column_that_does_not_fit_the_images_is_refused_naming_it() {
     for (what, spoil, message) in cases {
         let mut recon = far_demo(5);
         spoil(&mut recon);
-        match build_web_export(&recon, &WebExportOptions::default(), &Progress::none()) {
+        match build_export(&recon, &WebExportOptions::default()) {
             Err(WebExportError::InvalidReconstruction(m)) => {
                 assert!(m.contains(message), "{what}: {m}");
             }
@@ -725,7 +738,7 @@ fn observation_offsets_that_do_not_fit_the_tracks_are_refused_naming_them() {
     for (what, spoil, message) in cases {
         let mut recon = base.clone();
         spoil(&mut recon);
-        match build_web_export(&recon, &options, &Progress::none()) {
+        match build_export(&recon, &options) {
             Err(WebExportError::InvalidReconstruction(m)) => {
                 assert!(m.starts_with(&message), "{what}: {m}");
             }
@@ -791,13 +804,13 @@ fn patch_tiles_are_the_stored_bitmaps_and_a_file_without_them_renders_the_same()
         ..WebExportOptions::default()
     };
 
-    let stored = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let stored = build_export(&recon, &options).unwrap();
     let half = Some(side / 2);
     let resampled = WebExportOptions {
         patch_size: half,
         ..options.clone()
     };
-    let resampled = build_web_export(&recon, &resampled, &Progress::none()).unwrap();
+    let resampled = build_export(&recon, &resampled).unwrap();
     for (patch_size, export) in [(None, &stored), (half, &resampled)] {
         let scene = scene_of(export);
         let patches = &scene["atlases"]["patches"];
@@ -834,7 +847,7 @@ fn patch_tiles_are_the_stored_bitmaps_and_a_file_without_them_renders_the_same()
     let mut bare = recon.clone();
     bare.point_set.patch_bitmaps_y_x_rgba = None;
     bare.image_set.thumbnails_y_x_rgb = None;
-    let rendered = build_web_export(&bare, &options, &Progress::none()).unwrap();
+    let rendered = build_export(&bare, &options).unwrap();
     assert!(!stored.report.patch_bitmaps_rendered);
     assert!(rendered.report.patch_bitmaps_rendered);
     assert_eq!(stored.report.thumbnails.file, 5);
@@ -850,10 +863,10 @@ fn patch_tiles_are_the_stored_bitmaps_and_a_file_without_them_renders_the_same()
 
 /// In a workspace whose `mipmap_options` put its 300 x 200 photographs out of
 /// core and that has no mipmap yet: the export makes each photograph's
-/// mipmap and reads its thumbnail row from the coarsest mip level file, so a
-/// second export, which finds those files current, writes the same files;
-/// and the rows are not the whole decodes' an export writes once the object
-/// is gone.
+/// mipmap through the cache it is given and reads its thumbnail row from the
+/// coarsest mip level file, so a second export through the same cache, which
+/// finds those files current, makes none and writes the same files; and the
+/// rows are not the whole decodes' an export writes once the object is gone.
 #[test]
 fn an_export_makes_a_missing_mipmap_and_reads_the_thumbnail_from_it() {
     use crate::camera::mipmap::mipmap_location;
@@ -895,18 +908,21 @@ fn an_export_makes_a_missing_mipmap_and_reads_the_thumbnail_from_it() {
             .collect()
     };
 
-    let made = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let photographs = PhotographCache::new(crate::camera::PhotographCacheOptions::default());
+    let made = build_web_export(&recon, &options, &photographs, &Progress::none()).unwrap();
     assert_eq!(made.report.thumbnails.photographs, paths.len());
     for path in &paths {
         let level_1 = mipmap_location(path).unwrap().level_path(1, 95);
         assert!(level_1.is_file(), "{} has no mipmap", path.display());
     }
+    assert_eq!(photographs.stats().mipmaps_made, paths.len() as u64);
     assert!(!thumbs(&made).is_empty());
-    let read = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let read = build_web_export(&recon, &options, &photographs, &Progress::none()).unwrap();
+    assert_eq!(photographs.stats().mipmaps_made, paths.len() as u64);
     assert!(thumbs(&read) == thumbs(&made));
 
     std::fs::write(&marker, r#"{"version": 2}"#).unwrap();
-    let whole = build_web_export(&recon, &options, &Progress::none()).unwrap();
+    let whole = build_export(&recon, &options).unwrap();
     assert_eq!(whole.report.thumbnails.photographs, paths.len());
     assert!(thumbs(&whole) != thumbs(&made));
 }

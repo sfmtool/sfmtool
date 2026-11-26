@@ -328,7 +328,7 @@ Why it is shaped this way:
   that answered it was dropped still reads: it keeps the cache's tiles alive
   until it is dropped, and decodes again what was evicted. `get` and
   `get_many` keep their `&self` signatures, so the viewer's
-  `Arc<PhotographCache>`, the web export's cache on its stack and the
+  `Arc<PhotographCache>`, a binding's cache on its stack and the
   examples' caches call them as before, and a photograph can never find its
   cache gone. The other ways considered were `get` taking `self: &Arc<Self>`,
   which changes every caller's signature and forces the web export and the

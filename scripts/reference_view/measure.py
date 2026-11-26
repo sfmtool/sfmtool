@@ -57,7 +57,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from datasets import DATASETS_DIR, REPO, read_image, resolve  # noqa: E402
+from datasets import DATASETS_DIR, REPO, resolve  # noqa: E402
 
 CASES = Path(__file__).resolve().parent / "cases.json"
 READINGS = (
@@ -112,8 +112,7 @@ def run(args, sfmr: Path, tolerance: float, out_dir: Path) -> None:
     name = args.dataset
     t0 = time.time()
     recon = SfmrReconstruction.load(str(sfmr))
-    imgs = [read_image(recon.workspace_dir, n) for n in recon.image_names]
-    pyramids = ImagePyramidSet(recon, imgs)
+    pyramids = ImagePyramidSet.read(recon)
     print(name, "images loaded", round(time.time() - t0, 1), "s", flush=True)
     if args.eligible:
         count_eligible(name, recon, pyramids, out_dir)

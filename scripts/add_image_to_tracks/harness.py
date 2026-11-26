@@ -364,18 +364,16 @@ def main():
 
     from sfmtool.patches import ImagePyramidSet
     from sfmtool.reconstruction import SfmrReconstruction
-    from sfmtool.fileio import read_image_rgb
 
     ds = prepare(args.dataset, args.cache)
     gt = SfmrReconstruction.load(ds.sfmr)
     names = list(gt.image_names)
-    images = [read_image_rgb(Path(gt.workspace_dir) / n) for n in names]
     ctx = {
         "dataset": args.dataset,
         "gt": gt,
         "names": names,
         "matches": ds.matches,
-        "pyramids": ImagePyramidSet(gt, images),
+        "pyramids": ImagePyramidSet.read(gt),
     }
     which = (
         range(len(names))

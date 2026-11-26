@@ -44,14 +44,11 @@ def main():
     from sfmtool.geometry import resect_images
     from sfmtool.patches import ImagePyramidSet
     from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
-    from sfmtool.fileio import read_image_rgb
 
     ds = prepare(args.dataset, args.cache)
     gt = SfmrReconstruction.load(ds.sfmr)
     names = list(gt.image_names)
-    pyramids = ImagePyramidSet(
-        gt, [read_image_rgb(Path(gt.workspace_dir) / n) for n in names]
-    )
+    pyramids = ImagePyramidSet.read(gt)
     gt_pts = np.asarray(gt.track_point_indexes)
     gt_imgs = np.asarray(gt.track_image_indexes)
     gt_kps = np.asarray(gt.keypoints_xy, dtype=float)

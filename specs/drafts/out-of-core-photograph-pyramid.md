@@ -1082,12 +1082,13 @@ tiled photographs only (step 13), so no step leaves a reader without pixels.
 | P6 | Optical flow's pyramids (`sfmtool-py/src/flow/warp.rs`) | a grey pyramid of its own from an array | unchanged; flow reads level 0 from its array | no |
 | P7 | Spherical tile source stacks (`sfmtool-py/src/spherical/tile_source_stack.rs` → `spherical/per_tile_source_stack.rs`) | `remap_bilinear` of the arrays passed | unchanged: they read arrays, not pyramids | no |
 
-The measurement harnesses under `scripts/` that build an `ImagePyramidSet` from
-`read_image_rgb` arrays (`track_at_pixel/context.py`,
-`add_image_to_tracks/harness.py` and `misses.py`) are P2 callers: they read
-the arrays' exact levels until they move to `ImagePyramidSet.read`, which step
-16 does. A P2 caller that passes arrays holds them whole, as today; that is the
-caller's choice of input, and `read` is the bounded way.
+The measurement harnesses under `scripts/` (`track_at_pixel/context.py`,
+`add_image_to_tracks/harness.py` and `misses.py`, `bench_bars/measure.py`
+and `reference_view/measure.py`) read their photographs with
+`ImagePyramidSet.read` (built, 16e). `bench_bars/measure.py` also builds sets
+from arrays it has modified, as a P2 caller: a P2 caller that passes arrays
+holds them whole and reads their exact levels; that is the caller's choice of
+input, and `read` is the bounded way.
 
 Every reader that reads a pyramid of a photograph now reads the same levels
 whether it runs in the viewer or on the command line, and in any session. A
@@ -3988,7 +3989,8 @@ in core. Step 17 turns the tier on.
       the bindings in
       `tests/rust_bindings/photographs/test_mipmap_check_prune_rust_bindings.py`,
       and the command in `tests/test_ws_mipmaps.py`.
-16. **Python and the readers that must agree with the viewer**: the
+16. **Python and the readers that must agree with the viewer.** **Built**,
+    in 16a to 16e below: the
     `PhotographCache` class's layout, level, tile and region reads, added to
     the submodule and class step 15d brings with the constructor,
     `build_mipmaps` and `stats` (open question 17), and core's
@@ -4248,6 +4250,49 @@ in core. Step 17 turns the tier on.
       `_solve.py`, on `ImagePyramidSet.read` (P3). Tests: the montages
       unchanged in core.
     - **16e, `write_web_export(cache=)` and the `scripts/` harnesses.**
+      **Built.** Core's `build_web_export` and `write_web_export` take the
+      `PhotographCache` the bitmap render and the thumbnails read through,
+      in place of the budget-0 cache `build_web_export` made for itself
+      ([web_export.rs](../../crates/sfmtool-core/src/web_export.rs)); the
+      binding `write_web_export(…, cache=None)` passes the cache it is given,
+      or makes one of the default budget for the call, as
+      `ImagePyramidSet.read` does
+      ([fileio/web_export.rs](../../crates/sfmtool-py/src/fileio/web_export.rs));
+      `export_reconstruction` passes its `cache` on; and `sfm web-export`
+      passes `PhotographCache(budget_bytes=0)`, so the command reads as
+      before. The harnesses read their photographs with
+      `ImagePyramidSet.read(recon)`: `track_at_pixel/context.py`, whose
+      `images` arrays, which only the plane-sweep candidate reads, are
+      decoded the first time one asks;
+      `add_image_to_tracks/harness.py` and `misses.py`;
+      `reference_view/measure.py`; and `bench_bars/measure.py`, which still
+      decodes the arrays it plants rows into and builds those sets with the
+      constructor. Choices made in building it: core takes the cache as an
+      argument rather than a field of `WebExportOptions`, as
+      `render_display_patch_bitmaps` does, so the options stay a plain
+      value; and the command keeps budget 0 rather than the binding's
+      default, since the default holds more memory in core, as open
+      question 23 measures. On the `sfm web-export` of the user's 8
+      photographs of that question, cut to a file with neither bitmaps nor
+      thumbnails so that the export reads every photograph, the files
+      written before and after are the same bytes, in core and from current
+      mipmaps, at budget 0 and at the default budget. On the Seoul bull
+      ground truth, read in place or copied
+      by the harnesses that prepare a dataset, `bench_bars/measure.py` (6
+      tracks), `reference_view/measure.py` (a pool of 6), `misses.py`,
+      `add_image_to_tracks/harness.py` (image 0) and
+      `track_at_pixel/harness.py` (5 points) wrote the same rows before and
+      after but for their timings, and the track file the same points and
+      tracks; the user's other datasets were not run.
+      Tests: in
+      [web_export/tests.rs](../../crates/sfmtool-core/src/web_export/tests.rs),
+      an export through a cache it is given counting every mipmap it makes in
+      that cache, and a second export through it making none; and in
+      [test_web_export.py](../../tests/test_web_export.py), with
+      `mipmap_options` on the copied Seoul bull ground truth, the export
+      counting its 17 mipmaps in the cache passed to `write_web_export` and
+      `ImagePyramidSet.read` through it making none.
+      The plan as written:
       `write_web_export` taking the `cache=` its export reads through, and
       the harnesses that build an `ImagePyramidSet` from `read_image_rgb`
       arrays, `scripts/track_at_pixel/context.py`,
@@ -4296,7 +4341,7 @@ or `read_rgb` pixel by pixel.
 
 ## Open questions
 
-The user has decided every question below; the section records the
+The user has decided every question below but 23; the section records the
 decisions.
 
 1. **The names of the mip level files.** *Decided by the user:* the whole
@@ -4810,3 +4855,46 @@ decisions.
     macOS build and test jobs, which build the extension and the viewer
     with `mimalloc` and run the full suites; macOS can be benchmarked
     later.
+23. **The cache budget of `sfm web-export`.** Found while building 16e. The
+    command reads through a cache of budget 0, as
+    [view-region-pyramid.md](view-region-pyramid.md) open question 11
+    decided: an answer holds the tiles of the decode that made it, so an
+    in-core photograph is decoded once. An out-of-core photograph's answer
+    holds no tile, so under budget 0 every tile the bitmap render reads is
+    decoded from its mip level file again. Measured on the first 8 of the
+    user's photographs (16320 x 12240) with the copied solve cut to them
+    and saved without its patch bitmaps and thumbnails, so the export
+    renders the bitmaps and makes the thumbnails from the photographs; one
+    run each, wall clock and peak working set, on the shared machine, whose
+    in-core times varied from 6 to 14 s between runs of the same code:
+
+    | Run | Cache budget | Time | Peak working set | Misses in `stats` |
+    |-----|--------------|------|------------------|-------------------|
+    | before 16e, in core | 0 | 6.0 s | 10.5 GB | |
+    | 16e, in core | 0 | 11.6 s, 13.7 s | 10.0 GB, 10.0 GB | 8, each a whole decode |
+    | 16e, in core | 15.9 GiB (default) | 8.2 s | 14.9 GB | 8, each a whole decode |
+    | before 16e, mipmaps current | 0 | 74.0 s | 4.4 GB | |
+    | 16e, mipmaps current | 0 | 41.2 s, 64.1 s | 4.7 GB, 4.6 GB | 9,931 |
+    | 16e, mipmaps current | 15.9 GiB (default) | 1.2 s | 4.5 GB | 2,016 |
+
+    Every run wrote the same files. In core the default budget's cache
+    still held 6.4 GB of tiles at the end, and the thumbnails, made after
+    the render, decode each in-core photograph again outside the cache, so
+    both are held at once. The options:
+    - (a) the command passes a cache of the default budget: from current
+      mipmaps the export takes about a second, and in core its peak rises
+      by about the cache's tiles of the photographs, here 4.8 GB. Once step
+      17 turns the tier on, a photograph in core is at most 4096 px on its
+      long side, so the rise is large only in a workspace without it;
+    - (b) keep budget 0, as built: the in-core peak stays, and an export
+      from mipmaps takes about a minute for these 8;
+    - (c) extend open question 11's rule: under budget 0 an out-of-core
+      answer holds the tiles and file entries it has read until it is
+      dropped, as an in-core answer holds its decode. Budget 0 then reads
+      each tile once in either tier; it is a change to the cache in core,
+      a step of its own.
+
+    *Waiting on the user.* Recommended: (a), a one-line change to the
+    command, since the tier is the way the draft bounds memory for
+    photographs of this size; (c) if budget 0's in-core peak should be kept
+    in a workspace without the tier.

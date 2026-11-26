@@ -88,8 +88,10 @@ def run(name: str, sfmr: Path, n_tracks: int, seed: int, out_dir: Path) -> None:
 
     r = SfmrReconstruction.load(str(sfmr)).clone_with_changes(patch_bitmaps=None)
     t0 = time.time()
+    pyr0 = ImagePyramidSet.read(r)
+    # The rows planted below modify these arrays, and a set of modified
+    # arrays is built with the constructor, since `read` reads only files.
     imgs = [read_image(r.workspace_dir, n) for n in r.image_names]
-    pyr0 = ImagePyramidSet(r, imgs)
     print(name, "images loaded", round(time.time() - t0, 1), "s", flush=True)
     ed = EditedReconstruction(r)
     n_images = len(imgs)
