@@ -807,15 +807,17 @@ photograph outside every workspace has no setting. The setting also decides
 which photographs are out of core, and so how each is read (§ "Out-of-core
 photographs"); a workspace without the object reads every photograph in core.
 The first photograph whose header the cache reads with a side over
-`DEFAULT_OUT_OF_CORE_LONG_SIDE` (1536) in such a workspace is kept. Every
-header the cache reads goes through one function, which takes the note: a
-layout read (`request_layout`, `read_layout`) and the decode or build of
-`get`, `get_many`, the tile requests and `build_mipmaps`, so a photograph
-decoded before any layout of it is asked for, as an open's render of the
-patch bitmaps decodes them, is found too. It is kept and `large_photograph_without_mipmap_options` answers it for the
-cache's life, `forget` and `clear` leaving it: a photograph a new workspace
-would read a tile at a time and this one decodes whole, which the viewer's
-notice is given for (§ "In the viewer"). A photograph outside every workspace
+`DEFAULT_OUT_OF_CORE_LONG_SIDE` (1536) in such a workspace is noted. Every
+layout read (`request_layout`, `read_layout`) and every decode or build of
+`get`, `get_many`, the tile requests and `build_mipmaps` reads its header
+through one function, which takes the note, so a photograph decoded before
+any layout of it is asked for, as an open's render of the patch bitmaps
+decodes them, is found too; the header reads that only size a decode or
+check the mipmap of a photograph in a workspace with the object take none.
+`large_photograph_without_mipmap_options` answers it for the cache's life,
+`forget` and `clear` leaving it: a photograph a new workspace would read a
+tile at a time and this one decodes whole, which the viewer's notice is given
+for (§ "In the viewer"). A photograph outside every workspace
 is not one, since there is no workspace file to add the object to, and
 neither is one of a workspace whose object has a threshold that keeps it in
 core.

@@ -1039,9 +1039,10 @@ struct Shared {
     /// current, which a check of the coarsest file alone does not show
     /// ([`files::Stale`]). Its lock is taken with no other lock held.
     stale: Mutex<HashMap<PathBuf, files::Stale>>,
-    /// The first photograph a layout read of this cache found with a side
-    /// over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in a workspace whose file has
-    /// no `mipmap_options`, kept for the cache's life.
+    /// The first photograph whose header a layout read, decode or build of
+    /// this cache read with a side over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in
+    /// a workspace whose file has no `mipmap_options`, kept for the cache's
+    /// life.
     large_in_core: OnceLock<PathBuf>,
     /// How many times a workspace file has been read for its
     /// `mipmap_options`.
@@ -1586,11 +1587,11 @@ impl PhotographCache {
     /// with a side over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in a workspace whose file has
     /// no `mipmap_options`, so that it is decoded whole where a new
     /// workspace would read it a tile at a time; `None` until a read finds
-    /// one. Every header the cache reads is looked at: a layout read
-    /// ([`Self::request_layout`], [`Self::read_layout`]) and the decode or
-    /// build of [`Self::get`], [`Self::get_many`], the tile requests and
-    /// [`Self::build_mipmaps`], so a photograph decoded before any layout is
-    /// asked for is found too. A photograph in no workspace is not one, since there is no
+    /// one. The header of every layout read ([`Self::request_layout`],
+    /// [`Self::read_layout`]) and of every decode or build of [`Self::get`],
+    /// [`Self::get_many`], the tile requests and [`Self::build_mipmaps`] is
+    /// looked at, so a photograph decoded before any layout is asked for is
+    /// found too. A photograph in no workspace is not one, since there is no
     /// workspace file to add the object to. Reads nothing and takes no lock,
     /// so the viewer asks every frame; neither [`Self::forget`] nor
     /// [`Self::clear`] drops it.
@@ -1602,9 +1603,13 @@ impl PhotographCache {
     /// while `setting`, its workspace's, cannot be read, and as
     /// [`GetError::TooLarge`] with a side over [`MAX_JPEG_SIDE`]: the header and
     /// the setting decide the refusal, so a photograph is never decoded only to
-    /// be refused. Every read of a header in the cache comes through here, so
-    /// it is where [`Self::large_photograph_without_mipmap_options`]' note is
-    /// taken, whichever read, decode or build first meets the photograph.
+    /// be refused. Every layout read, decode and build in the cache reads its
+    /// header here, so it is where
+    /// [`Self::large_photograph_without_mipmap_options`]' note is taken,
+    /// whichever of them first meets the photograph. The header reads that
+    /// only size a decode ([`Self::builds_that_fit`], a miss of
+    /// [`Self::get_many`]) or check the mipmap of a photograph in a workspace
+    /// with the object read it directly and take no note.
     fn header(&self, path: &Path, setting: &WorkspaceSetting) -> Result<(u32, u32), GetError> {
         let (width, height) = image_dimensions(path).map_err(|e| unreadable(path, e))?;
         if let Err(e) = &setting.options {

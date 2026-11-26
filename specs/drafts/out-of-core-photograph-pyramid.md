@@ -4463,8 +4463,8 @@ in core. Step 17 turns the tier on. Every step is built.
       Action Log row of its own, kind `Session`, as it reports the system
       font search, so the 3D view's status line shows it until the next
       entry; nothing has to be dismissed. The cache notes the photograph:
-      the one function every header read of the cache goes through, a
-      layout read's or a decode's or build's, keeps the first one it finds with a
+      the one function every layout read, decode and build of the cache
+      reads its header through keeps the first one it finds with a
       side over `DEFAULT_OUT_OF_CORE_LONG_SIDE` in a workspace whose file
       has no object, and `PhotographCache::large_photograph_without_mipmap_options`
       answers it, reading nothing and taking no lock, so the frame asks
