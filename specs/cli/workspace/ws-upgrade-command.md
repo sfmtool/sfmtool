@@ -106,7 +106,11 @@ The command then runs these phases in order.
 
 The workspace files, the `.sift` files, the named image lists file and every
 other file are left as they are: the readers read every version of them that
-a version 2 workspace holds.
+a version 2 workspace holds. A workspace file without `mipmap_options` is
+left without it, and one with it keeps it: adding the object changes which
+pixels the kernels read for every photograph over its threshold, a change
+the owner makes with `sfm ws mipmaps --enable`
+([ws-mipmaps-command.md § Turning the tier on](ws-mipmaps-command.md#turning-the-tier-on)).
 
 ### What is not converted
 

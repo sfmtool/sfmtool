@@ -92,7 +92,12 @@ written as a 3-channel image
       "quantize_bits": 8
     }
   },
-  "feature_prefix_dir": "features/sift-sfmtool-undistort-{hash}"
+  "feature_prefix_dir": "features/sift-sfmtool-undistort-{hash}",
+  "mipmap_options": {
+    "out_of_core_long_side": 1536,
+    "jpeg_quality": 95,
+    "full_resolution_jpeg_quality": 95
+  }
 }
 ```
 
@@ -109,6 +114,13 @@ the source's own top-level object, else its `gray_formula` as
 `sfmtool-undistort` source, the same reading of its own nested record. The
 folder is named over the whole `feature_options`, so undistorting again writes a
 new folder beside any older output.
+
+`mipmap_options` is the source workspace's object, unchanged, when the
+source's `.sfm-workspace.json` has one, and is left out when it has none, so
+the output reads large photographs as the source's owner chose
+([mipmaps.md § "The workspace setting"](../../core/camera/mipmaps.md#the-workspace-setting)).
+The source's object is read, and checked, through `read_mipmap_options`
+before any image is undistorted, so an invalid one stops the command first.
 
 Features in this workspace are produced by undistortion, not extraction. The
 sentinel `feature_tool` value is reserved so that extraction tooling can

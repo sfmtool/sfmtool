@@ -33,10 +33,11 @@ through `prune_mipmaps`
 ([ws-mipmaps-command.md](../../cli/workspace/ws-mipmaps-command.md)).
 `sfm ws init` writes `mipmap_options` into every new workspace
 ([§ "The workspace setting"](#the-workspace-setting)). A workspace made
-before it has no object until its owner adds one; `sfm ws mipmaps --enable`,
-which adds it, is planned in step 17b of
-[out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md),
-which also has the measurements behind the choices below.
+before it has no object until its owner adds one with `sfm ws mipmaps
+--enable`
+([ws-mipmaps-command.md § Turning the tier on](../../cli/workspace/ws-mipmaps-command.md#turning-the-tier-on)).
+[out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
+has the measurements behind the choices below.
 
 ## Rust API
 
@@ -66,6 +67,14 @@ pub fn read_mipmap_options(root: &Path) -> Result<Option<MipmapOptions>, Workspa
 /// reads back.
 pub const NEW_WORKSPACE_MIPMAP_OPTIONS: MipmapOptions;
 pub fn mipmap_options_json(options: &MipmapOptions) -> serde_json::Value;
+
+/// `sfmtool_core::workspace`: an object's options, checked as the file's
+/// are, and the writer that adds the object to a file that has none
+/// (`sfm ws mipmaps --enable`).
+pub fn parse_mipmap_options(value: &serde_json::Value)
+    -> Result<MipmapOptions, InvalidMipmapOptions>;
+pub fn enable_mipmap_options(root: &Path, options: &MipmapOptions)
+    -> Result<(), WorkspaceConfigError>;
 
 /// Level sizes, the tier, and `K`, the coarsest stored level. `None` for a
 /// side over `MAX_JPEG_SIDE`.
@@ -325,7 +334,9 @@ photograph of a workspace whose object is invalid until the file is fixed
 
 `sfm ws init` writes the object above, `NEW_WORKSPACE_MIPMAP_OPTIONS`, into
 every new workspace, after `feature_prefix_dir`, for each feature tool
-([ws-init-command.md](../../cli/workspace/ws-init-command.md#persisted-settings)).
+([ws-init-command.md](../../cli/workspace/ws-init-command.md#persisted-settings)),
+and `sfm ws mipmaps --enable` adds it, with these values unless its options
+give others, to a workspace that has none.
 The threshold of 1536 px keeps memory bounded for a job that reads many
 photographs of a few megapixels, such as those of a 24-megapixel camera or a
 phone: an in-core photograph is decoded whole, all its pixels at once, when a

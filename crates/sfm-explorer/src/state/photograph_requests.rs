@@ -260,7 +260,9 @@ fn workspace_file(e: &WorkspaceConfigError) -> &Path {
     match e {
         WorkspaceConfigError::Io { path, .. }
         | WorkspaceConfigError::Json { path, .. }
-        | WorkspaceConfigError::MipmapOptions { path, .. } => path,
+        | WorkspaceConfigError::MipmapOptions { path, .. }
+        | WorkspaceConfigError::MipmapOptionsPresent { path }
+        | WorkspaceConfigError::Version { path, .. } => path,
     }
 }
 

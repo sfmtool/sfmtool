@@ -15,9 +15,19 @@ from .._sfmtool import ProgressCounter
 from .._workspace_init_options import (
     check_workspace_init_options,
     create_workspace,
+    describe_mipmap_options,
     workspace_init_options,
 )
-from ..workspace import find_workspace_for_path, upgrade_workspace
+from ..workspace import (
+    enable_mipmap_options,
+    find_workspace_for_path,
+    new_workspace_mipmap_options,
+    upgrade_workspace,
+)
+
+# The values `sfm ws mipmaps --enable` writes when no option gives one, those
+# of a new workspace.
+_NEW_WORKSPACE_MIPMAP_OPTIONS = new_workspace_mipmap_options()
 
 
 @click.group("ws")
@@ -184,7 +194,41 @@ def upgrade(path, dry_run):
     help="Delete the orphan files of the mipmap directory under the paths, "
     "and make no mipmap.",
 )
-def mipmaps(paths, check, prune):
+@click.option(
+    "--enable",
+    is_flag=True,
+    help="Add mipmap_options to the .sfm-workspace.json of the workspace at "
+    "or above PATH, which has none, and make no mipmap.",
+)
+@click.option(
+    "--out-of-core-long-side",
+    type=int,
+    help="With --enable: a photograph with a side over this many pixels is "
+    "read from mipmaps (default "
+    f"{_NEW_WORKSPACE_MIPMAP_OPTIONS['out_of_core_long_side']}).",
+)
+@click.option(
+    "--jpeg-quality",
+    type=int,
+    help="With --enable: the JPEG quality, 1 to 100, of the reduced mip level "
+    f"files (default {_NEW_WORKSPACE_MIPMAP_OPTIONS['jpeg_quality']}).",
+)
+@click.option(
+    "--full-resolution-jpeg-quality",
+    type=int,
+    help="With --enable: the JPEG quality, 1 to 100, of the full-resolution "
+    "copy of a photograph that cannot be read by region (default "
+    f"{_NEW_WORKSPACE_MIPMAP_OPTIONS['full_resolution_jpeg_quality']}).",
+)
+def mipmaps(
+    paths,
+    check,
+    prune,
+    enable,
+    out_of_core_long_side,
+    jpeg_quality,
+    full_resolution_jpeg_quality,
+):
     """Make the mipmaps of the large photographs under the paths.
 
     In a workspace whose .sfm-workspace.json has mipmap_options, a photograph
@@ -205,6 +249,12 @@ def mipmaps(paths, check, prune):
     ago. In a workspace without mipmap_options it deletes every mip level
     file. It deletes nothing else, and enters no link.
 
+    --enable instead adds mipmap_options to the .sfm-workspace.json of the
+    workspace at or above PATH, a file that has none, with the values the
+    three options after it give, which default to those sfm ws init writes.
+    It makes no mipmap: sfm ws mipmaps PATH makes them, and every reader of
+    the photographs makes those it needs.
+
     Example usage:
 
         sfm ws mipmaps images
@@ -212,12 +262,31 @@ def mipmaps(paths, check, prune):
         sfm ws mipmaps --check .
 
         sfm ws mipmaps --prune .
+
+        sfm ws mipmaps --enable .
     """
     from .._filenames import SIFT_IMAGE_EXTENSIONS, expand_paths
     from ..photographs import PhotographCache, check_mipmaps, prune_mipmaps
 
     if check and prune:
         raise click.UsageError("Give --check or --prune, not both.")
+    values = {
+        "out_of_core_long_side": out_of_core_long_side,
+        "jpeg_quality": jpeg_quality,
+        "full_resolution_jpeg_quality": full_resolution_jpeg_quality,
+    }
+    if enable:
+        if check or prune:
+            raise click.UsageError("Give --enable without --check or --prune.")
+        if len(paths) != 1:
+            raise click.UsageError("Give --enable one PATH.")
+        _enable(paths[0], values)
+        return
+    given = [k for k, v in values.items() if v is not None]
+    if given:
+        raise click.UsageError(
+            f"--{given[0].replace('_', '-')} is given with --enable only."
+        )
     to_do = False
     try:
         if prune:
@@ -254,6 +323,31 @@ def mipmaps(paths, check, prune):
         # A mipmap is missing or stale, or a file is an orphan: the lines say
         # which.
         raise click.exceptions.Exit(1)
+
+
+def _enable(path: str, values: dict) -> None:
+    """Add ``mipmap_options`` with ``values``, those not ``None``, to the
+    workspace at or above ``path``, and print what was written."""
+    root = find_workspace_for_path(Path(path))
+    if root is None:
+        raise click.ClickException(
+            f"No workspace file .sfm-workspace.json was found in {path} or any "
+            "directory above it."
+        )
+    try:
+        written = enable_mipmap_options(
+            root, **{k: v for k, v in values.items() if v is not None}
+        )
+    except (ValueError, OSError) as e:
+        raise click.ClickException(str(e))
+    click.echo(
+        f"Added mipmap_options to {_shown(root / '.sfm-workspace.json')}: "
+        f"{describe_mipmap_options(written)}."
+    )
+    click.echo(
+        f"No mipmap was made. 'sfm ws mipmaps {_shown(root)}' makes them now, "
+        "and every reader of the photographs makes those it needs."
+    )
 
 
 def _shown(path) -> str:

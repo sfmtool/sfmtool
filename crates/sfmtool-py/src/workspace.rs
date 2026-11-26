@@ -5,7 +5,8 @@
 //! a whole (`sfmtool_core::workspace`): its named image lists and their slices,
 //! the rules of the feature options its `.sfm-workspace.json` records, the
 //! upward search that finds the workspace a path is in, the `mipmap_options`
-//! a new workspace records, and the upgrade that brings a workspace's files
+//! a new workspace records, the reader of a workspace's `mipmap_options` and
+//! the writer that adds one to an existing workspace, and the upgrade that brings a workspace's files
 //! to the current versions.
 
 use std::path::PathBuf;
@@ -13,11 +14,13 @@ use std::sync::atomic::Ordering;
 
 use pyo3::exceptions::{PyInterruptedError, PyValueError};
 use pyo3::prelude::*;
+use sfmtool_core::camera::mipmap::MipmapOptions;
 use sfmtool_core::progress::{Event, Progress};
 use sfmtool_core::workspace::{
-    is_named_image_list_name, sfmtool_workspace_marker, split_named_image_list_value,
-    write_sfmtool_workspace_marker, NamedImageList, NamedImageListEntry, NamedImageListMember,
-    NamedImageListSlice, NamedImageLists, NamedImageListsError, SfmtoolWorkspaceOptions,
+    enable_mipmap_options, is_named_image_list_name, parse_mipmap_options, read_mipmap_options,
+    sfmtool_workspace_marker, split_named_image_list_value, write_sfmtool_workspace_marker,
+    NamedImageList, NamedImageListEntry, NamedImageListMember, NamedImageListSlice,
+    NamedImageLists, NamedImageListsError, SfmtoolWorkspaceOptions, WorkspaceConfigError,
     NAMED_IMAGE_LISTS_FILE_NAME, NEW_WORKSPACE_MIPMAP_OPTIONS, WORKSPACE_VERSION,
 };
 
@@ -554,7 +557,14 @@ fn write_sfmtool_workspace_marker_py(
 /// workspace setting".
 #[pyfunction(name = "new_workspace_mipmap_options")]
 fn new_workspace_mipmap_options_py(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
-    let options = NEW_WORKSPACE_MIPMAP_OPTIONS;
+    mipmap_options_dict(py, &NEW_WORKSPACE_MIPMAP_OPTIONS)
+}
+
+/// `options` as a dict with the keys in the order the file holds them.
+fn mipmap_options_dict<'py>(
+    py: Python<'py>,
+    options: &MipmapOptions,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
     let dict = pyo3::types::PyDict::new(py);
     dict.set_item("out_of_core_long_side", options.out_of_core_long_side)?;
     dict.set_item("jpeg_quality", options.jpeg_quality)?;
@@ -563,6 +573,89 @@ fn new_workspace_mipmap_options_py(py: Python<'_>) -> PyResult<Bound<'_, pyo3::t
         options.full_resolution_jpeg_quality,
     )?;
     Ok(dict)
+}
+
+/// The Python exception for `e`: `OSError` for a file that cannot be read or
+/// written, `ValueError` for every other.
+fn workspace_config_err(e: WorkspaceConfigError) -> PyErr {
+    match e {
+        WorkspaceConfigError::Io { .. } => pyo3::exceptions::PyOSError::new_err(e.to_string()),
+        _ => PyValueError::new_err(e.to_string()),
+    }
+}
+
+/// The ``mipmap_options`` object of ``workspace_dir``'s
+/// ``.sfm-workspace.json``, as a dict with its keys in the order they are
+/// written, or ``None`` when the file has none.
+///
+/// The object is checked as every reader checks it: exactly the keys
+/// ``out_of_core_long_side``, at least 1, and ``jpeg_quality`` and
+/// ``full_resolution_jpeg_quality``, 1 to 100, each a JSON integer. See
+/// ``specs/core/camera/mipmaps.md`` § "The workspace setting".
+///
+/// Raises:
+///     OSError: when the file cannot be read.
+///     ValueError: when it is not a JSON object or its object is invalid,
+///         naming the file, the key and the value.
+#[pyfunction(name = "read_mipmap_options")]
+fn read_mipmap_options_py(
+    py: Python<'_>,
+    workspace_dir: PathBuf,
+) -> PyResult<Option<Bound<'_, pyo3::types::PyDict>>> {
+    read_mipmap_options(&workspace_dir)
+        .map_err(workspace_config_err)?
+        .map(|options| mipmap_options_dict(py, &options))
+        .transpose()
+}
+
+/// Add a ``mipmap_options`` object to ``workspace_dir``'s
+/// ``.sfm-workspace.json``, which turns the out-of-core tier on for the
+/// workspace, and return the object written as a dict. No mipmap is made.
+///
+/// Each value left ``None`` is ``new_workspace_mipmap_options``'. The object
+/// is added as the file's last key, written as ``json.dump(..., indent=2)``
+/// writes it, and the rest of the file is kept as it is, its keys in their
+/// order. The file is replaced through a temporary file beside it, so a
+/// failure leaves it as it was. See
+/// ``specs/cli/workspace/ws-mipmaps-command.md`` § "Turning the tier on".
+///
+/// Raises:
+///     ValueError: for a value out of range (a threshold below 1, a quality
+///         outside 1 to 100), naming the key and the value; or, naming the
+///         file, for a file that already has the object, whatever it holds,
+///         one whose ``version`` is not 2, or one that is not a JSON object.
+///         The file is left as it is.
+///     OSError: when the file cannot be read or replaced.
+#[pyfunction(name = "enable_mipmap_options")]
+#[pyo3(signature = (
+    workspace_dir,
+    *,
+    out_of_core_long_side=None,
+    jpeg_quality=None,
+    full_resolution_jpeg_quality=None,
+))]
+fn enable_mipmap_options_py(
+    py: Python<'_>,
+    workspace_dir: PathBuf,
+    out_of_core_long_side: Option<i64>,
+    jpeg_quality: Option<i64>,
+    full_resolution_jpeg_quality: Option<i64>,
+) -> PyResult<Bound<'_, pyo3::types::PyDict>> {
+    let new = NEW_WORKSPACE_MIPMAP_OPTIONS;
+    // Checked as the file's object is, so a value out of range is refused
+    // with the reader's words before a narrower integer type could change it.
+    let object = serde_json::json!({
+        "out_of_core_long_side":
+            out_of_core_long_side.unwrap_or(i64::from(new.out_of_core_long_side)),
+        "jpeg_quality": jpeg_quality.unwrap_or(i64::from(new.jpeg_quality)),
+        "full_resolution_jpeg_quality": full_resolution_jpeg_quality
+            .unwrap_or(i64::from(new.full_resolution_jpeg_quality)),
+    });
+    let options =
+        parse_mipmap_options(&object).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    py.detach(|| enable_mipmap_options(&workspace_dir, &options))
+        .map_err(workspace_config_err)?;
+    mipmap_options_dict(py, &options)
 }
 
 /// Bring the tree of workspaces at `path` to the current file versions, and
@@ -743,6 +836,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sfmtool_workspace_marker_py, m)?)?;
     m.add_function(wrap_pyfunction!(write_sfmtool_workspace_marker_py, m)?)?;
     m.add_function(wrap_pyfunction!(new_workspace_mipmap_options_py, m)?)?;
+    m.add_function(wrap_pyfunction!(read_mipmap_options_py, m)?)?;
+    m.add_function(wrap_pyfunction!(enable_mipmap_options_py, m)?)?;
     m.add_function(wrap_pyfunction!(upgrade_workspace_py, m)?)?;
     m.add("NAMED_IMAGE_LISTS_FILE_NAME", NAMED_IMAGE_LISTS_FILE_NAME)?;
     m.add("WORKSPACE_VERSION", WORKSPACE_VERSION)?;

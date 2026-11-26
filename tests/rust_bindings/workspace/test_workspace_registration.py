@@ -6,11 +6,13 @@
 import sfmtool._sfmtool.workspace as workspace
 
 _EXPECTED_FUNCTIONS = (
+    "enable_mipmap_options",
     "feature_prefix_dir",
     "feature_type_for_tool",
     "find_workspace_for_path",
     "is_named_image_list_name",
     "new_workspace_mipmap_options",
+    "read_mipmap_options",
     "recorded_image_to_gray",
     "sfmtool_workspace_marker",
     "split_named_image_list_value",
