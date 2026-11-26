@@ -57,6 +57,7 @@ concerns with 10M+ points and GIL limitations for background image loading.
 | `pollster` | Blocking executor for wgpu async operations |
 | `rfd` | Native file open dialogs |
 | `windows` | Windows API bindings for DirectManipulation (Windows-only) |
+| `mimalloc` | The global allocator of the `sfm-explorer` binary ([`main.rs`](../../crates/sfm-explorer/src/main.rs)), the one the extension sets for `sfm explorer` ([python-bindings.md § "The global allocator"](../python-bindings.md#the-global-allocator)); the library sets none |
 
 ### Why Custom Event Loop (Not eframe)
 

@@ -4661,3 +4661,73 @@ decisions.
     `sfmtool-py` and of the viewer's own binary, after the same runs are
     measured on Linux and macOS, since their allocators differ from
     Windows' heap. It is a change of its own, made before step 17.
+
+    *Built, measured on Windows and Linux; macOS not measured:* `mimalloc`
+    0.1.52 (mimalloc 3.3.2) is the global allocator of `sfmtool-py`
+    ([lib.rs](../../crates/sfmtool-py/src/lib.rs)) and of the
+    `sfm-explorer` binary
+    ([main.rs](../../crates/sfm-explorer/src/main.rs)), unconditionally,
+    with no Cargo feature to turn it off; the library crates set none
+    ([python-bindings.md § "The global allocator"](../python-bindings.md#the-global-allocator)).
+    The extension enables `mimalloc`'s `local_dynamic_tls` feature: built
+    without it, the Linux extension failed to import, with "cannot allocate
+    memory in static TLS block", since Python loads it with `dlopen`.
+    Measured as in open question 21 on the same 8 photographs, by a scratch
+    script reading wall clock, user and kernel-mode CPU time (`os.times`)
+    and the peak working set (Windows) or `ru_maxrss` (Linux). On Windows,
+    two runs each of a release build at this change's base with the system
+    allocator and the same build with `mimalloc`, the two builds
+    alternating run by run; each cell is wall clock, kernel-mode time and
+    peak working set, the two runs separated by "/":
+
+    | Run | Cache budget | System allocator | `mimalloc` |
+    |-----|--------------|------------------|------------|
+    | `xform`, in core | 15.9 GiB | 22.9 / 23.5 s; 18 / 19 s; 8.3 / 8.5 GB | 18.8 / 18.4 s; 8 / 7 s; 10.4 / 10.9 GB |
+    | `xform`, mipmaps current | 15.9 GiB | 31.5 / 33.0 s; 85 / 86 s; 3.1 / 3.1 GB | 17.4 / 17.5 s; 9 / 8 s; 3.6 / 3.6 GB |
+    | `xform`, mipmaps current | 0.8 GiB | 63.6 / 51.1 s; 72 / 85 s; 2.2 / 2.9 GB | 37.6 / 37.1 s; 46 / 47 s; 4.4 / 3.4 GB |
+    | `embed_patches`, in core | 15.9 GiB | 37.7 / 38.5 s; 23 / 29 s; 8.3 / 8.4 GB | 31.4 / 31.6 s; 10 / 11 s; 10.5 / 10.3 GB |
+    | `embed_patches`, mipmaps current | 15.9 GiB | 59.4 / 46.2 s; 212 / 100 s; 3.8 / 3.8 GB | 30.5 / 30.5 s; 11 / 11 s; 4.3 / 4.3 GB |
+    | `embed_patches`, mipmaps current | 0.8 GiB | 80.6 / 106.7 s; 132 / 211 s; 3.7 / 4.2 GB | 62.7 / 63.4 s; 74 / 72 s; 3.9 / 5.5 GB |
+    | `sfm cluster-patches`, in core | 15.9 GiB | 6.7 / 6.6 s; 7 / 8 s; 8.7 / 8.8 GB | 5.5 / 5.6 s; 5 / 6 s; 10.5 / 10.3 GB |
+    | `sfm cluster-patches`, mipmaps current | 15.9 GiB | 4.4 / 4.5 s; 5 / 6 s; 2.3 / 2.3 GB | 4.0 / 4.1 s; 5 / 5 s; 2.7 / 2.8 GB |
+    | `sfm cluster-patches`, mipmaps current | 0.8 GiB | 6.8 / 6.8 s; 11 / 11 s; 1.3 / 1.4 GB | 5.9 / 5.8 s; 6 / 6 s; 1.8 / 1.8 GB |
+
+    On Linux, Ubuntu 24.04 under WSL 2 on the same machine, with 31 GB and
+    32 threads, so the default cache budget is 7.8 GiB, one run each, with
+    glibc's `malloc`, with `mimalloc`, and with `mimalloc` and
+    `MIMALLOC_PURGE_DELAY=0`; each cell is wall clock, kernel-mode time and
+    peak resident set:
+
+    | Run | Cache budget | glibc | `mimalloc` | `mimalloc`, purge delay 0 |
+    |-----|--------------|-------|------------|---------------------------|
+    | `xform`, in core | 7.8 GiB | 32.7 s; 31 s; 8.7 GB | 21.6 s; 7 s; 10.6 GB | 26.6 s; 118 s; 9.6 GB |
+    | `xform`, mipmaps current | 7.8 GiB | 20.0 s; 12 s; 3.2 GB | 19.8 s; 9 s; 3.8 GB | 25.4 s; 126 s; 3.3 GB |
+    | `xform`, mipmaps current | 0.8 GiB | 49.1 s; 89 s; 4.8 GB | 42.2 s; 59 s; 4.7 GB | 50.8 s; 330 s; 3.3 GB |
+    | `embed_patches`, in core | 7.8 GiB | 56.0 s; 14 s; 9.2 GB | 36.9 s; 13 s; 10.9 GB | 44.3 s; 197 s; 9.2 GB |
+    | `embed_patches`, mipmaps current | 7.8 GiB | 82.2 s; 40 s; 3.9 GB | 35.6 s; 11 s; 4.6 GB | 43.7 s; 199 s; 4.1 GB |
+    | `embed_patches`, mipmaps current | 0.8 GiB | 70.7 s; 127 s; 5.2 GB | 69.2 s; 89 s; 4.5 GB | 89.1 s; 556 s; 2.8 GB |
+    | `sfm cluster-patches`, in core | 7.8 GiB | 17.3 s; 53 s; 9.2 GB | 16.7 s; 48 s; 10.2 GB | 16.4 s; 57 s; 9.0 GB |
+    | `sfm cluster-patches`, mipmaps current | 7.8 GiB | 15.0 s; 47 s; 2.3 GB | 14.2 s; 44 s; 2.8 GB | 15.3 s; 67 s; 2.4 GB |
+    | `sfm cluster-patches`, mipmaps current | 0.8 GiB | 17.1 s; 49 s; 1.9 GB | 16.8 s; 48 s; 2.0 GB | 18.1 s; 90 s; 1.5 GB |
+
+    `MIMALLOC_PURGE_DELAY=0` on Windows, one run each, not alternating:
+    `xform` 26.9 s in core, 24.5 s and 64.8 s from the mipmaps at the two
+    budgets, with 67, 83 and 217 s of kernel-mode time and 8.6, 3.2 and
+    3.1 GB; `embed_patches` 50.7 s, 42.8 s and 105.0 s, with 151, 153 and
+    383 s and 8.6, 4.0 and 2.7 GB. With a purge delay of 100 ms,
+    `embed_patches` from the mipmaps at 0.8 GiB took 97.5 s with 3.9 GB.
+    Purging at once brings the peak back to the system allocator's but
+    costs most of the gain where the cache evicts, so the default delay of
+    1 s stays. Every output was the same file with either allocator on each
+    platform, byte for byte but the write record. On both platforms the
+    runs from the mipmaps at the default budget take the time of the
+    in-core runs or less, and `xform` and `embed_patches` in core are 15
+    to 35% faster than with the system allocator; at 0.8 GiB the runs still take about twice
+    the default budget's time, for the reason open question 21 gives.
+    `sfm cluster-patches` under WSL 2 spends about 45 s of kernel-mode time
+    with either allocator, which these runs did not look into. macOS was
+    not measured, since no Mac was available. *Decided by the user:* ship
+    it with Windows and Linux measured, and macOS covered by the CI's
+    macOS build and test jobs, which build the extension and the viewer
+    with `mimalloc` and run the full suites; macOS can be benchmarked
+    later.

@@ -427,7 +427,11 @@ DaeguMuseumMasks reconstruction it keeps 151 of 368 images for point 30000,
 ## Budget and eviction
 
 The cache counts the bytes of every tile it keeps, its pixels with their
-border. When a decode, or `insert`, takes the total over the budget, it drops
+border. It does not count what the allocator holds besides them, such as the
+freed pages `mimalloc` keeps for its purge delay before returning them, so
+the process holds more than the budget
+([python-bindings.md § "The global allocator"](../../python-bindings.md#the-global-allocator)).
+When a decode, or `insert`, takes the total over the budget, it drops
 tiles until the total is back under: the unused before the used, among each
 the least recently asked for first, and among tiles asked for together the
 finer levels first. It never drops a tile the request that made the decode
