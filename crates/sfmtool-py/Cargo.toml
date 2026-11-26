@@ -43,6 +43,13 @@ nalgebra = "0.35"
 # from a wheel.
 sfm-explorer = { path = "../sfm-explorer" }
 openjd-expr = "0.13.0"
+# The extension's global allocator (`lib.rs`; `specs/python-bindings.md` §
+# "The global allocator"). It compiles mimalloc's C sources with the `cc`
+# crate, as `zstd-sys` and `libsqlite3-sys` already compile theirs.
+# `local_dynamic_tls` because Python loads the extension with `dlopen`: built
+# with mimalloc's default initial-exec thread-local storage, the import fails
+# on Linux with "cannot allocate memory in static TLS block".
+mimalloc = { version = "0.1.52", features = ["local_dynamic_tls"] }
 
 # Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
 [lints]

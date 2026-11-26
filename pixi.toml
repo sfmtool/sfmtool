@@ -32,6 +32,17 @@ version = "0.4.1"
 [dependencies]
 rust = ">=1.99.0,<1.100"
 
+# On Linux the conda `rust` package links with the conda C compiler
+# (`x86_64-conda-linux-gnu-cc`, set as the cargo linker by its activation
+# script), whose sysroot carries glibc 2.28. The `cc` crate, which compiles the
+# C code of `libmimalloc-sys`, `zstd-sys` and `libsqlite3-sys`, would otherwise
+# use the system `cc` and that system's glibc headers. Headers from glibc 2.38
+# or later rename `strtol` to `__isoc23_strtol`, which the 2.28 sysroot lacks,
+# so linking an executable such as the viewer fails. Compiling C with the same
+# compiler the linker is keeps the headers and the libraries in step.
+[target.linux-64.activation.env]
+CC_x86_64_unknown_linux_gnu = "x86_64-conda-linux-gnu-cc"
+
 # The SfM runtime: the Python interpreter and the pycolmap solver. Only
 # environments that actually run the Python tool pull this in — keeping it out
 # of the base deps lets the `lint` and `ui` environments skip the heavy

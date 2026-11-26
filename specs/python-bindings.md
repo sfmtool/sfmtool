@@ -52,6 +52,71 @@ record_phases=True)` and `pairwise_flow_normal(..., record_phases=True)` are
 the bindings that offer it
 ([editable-track.md](core/bench/editable-track.md) § "Python bindings").
 
+## The global allocator
+
+The extension sets [`mimalloc`](https://github.com/microsoft/mimalloc) as
+its global allocator (`#[global_allocator]` in
+[`lib.rs`](../crates/sfmtool-py/src/lib.rs)), so every allocation its Rust
+code makes, the viewer's included when `sfm explorer` runs it through
+`run_explorer`, goes through `mimalloc`. Python's own allocations, and
+NumPy's, do not: a Rust buffer handed to NumPy is freed by Rust's drop, so
+each block is freed by the allocator that made it. The viewer's own binary
+sets the same allocator ([gui/architecture.md § "Key Rust
+Crates"](gui/architecture.md#key-rust-crates)); the library crates set none,
+since a global allocator is the choice of the final artifact.
+
+The reason is the kernels that read photographs from their mipmaps. Each
+decodes thousands of JPEG tiles on its rayon threads, allocating and freeing
+blocks of tens to hundreds of KB, and the system allocators slow the
+allocations that follow: on Windows the process heap spent 100 to 210 s of
+kernel-mode time in an `embed_patches` run from current mipmaps where
+`mimalloc` spends 11 s, and on Linux glibc's `malloc` made the same run take
+longer than in core. With `mimalloc` a run from current mipmaps takes about
+the time of the same run in core, or less, on both, and runs in core are
+faster too. The peak resident memory is mostly 10 to 30% higher, which the
+photograph cache's budget does not count ([core/camera/photograph-cache.md §
+"Budget and eviction"](core/camera/photograph-cache.md#budget-and-eviction)).
+Measured on eight 200 MP photographs, wall clock and peak resident memory
+(on Windows two runs each, alternating the two builds; on Linux, under WSL 2
+with a cache budget of 7.8 GiB, one run each):
+
+| Run | Windows, system | Windows, `mimalloc` | Linux, glibc | Linux, `mimalloc` |
+|-----|-----------------|---------------------|--------------|-------------------|
+| `xform` steps, in core | 22.9, 23.5 s; 8.5 GB | 18.8, 18.4 s; 10.9 GB | 32.7 s; 8.7 GB | 21.6 s; 10.6 GB |
+| `xform` steps, from mipmaps | 31.5, 33.0 s; 3.1 GB | 17.4, 17.5 s; 3.6 GB | 20.0 s; 3.2 GB | 19.8 s; 3.8 GB |
+| `embed_patches`, in core | 37.7, 38.5 s; 8.4 GB | 31.4, 31.6 s; 10.5 GB | 56.0 s; 9.2 GB | 36.9 s; 10.9 GB |
+| `embed_patches`, from mipmaps | 59.4, 46.2 s; 3.8 GB | 30.5, 30.5 s; 4.3 GB | 82.2 s; 3.9 GB | 35.6 s; 4.6 GB |
+| `embed_patches`, from mipmaps, 0.8 GiB cache | 80.6, 106.7 s; 4.2 GB | 62.7, 63.4 s; 5.5 GB | 70.7 s; 5.2 GB | 69.2 s; 4.5 GB |
+
+The full tables, with `sfm cluster-patches` and the kernel-mode times, are
+in [drafts/out-of-core-photograph-pyramid.md](drafts/out-of-core-photograph-pyramid.md)
+open question 22. Every output was the same file with either allocator, byte
+for byte but the write record.
+
+`mimalloc` keeps the pages it frees for its purge delay, 1 s by default,
+before returning them to the system, which is where most of the extra
+memory comes from. `MIMALLOC_PURGE_DELAY=0` in the environment returns them
+at once and brings the peak back to the system allocator's, but measured
+the same way it multiplied the kernel-mode time of the `xform` and
+`embed_patches` runs by 5 to 18 and gave back much of the gain
+(`embed_patches` from mipmaps at 0.8 GiB: 105 s on Windows, 89 s on
+Linux), so the extension keeps the default; the variable
+stays available to a user short of memory, as do mimalloc's other
+`MIMALLOC_*` options.
+
+The dependency enables `mimalloc`'s `local_dynamic_tls` feature. Python
+loads the extension with `dlopen`, and a shared library built with
+`mimalloc`'s default initial-exec thread-local storage fails to load on
+Linux with "cannot allocate memory in static TLS block". On Windows the
+feature changes nothing. `mimalloc` is MIT-licensed and compiles its C
+sources with the `cc` crate, which needs a C compiler on every platform the
+extension builds on, as `zstd-sys` and `libsqlite3-sys` already do. On
+Linux the pixi environments set `CC_x86_64_unknown_linux_gnu` to the conda
+compiler that the conda `rust` package links with, so C code is compiled
+against the same glibc 2.28 sysroot it is linked against: compiled with the
+system `cc` against glibc 2.38 or later, `mimalloc` calls `__isoc23_strtol`,
+which that sysroot lacks, and the viewer binary fails to link.
+
 ## Where Python code reads a binding
 
 Each extension submodule `<name>` has a public module `sfmtool.<name>`, a

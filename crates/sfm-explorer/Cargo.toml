@@ -113,6 +113,11 @@ jiff = "0.2"
 # node (see `specs/gui/panel-layout.md`). Not behind the `mcp` feature: Panels >
 # Save/Load Layout is in every build.
 serde_json = "1"
+# The global allocator of the `sfm-explorer` binary (`src/main.rs`), the one
+# the Python extension sets for `sfm explorer`. Only the binary sets it: the
+# library leaves the allocator to the final artifact. A Cargo dependency
+# cannot be limited to one target, so the library's dependents compile it too.
+mimalloc = "0.1.52"
 
 # ── The `mcp` feature's dependency tree (see [features] above) ──
 #

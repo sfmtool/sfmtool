@@ -45,6 +45,16 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+/// Every allocation the extension's Rust code makes, the viewer's included
+/// (`run_explorer`), goes through `mimalloc` rather than the system
+/// allocator; Python's own allocations do not. After the thousands of tile
+/// decodes a kernel reading photographs from their mipmaps runs, the system
+/// allocators (the Windows process heap, glibc's `malloc`) slow the
+/// allocations that follow, and `mimalloc` does not. The reasons and the
+/// measurements are in `specs/python-bindings.md` § "The global allocator".
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Try zero-copy `as_slice()` for C-contiguous arrays, fall back to copying
 /// in logical (row-major) order otherwise. The C-contiguity guard matters:
 /// `as_slice()` also succeeds for Fortran-contiguous arrays and returns the
