@@ -912,14 +912,20 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           holds. It has no stored row behind it, so its commit appends one, \
                           with endpoint B and the stated distance absent until \
                           set_bench_measurement_endpoint and set_bench_measurement_distance \
-                          give them. To \
+                          give them. With Auto-Commit ticked (get_measurement_auto_commit; on \
+                          by default) that row is appended in the same version, labelled like \
+                          \"Put distance from IMG_0042@142,198 on the bench and added distance \
+                          #5 in dino\", and each later step commits the item again. To \
                           start from a 3D point, as the 3D view's point menu does on a \
                           right-click off the point's drawn patch, pass the camera_image and \
                           pixel get_point_reference_pixel gives. Refused, in \
                           the commit's words, for a pixel outside [0, width) x [0, height) of \
                           the image, on a sift_files reconstruction (view-only bench) and while \
-                          a background task holds the node. The reply names the item and \
-                          carries camera_image and pixel.",
+                          a background task holds the node. The reply names the item, carries \
+                          camera_image and pixel, and carries auto_commit, committed (the row \
+                          appended, with measurement_kind, measurement_index and replaced, or \
+                          null) and, where the commit was refused, commit_refused with the \
+                          sentence.",
             kind: Write,
             schema: object(
                 &[],
@@ -928,6 +934,37 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     ("camera_image", camera_image_schema()),
                     ("pixel", pixel_schema()),
                 ],
+            ),
+        },
+        ToolSpec {
+            name: "get_measurement_auto_commit",
+            description: "Whether Measurement View's Auto-Commit checkbox is ticked: whether \
+                          each set_bench_measurement_* step and create_bench_measurement \
+                          commit the measurement item into the reconstruction in the same \
+                          version as the step. On by default, and it lives only as long as the \
+                          session.",
+            kind: ToolKind::Read,
+            schema: object(&[], &[]),
+        },
+        ToolSpec {
+            name: "set_measurement_auto_commit",
+            description: "Tick or clear Measurement View's Auto-Commit checkbox, which writes \
+                          the same Action Log entry the checkbox does (\"Auto-Commit on\", \
+                          \"Auto-Commit off\"). Ticked, each set_bench_measurement_* step and \
+                          create_bench_measurement also commit the item in the same version; \
+                          cleared, they leave the reconstruction alone until \
+                          commit_bench_measurement. Ticking it commits the focused measurement \
+                          item at once where it holds what its row does not and its commit is \
+                          not refused, as the checkbox does. The reply is the document \
+                          get_measurement_auto_commit returns, with committed naming the row \
+                          that commit wrote, or null.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[(
+                    "enabled",
+                    flag("True to commit each step with the item, false to leave steps on the bench."),
+                )],
             ),
         },
         ToolSpec {
@@ -945,7 +982,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the bench, seated on the row written, which becomes the selected \
                           measurement; the reply names it with replaced. A commit onto a row \
                           that already holds exactly what the item holds pushes no version \
-                          and answers changed: false. Naming no item commits the focused one.",
+                          and answers changed: false. Naming no item commits the focused one. \
+                          With Auto-Commit ticked each set_bench_measurement_* step and \
+                          create_bench_measurement commit the item already, so this is for an \
+                          item that holds what its row does not: one whose step's commit was \
+                          refused, or whose row was deleted or undone.",
             kind: Write,
             schema: object(
                 &[("item", bench_item_schema())],
@@ -957,8 +998,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Set a measurement item's own label, the text the file stores for \
                           the measurement, as Measurement View's label field does: one bench \
                           version labelled like \"Set the label of distance #2 to \\\"paw \
-                          width\\\"\", which leaves the reconstruction alone until the item is \
-                          committed. Any text is a label, kept as given, except one that is \
+                          width\\\"\". With Auto-Commit ticked (get_measurement_auto_commit; on by default) the item is \
+                          also committed in the same version, as commit_bench_measurement \
+                          does, the label gaining \" and committed distance #2 in dino\" (or \
+                          \" and added distance #4 in dino\"), so one undo takes back both; \
+                          with it cleared the reconstruction is left alone until the item is \
+                          committed. The reply carries auto_commit, committed (the row the \
+                          item was committed under, with measurement_kind, measurement_index \
+                          and replaced, or null) and, where the commit was refused and the \
+                          step stands on the bench alone, commit_refused with the sentence. Any text is a label, kept as given, except one that is \
                           empty or only white space, which is refused; it is not the item's \
                           name on the bench, which rename_bench_item sets. A label the \
                           item holds already pushes no version (changed: false). Refused on a \
@@ -984,8 +1032,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "set_bench_measurement_distance",
             description: "Set a measurement item's stated distance, as Measurement View's \
                           stated distance field does: one bench version labelled like \"Set the \
-                          stated distance of distance #2 to 4.2 cm\", which leaves the \
-                          reconstruction alone until the item is committed. The distance is a \
+                          stated distance of distance #2 to 4.2 cm\". With Auto-Commit ticked (get_measurement_auto_commit; on by default) the item is \
+                          also committed in the same version, as commit_bench_measurement \
+                          does, the label gaining \" and committed distance #2 in dino\" (or \
+                          \" and added distance #4 in dino\"), so one undo takes back both; \
+                          with it cleared the reconstruction is left alone until the item is \
+                          committed. The reply carries auto_commit, committed (the row the \
+                          item was committed under, with measurement_kind, measurement_index \
+                          and replaced, or null) and, where the commit was refused and the \
+                          step stands on the bench alone, commit_refused with the sentence. The distance is a \
                           number with an optional unit suffix, read as the field reads one \
                           (\"12in\", \"30.48 cm\"); a bare \
                           number, or a JSON number, is in the reconstruction's \
@@ -1020,8 +1075,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Move one endpoint of a measurement item to a pixel of a camera \
                           image: one bench version labelled like \"Moved endpoint A of \
                           distance #2 to IMG_0004.jpg (412.3, 230.5)\" (\"Set endpoint B of \
-                          ...\" for an endpoint not placed), which leaves the reconstruction \
-                          alone until the item is committed. Any pixel inside the image is \
+                          ...\" for an endpoint not placed). With Auto-Commit ticked (get_measurement_auto_commit; on by default) the item is \
+                          also committed in the same version, as commit_bench_measurement \
+                          does, the label gaining \" and committed distance #2 in dino\" (or \
+                          \" and added distance #4 in dino\"), so one undo takes back both; \
+                          with it cleared the reconstruction is left alone until the item is \
+                          committed. The reply carries auto_commit, committed (the row the \
+                          item was committed under, with measurement_kind, measurement_index \
+                          and replaced, or null) and, where the commit was refused and the \
+                          step stands on the bench alone, commit_refused with the sentence. Any pixel inside the image is \
                           taken, not only one get_measurement_endpoint_views offers; the \
                           endpoint's point, texel and position follow from the image and \
                           pixel, so none of them is set. Refused, in the commit's words, for \

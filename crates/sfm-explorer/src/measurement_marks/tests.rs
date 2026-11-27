@@ -61,7 +61,8 @@ fn a_hidden_reconstruction_draws_no_stored_measurement() {
     assert!(state.measurement_layer(true).drawn.is_empty());
     let label = state
         .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
-        .unwrap();
+        .unwrap()
+        .label;
     assert_eq!(
         ids(&state.measurement_layer(true)),
         vec![(DrawnId::Item { node: id, label }, Role::Item)]
@@ -137,7 +138,8 @@ fn the_focused_item_is_drawn_as_the_bench_layer() {
     let (mut state, id) = measured_state(Some("m"));
     let label = state
         .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
-        .unwrap();
+        .unwrap()
+        .label;
     state.selected_endpoint = Some(EndpointSide::A);
     let layer = state.measurement_layer(false);
     let item = layer.drawn.last().unwrap();

@@ -8,10 +8,10 @@
 //! **Edit** box, ticked exactly when the focused item is a measurement on the
 //! selected node's bench. With it clear, the panel shows the selected stored
 //! measurement, read-only: its header, then the body for its kind. With it
-//! ticked, it shows the focused item instead, with a toolbar (*Commit*,
-//! *Discard*, *Rename*), fields that set its label and stated distance, and
-//! the item's **live readings**, read from the item rather than from a stored
-//! row. A distance measurement's body is its two
+//! ticked, it shows the focused item instead, with a toolbar (*Auto-Commit*,
+//! *Commit*, *Discard*, *Rename*), fields that set its label and stated
+//! distance, and the item's **live readings**, read from the item rather than
+//! from a stored row. A distance measurement's body is its two
 //! endpoint blocks side by side, `A` and `B`, then the result block. Each
 //! block shows the endpoint's photograph and pixel, a crop of the photograph
 //! around it with a larger view on hover, the stored patch of the point it
@@ -48,6 +48,7 @@ use sfmtool_core::reconstruction::measurement_endpoint::{
 };
 use sfmtool_core::LengthUnit;
 
+use crate::bench::measurement::AUTO_COMMIT_LABEL;
 use crate::document::VersionSerial;
 use crate::measurements::{
     self, DistanceResult, DistanceRow, EndpointSide, ItemReading, MeasurementRef, MINUS,
@@ -105,6 +106,8 @@ pub(crate) struct MeasurementViewResponse {
     pub(crate) goto_point: Option<String>,
     /// The *Edit* box was ticked (`true`) or cleared on this node.
     pub(crate) set_edit: Option<(ReconId, bool)>,
+    /// *Auto-Commit* was ticked (`true`) or cleared.
+    pub(crate) set_auto_commit: Option<bool>,
     /// *Commit* was clicked on the item with this label.
     pub(crate) commit: Option<(ReconId, String)>,
     /// *Discard* was clicked on the item with this label.
@@ -474,6 +477,12 @@ pub(crate) struct MeasurementView {
     links: Vec<Rect>,
     /// What the toolbar drew on the last frame, for the tests that read it.
     toolbar: Vec<(String, Option<String>)>,
+    /// The line under the toolbar saying why the item's commit is refused
+    /// while Auto-Commit is ticked, as the last frame drew it.
+    refusal_line: Option<String>,
+    /// Where the toolbar's *Auto-Commit* box was drawn on the last frame, for
+    /// the tests that click it.
+    auto_commit_box: Option<Rect>,
     /// Where each endpoint block was drawn on the last frame, its frame and
     /// everything in it.
     blocks: [Option<Rect>; 2],
@@ -550,6 +559,19 @@ impl MeasurementView {
         &self.toolbar
     }
 
+    /// The line under the toolbar saying why the item's commit is refused,
+    /// as the last frame drew it.
+    #[cfg(test)]
+    pub(crate) fn refusal_line(&self) -> Option<&str> {
+        self.refusal_line.as_deref()
+    }
+
+    /// Where the toolbar's *Auto-Commit* box was drawn on the last frame.
+    #[cfg(test)]
+    pub(crate) fn auto_commit_box(&self) -> Option<Rect> {
+        self.auto_commit_box
+    }
+
     /// Where the endpoint block on `side` was drawn on the last frame.
     #[cfg(test)]
     pub(crate) fn block_rect(&self, side: EndpointSide) -> Option<Rect> {
@@ -615,6 +637,8 @@ impl MeasurementView {
         self.fields = [None, None];
         self.links.clear();
         self.toolbar.clear();
+        self.refusal_line = None;
+        self.auto_commit_box = None;
         self.blocks = [None, None];
         self.switches = [None, None];
         self.menu_entries = [None, None];
@@ -900,9 +924,12 @@ impl MeasurementView {
         committed
     }
 
-    /// The toolbar of the edited mode: *Commit*, greyed with the refusal the
-    /// step would give; *Discard* and *Rename*, greyed only while a task holds
-    /// the node, since neither edits the item.
+    /// The toolbar of the edited mode: *Auto-Commit*; *Commit*, greyed with
+    /// the refusal the step would give, and shown while Auto-Commit is ticked
+    /// only where the item holds what its row does not; *Discard* and
+    /// *Rename*, greyed only while a task holds the node, since neither edits
+    /// the item. Under it, while Auto-Commit is ticked and the item holds what
+    /// its row does not, the line saying why its commit is refused.
     fn show_toolbar(
         &mut self,
         ui: &mut egui::Ui,
@@ -913,16 +940,34 @@ impl MeasurementView {
     ) {
         let busy = state.busy_refusal(id);
         let commit_refusal = state.measurement_commit_refusal(id, label);
+        let auto = state.measurement_auto_commit;
+        let uncommitted = auto && state.measurement_uncommitted(id, label);
         ui.horizontal_wrapped(|ui| {
-            self.toolbar
-                .push(("Commit".to_string(), commit_refusal.clone()));
-            if entry(
-                ui,
-                "Commit",
-                commit_refusal,
-                "Write this measurement into the reconstruction",
-            ) {
-                response.commit = Some((id, label.to_string()));
+            let mut ticked = auto;
+            let checkbox = ui
+                .checkbox(&mut ticked, AUTO_COMMIT_LABEL)
+                .on_hover_text(if auto {
+                    "Each change to this measurement is written into the reconstruction \
+                     with it. Clear to keep changes on the bench until Commit"
+                } else {
+                    "Write each change to this measurement into the reconstruction with \
+                     it, and what the bench holds now at once"
+                });
+            self.auto_commit_box = Some(checkbox.rect);
+            if checkbox.changed() {
+                response.set_auto_commit = Some(ticked);
+            }
+            if !auto || uncommitted {
+                self.toolbar
+                    .push(("Commit".to_string(), commit_refusal.clone()));
+                if entry(
+                    ui,
+                    "Commit",
+                    commit_refusal.clone(),
+                    "Write this measurement into the reconstruction",
+                ) {
+                    response.commit = Some((id, label.to_string()));
+                }
             }
             self.toolbar.push(("Discard".to_string(), busy.clone()));
             if entry(
@@ -956,6 +1001,11 @@ impl MeasurementView {
                 }
             }
         });
+        if let Some(why) = commit_refusal.filter(|_| uncommitted) {
+            let line = format!("Not committed: {why}");
+            ui.colored_label(ui.visuals().error_fg_color, &line);
+            self.refusal_line = Some(line);
+        }
     }
 
     /// The two endpoint blocks, each with its pictures cut on the first frame

@@ -393,6 +393,14 @@ pub(crate) enum Command {
         camera_image: CameraImageSel,
         pixel: [f64; 2],
     },
+    /// Whether Measurement View's Auto-Commit is ticked.
+    GetMeasurementAutoCommit,
+    /// Tick or clear Measurement View's Auto-Commit, through the call the
+    /// checkbox makes, so a tick commits what the focused item holds
+    /// uncommitted.
+    SetMeasurementAutoCommit {
+        enabled: bool,
+    },
     /// Write a measurement item into the node's reconstruction. `None` is the
     /// focused item.
     CommitBenchMeasurement {
@@ -1792,6 +1800,10 @@ pub(crate) fn apply_with_window(
             &camera_image,
             pixel,
         )),
+        Command::GetMeasurementAutoCommit => done(measurements::get_measurement_auto_commit(state)),
+        Command::SetMeasurementAutoCommit { enabled } => {
+            done(measurements::set_measurement_auto_commit(state, enabled))
+        }
         Command::CommitBenchMeasurement {
             reconstruction_label,
             item,

@@ -600,6 +600,8 @@ fn view_only_state() -> (AppState, ReconId) {
 #[test]
 fn setting_the_label_is_one_bench_step_and_undoes() {
     let (mut state, id) = measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 2))
         .unwrap();
@@ -611,9 +613,12 @@ fn setting_the_label_is_one_bench_step_and_undoes() {
         .current_version()
         .document_serial;
     let item_id = state.focused_item().unwrap().item;
-    assert!(state
-        .set_bench_measurement_label(id, "distance #2", "paw width")
-        .unwrap());
+    assert!(
+        state
+            .set_bench_measurement_label(id, "distance #2", "paw width")
+            .unwrap()
+            .changed
+    );
     assert_eq!(version_count(&state, id), before + 1);
     let node = state.node(id).unwrap();
     assert_eq!(
@@ -642,9 +647,12 @@ fn setting_the_label_it_has_is_no_step() {
         .put_measurement_on_bench(MeasurementRef::distance(id, 0))
         .unwrap();
     let before = version_count(&state, id);
-    assert!(!state
-        .set_bench_measurement_label(id, "distance #0", "ear to ear")
-        .unwrap());
+    assert!(
+        !state
+            .set_bench_measurement_label(id, "distance #0", "ear to ear")
+            .unwrap()
+            .changed
+    );
     assert_eq!(version_count(&state, id), before);
     assert_eq!(
         last_row(&state),
@@ -664,6 +672,8 @@ fn setting_the_label_it_has_is_no_step() {
 #[test]
 fn setting_the_stated_distance_reads_the_unit_and_is_one_bench_step() {
     let (mut state, id) = measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 2))
         .unwrap();
@@ -875,6 +885,8 @@ fn offers_of_a(
 fn switching_an_endpoint_is_one_bench_step_and_undoes() {
     use crate::bench::measurement::EndpointMove;
     let (mut state, id) = measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 1))
         .unwrap();
@@ -895,7 +907,7 @@ fn switching_an_endpoint_is_one_bench_step_and_undoes() {
             EndpointMove::Switch,
         )
         .unwrap();
-    assert!(moved);
+    assert!(moved.changed);
     assert_eq!(version_count(&state, id), before + 1);
     let node = state.node(id).unwrap();
     assert_eq!(
@@ -936,7 +948,7 @@ fn switching_an_endpoint_is_one_bench_step_and_undoes() {
             EndpointMove::Switch,
         )
         .unwrap();
-    assert!(!again);
+    assert!(!again.changed);
     assert_eq!(version_count(&state, id), before + 1);
     assert_eq!(
         last_row(&state),
@@ -956,19 +968,24 @@ fn switching_an_endpoint_is_one_bench_step_and_undoes() {
 fn setting_an_endpoint_names_the_pixel_and_refuses_one_outside_the_image() {
     use crate::bench::measurement::EndpointMove;
     let (mut state, id) = measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 1))
         .unwrap();
-    assert!(state
-        .set_bench_measurement_endpoint(
-            id,
-            "distance #1",
-            EndpointSide::A,
-            2,
-            [10.0, 20.25],
-            EndpointMove::Set,
-        )
-        .unwrap());
+    assert!(
+        state
+            .set_bench_measurement_endpoint(
+                id,
+                "distance #1",
+                EndpointSide::A,
+                2,
+                [10.0, 20.25],
+                EndpointMove::Set,
+            )
+            .unwrap()
+            .changed
+    );
     assert_eq!(
         state.node(id).unwrap().history.current_version().label,
         "Moved endpoint A of distance #1 to image_002.jpg (10.0, 20.2)"
@@ -1009,16 +1026,19 @@ fn setting_an_endpoint_names_the_pixel_and_refuses_one_outside_the_image() {
         )
     );
     assert_eq!(version_count(&state, id), before);
-    assert!(state
-        .set_bench_measurement_endpoint(
-            id,
-            "distance #1",
-            EndpointSide::B,
-            0,
-            [1.0, 1.0],
-            EndpointMove::Set,
-        )
-        .unwrap());
+    assert!(
+        state
+            .set_bench_measurement_endpoint(
+                id,
+                "distance #1",
+                EndpointSide::B,
+                0,
+                [1.0, 1.0],
+                EndpointMove::Set,
+            )
+            .unwrap()
+            .changed
+    );
     assert_eq!(
         state.node(id).unwrap().history.current_version().label,
         "Set endpoint B of distance #1 to image_000.jpg (1.0, 1.0)"
@@ -1091,6 +1111,8 @@ fn the_point_menu_sets_an_endpoint_to_the_point_s_reference_pixel() {
     use crate::measurements::fixture::referenced_state;
     use crate::state::edits::PointGesture;
     let (mut state, id) = referenced_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 0))
         .unwrap();
@@ -1274,6 +1296,8 @@ fn docked_behind(state: &mut AppState, tab: crate::dock::Tab, from: crate::dock:
 fn new_measurement_from_image_detail_puts_a_one_endpoint_item_on_and_focuses_it() {
     use crate::dock::Tab;
     let (mut state, id) = measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state.select_measurement(MeasurementRef::distance(id, 1));
     state.hide_panel(Tab::MeasurementView);
     let before = version_count(&state, id);
@@ -1483,9 +1507,12 @@ fn new_measurement_is_refused_while_busy_on_a_view_only_bench_and_outside_the_im
 fn a_new_measurement_commits_with_or_without_endpoint_b_and_a_distance() {
     use crate::bench::measurement::EndpointSet;
     let (mut state, id) = measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     let label = state
         .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
-        .unwrap();
+        .unwrap()
+        .label;
     let stored =
         crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements()).len();
     assert_eq!(state.measurement_commit_refusal(id, &label), None);
@@ -1549,4 +1576,336 @@ fn a_new_measurement_commits_with_or_without_endpoint_b_and_a_distance() {
     state.undo(id).unwrap();
     let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
     assert_eq!(rows.len(), stored);
+}
+
+// ---- Auto-Commit -----------------------------------------------------------
+
+/// The stored distance rows of the version `id` stands at.
+fn stored_rows(state: &AppState, id: ReconId) -> Vec<crate::measurements::DistanceRow> {
+    crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())
+}
+
+/// The newest Action Log row's kind.
+fn last_kind(state: &AppState) -> crate::action_log::Kind {
+    state.action_log.entries().last().expect("a row").kind
+}
+
+/// Auto-Commit is ticked at launch.
+#[test]
+fn auto_commit_is_ticked_at_launch() {
+    assert!(AppState::new().measurement_auto_commit);
+}
+
+/// With Auto-Commit ticked, each step on a measurement item and its commit
+/// are one version, labelled with both, with one `Edit` row: the label, the
+/// stated distance and an endpoint each reach the stored row and dirty the
+/// node, and one undo takes back the bench and the row together, which a redo
+/// puts back.
+#[test]
+fn with_auto_commit_each_step_and_its_commit_are_one_version() {
+    use crate::action_log::Kind;
+    use crate::bench::measurement::{AutoCommit, EndpointMove, MeasurementCommitted};
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    let was = stored_rows(&state, id);
+    let item_was = item(&state, id, "distance #2");
+    let before = version_count(&state, id);
+    let committed = AutoCommit::Committed(MeasurementCommitted {
+        measurement: MeasurementRef::distance(id, 2),
+        replaced: true,
+        changed: true,
+    });
+
+    let step = state
+        .set_bench_measurement_label(id, "distance #2", "paw width")
+        .unwrap();
+    assert!(step.changed);
+    assert_eq!(step.commit, committed);
+    assert_eq!(version_count(&state, id), before + 1);
+    let text =
+        "Set the label of distance #2 to \"paw width\" and committed distance #2 in measured";
+    assert_eq!(version_label(&state, id), text);
+    assert!(last_row(&state).0.starts_with(text));
+    assert_eq!(last_kind(&state), Kind::Edit);
+    assert!(state.node(id).unwrap().history.is_dirty());
+    assert_eq!(stored_rows(&state, id)[2].label, "paw width");
+    assert_eq!(origin_row(&state, id, "distance #2"), Some(2));
+
+    let set = state
+        .set_bench_measurement_distance(id, "distance #2", "42 cm")
+        .unwrap();
+    assert_eq!(set.commit, committed);
+    assert_eq!(
+        version_label(&state, id),
+        "Set the stated distance of distance #2 to 42 cm and committed distance #2 in measured"
+    );
+    let row = &stored_rows(&state, id)[2];
+    assert_eq!((row.stated, row.unit), (Some(42.0), LengthUnit::Centimetre));
+
+    let moved = state
+        .set_bench_measurement_endpoint(
+            id,
+            "distance #2",
+            EndpointSide::B,
+            1,
+            [300.0, 200.5],
+            EndpointMove::Set,
+        )
+        .unwrap();
+    assert_eq!(moved.commit, committed);
+    assert_eq!(version_count(&state, id), before + 3);
+    let b = stored_rows(&state, id)[2]
+        .endpoint(EndpointSide::B)
+        .unwrap();
+    assert_eq!((b.image, b.pixel), (1, [300.0, 200.5]));
+    assert_eq!(state.focused_measurement_label(id), Some("distance #2"));
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, 2))
+    );
+
+    // One undo takes back the endpoint on the bench and in the row.
+    state.undo(id).unwrap();
+    assert_eq!(
+        stored_rows(&state, id)[2].endpoint(EndpointSide::B),
+        was[2].endpoint(EndpointSide::B)
+    );
+    assert_eq!(
+        endpoints_of(&state, id, "distance #2")[1],
+        item_was.as_distance().unwrap().endpoints[1]
+    );
+    state.undo(id).unwrap();
+    state.undo(id).unwrap();
+    assert_eq!(stored_rows(&state, id), was);
+    assert_eq!(item(&state, id, "distance #2"), item_was);
+    assert!(!state.node(id).unwrap().history.is_dirty());
+    for _ in 0..3 {
+        state.redo(id).unwrap();
+    }
+    let row = &stored_rows(&state, id)[2];
+    assert_eq!(row.label, "paw width");
+    assert_eq!(row.endpoint(EndpointSide::B).unwrap().image, 1);
+    assert_eq!(item(&state, id, "distance #2").label, "paw width");
+}
+
+/// With Auto-Commit ticked, *New Measurement from Here* puts the item on and
+/// appends it as a new row in one version, which the item's origin names, so
+/// the next step replaces that row; undoing both takes back the item and the
+/// row.
+#[test]
+fn with_auto_commit_a_new_measurement_appends_its_row() {
+    use crate::bench::measurement::{AutoCommit, MeasurementCommitted};
+    let (mut state, id) = measured_state(Some("m"));
+    let stored = stored_rows(&state, id).len();
+    let before = version_count(&state, id);
+    state.start_measurement_here(
+        ImageRef::new(id, 0),
+        [100.0, 50.0],
+        crate::dock::Tab::ImageDetail,
+    );
+    let label = "distance from image_000@100,50";
+    assert_eq!(state.focused_measurement_label(id), Some(label));
+    assert_eq!(version_count(&state, id), before + 1);
+    assert_eq!(
+        version_label(&state, id),
+        format!("Put {label} on the bench and added distance #{stored} in measured")
+    );
+    let rows = stored_rows(&state, id);
+    assert_eq!(rows.len(), stored + 1);
+    assert_eq!(rows[stored].label, "measurement 1");
+    assert_eq!(rows[stored].endpoint(EndpointSide::B), None);
+    assert_eq!(origin_row(&state, id, label), Some(stored as u32));
+    let row = MeasurementRef::distance(id, stored);
+    assert_eq!(state.selected_measurement, Some(row));
+
+    let set = state
+        .set_bench_measurement_distance(id, label, "42 cm")
+        .unwrap();
+    assert_eq!(
+        set.commit,
+        AutoCommit::Committed(MeasurementCommitted {
+            measurement: row,
+            replaced: true,
+            changed: true,
+        })
+    );
+    assert_eq!(stored_rows(&state, id).len(), stored + 1);
+
+    state.undo(id).unwrap();
+    state.undo(id).unwrap();
+    assert_eq!(stored_rows(&state, id).len(), stored);
+    assert!(state.bench_measurement(id, label).is_none());
+
+    let started = state
+        .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
+        .unwrap();
+    assert_eq!(
+        started.commit,
+        AutoCommit::Committed(MeasurementCommitted {
+            measurement: row,
+            replaced: false,
+            changed: true,
+        })
+    );
+}
+
+/// With Auto-Commit cleared, a step leaves the reconstruction alone, as
+/// before: a bench version with its `Bench` row, the node clean, the rows as
+/// they were, and no commit asked.
+#[test]
+fn with_auto_commit_cleared_a_step_stays_on_the_bench() {
+    use crate::action_log::Kind;
+    use crate::bench::measurement::AutoCommit;
+    let (mut state, id) = measured_state(Some("m"));
+    state.set_measurement_auto_commit(false);
+    let was = stored_rows(&state, id);
+    let started = state
+        .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
+        .unwrap();
+    assert_eq!(started.commit, AutoCommit::NotAsked);
+    let step = state
+        .set_bench_measurement_label(id, &started.label, "paw width")
+        .unwrap();
+    assert_eq!(step.commit, AutoCommit::NotAsked);
+    assert_eq!(
+        version_label(&state, id),
+        format!("Set the label of {} to \"paw width\"", started.label)
+    );
+    assert_eq!(last_kind(&state), Kind::Bench);
+    assert_eq!(stored_rows(&state, id), was);
+    assert!(!state.node(id).unwrap().history.is_dirty());
+    assert!(state.measurement_uncommitted(id, &started.label));
+}
+
+/// Ticking Auto-Commit writes its row and commits what the focused item
+/// holds uncommitted, as *Commit* would, in its own version; clearing it
+/// commits nothing, and the value it holds already writes no row.
+#[test]
+fn ticking_auto_commit_commits_what_the_item_holds() {
+    use crate::action_log::Kind;
+    let (mut state, id) = measured_state(Some("m"));
+    let rows = state.action_log.entries().count();
+    assert_eq!(state.set_measurement_auto_commit(true), None);
+    assert_eq!(state.action_log.entries().count(), rows);
+    state.set_measurement_auto_commit(false);
+    assert_eq!(last_row(&state), ("Auto-Commit off".to_string(), false));
+    assert_eq!(last_kind(&state), Kind::Display);
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    state
+        .set_bench_measurement_label(id, "distance #2", "paw width")
+        .unwrap();
+    assert!(state.measurement_uncommitted(id, "distance #2"));
+    let before = version_count(&state, id);
+
+    let done = state.set_measurement_auto_commit(true).unwrap().unwrap();
+    assert!(done.changed);
+    assert_eq!(done.measurement, MeasurementRef::distance(id, 2));
+    assert_eq!(version_count(&state, id), before + 1);
+    assert_eq!(
+        version_label(&state, id),
+        "Committed distance #2 in measured"
+    );
+    assert_eq!(stored_rows(&state, id)[2].label, "paw width");
+    assert!(!state.measurement_uncommitted(id, "distance #2"));
+    assert!(state
+        .action_log
+        .entries()
+        .any(|e| e.text == "Auto-Commit on" && e.kind == Kind::Display));
+
+    // Ticked over an item its row holds, nothing is committed.
+    state.set_measurement_auto_commit(false);
+    let before = version_count(&state, id);
+    assert_eq!(state.set_measurement_auto_commit(true), None);
+    assert_eq!(version_count(&state, id), before);
+}
+
+/// With a camera model proposal open on the node, a step is allowed and its
+/// commit is refused: the step stands on the bench alone, as a bench version,
+/// the refusal comes back, and the item holds what its row does not until the
+/// proposal ends and the next step commits it.
+#[test]
+fn a_refused_commit_leaves_the_step_on_the_bench() {
+    use crate::bench::measurement::AutoCommit;
+    use crate::camera_model_proposal::PROPOSAL_OPEN_HINT;
+    use crate::scene::CameraRef;
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    // The proposal's job holds the node while it runs; once it has answered,
+    // the proposal stays open and steps on the bench are allowed.
+    state.settle_camera_model_proposal_job();
+    assert_eq!(state.bench_edit_refusal(id), None);
+    let was = stored_rows(&state, id);
+    let before = version_count(&state, id);
+    let step = state
+        .set_bench_measurement_label(id, "distance #2", "paw width")
+        .unwrap();
+    assert_eq!(
+        step.commit,
+        AutoCommit::Refused(PROPOSAL_OPEN_HINT.to_string())
+    );
+    assert_eq!(version_count(&state, id), before + 1);
+    assert_eq!(
+        version_label(&state, id),
+        "Set the label of distance #2 to \"paw width\""
+    );
+    assert_eq!(stored_rows(&state, id), was);
+    assert_eq!(item(&state, id, "distance #2").label, "paw width");
+    assert!(state.measurement_uncommitted(id, "distance #2"));
+    assert_eq!(
+        state.measurement_commit_refusal(id, "distance #2"),
+        Some(PROPOSAL_OPEN_HINT.to_string())
+    );
+
+    assert!(state.drop_camera_model_proposal(id, crate::camera_model_proposal::Dropped::Cancelled));
+    let set = state
+        .set_bench_measurement_distance(id, "distance #2", "42 cm")
+        .unwrap();
+    assert!(set.commit.committed().is_some());
+    assert_eq!(stored_rows(&state, id)[2].label, "paw width");
+    assert!(!state.measurement_uncommitted(id, "distance #2"));
+}
+
+/// With Auto-Commit ticked, deleting an item's row leaves it with none, and
+/// its next step adds the row back as a new one; discarding the item then
+/// leaves that row.
+#[test]
+fn with_auto_commit_a_step_adds_a_deleted_row_back_and_a_discard_keeps_it() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    state
+        .set_bench_measurement_label(id, "distance #2", "paw width")
+        .unwrap();
+    state
+        .delete_measurement(MeasurementRef::distance(id, 2))
+        .unwrap();
+    let count = stored_rows(&state, id).len();
+    assert_eq!(origin_row(&state, id, "distance #2"), None);
+    assert!(state.measurement_uncommitted(id, "distance #2"));
+    let step = state
+        .set_bench_measurement_distance(id, "distance #2", "42 cm")
+        .unwrap();
+    let done = step.commit.committed().expect("committed");
+    assert!(!done.replaced);
+    assert_eq!(done.measurement, MeasurementRef::distance(id, count));
+    assert!(
+        version_label(&state, id).ends_with(&format!("and added distance #{count} in measured"))
+    );
+    let rows = stored_rows(&state, id);
+    assert_eq!(rows.len(), count + 1);
+    assert_eq!(rows[count].label, "paw width");
+
+    state.discard_bench_item(id, "distance #2").unwrap();
+    assert!(state.bench_measurement(id, "distance #2").is_none());
+    assert_eq!(stored_rows(&state, id), rows);
 }

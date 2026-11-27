@@ -677,6 +677,14 @@ pub(crate) struct AppState {
     /// launch. Image Detail has its own, in [`FeatureDisplaySettings`].
     pub(crate) show_all_measurements: bool,
 
+    /// Whether each step on a measurement item is committed with it, as one
+    /// version: Measurement View's **Auto-Commit** checkbox, and the wire's
+    /// `set_measurement_auto_commit`. On at launch, and kept for the session
+    /// only, as the other panels' checkboxes are. Changed through
+    /// [`AppState::set_measurement_auto_commit`], which writes its row and
+    /// commits what a tick finds uncommitted.
+    pub(crate) measurement_auto_commit: bool,
+
     /// On-screen splat radius (pixels) for points at infinity. A direction has
     /// no distance, so infinity points are sized in pixels rather than world
     /// units like finite points.
@@ -1116,6 +1124,7 @@ impl AppState {
             show_points_at_infinity: true,
             show_target_indicator: false,
             show_all_measurements: false,
+            measurement_auto_commit: true,
             infinity_point_px: 3.0,
             show_controls_help: true,
             show_fps: true,

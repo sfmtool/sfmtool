@@ -27,6 +27,7 @@ use sfmtool_core::reconstruction::measurement_endpoint::{
 };
 
 use super::{edit, render, resolve_reconstruction, JsonReply, ToolError};
+use crate::bench::measurement::{AutoCommit, MeasurementCommitted};
 use crate::measurements::{
     self, DistanceResult, DistanceRow, EndpointSide, MeasurementKind, MeasurementRef,
 };
@@ -380,8 +381,10 @@ pub(super) fn put_measurement_on_bench(
 
 /// `create_bench_measurement`: *New Measurement from Here* without the raise
 /// ([`AppState::start_measurement`]): a measurement item on the node's bench
-/// with endpoint A at `pixel` of the camera image named, focused. The reply
-/// names the item and carries the endpoint's image and pixel.
+/// with endpoint A at `pixel` of the camera image named, focused, and with
+/// Auto-Commit ticked appended as a new row in the same version. The reply
+/// names the item, carries the endpoint's image and pixel, and says what
+/// became of the commit ([`insert_auto_commit`]).
 pub(super) fn create_bench_measurement(
     state: &mut AppState,
     reconstruction_label: &str,
@@ -390,19 +393,19 @@ pub(super) fn create_bench_measurement(
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(reconstruction_label))?;
     let image = super::resolve_camera_image(state, id, selector)?;
-    let mut label = None;
+    let mut started = None;
     let mut reply = edit::edited(state, id, |state| {
         state
             .start_measurement(image, pixel)
-            .map(|made| label = Some(made))
+            .map(|made| started = Some(made))
     })?;
+    let started = started.expect("a start that succeeded named its item");
+    let on = state.measurement_auto_commit;
     let object = reply.as_object_mut().expect("an edit reply is an object");
-    object.insert(
-        "item".into(),
-        json!(label.expect("a start that succeeded named its item")),
-    );
+    object.insert("item".into(), json!(started.label));
     object.insert("camera_image".into(), json!(image.index()));
     object.insert("pixel".into(), json!(pixel));
+    insert_auto_commit(object, on, &started.commit);
     Ok(reply)
 }
 
@@ -424,15 +427,36 @@ pub(super) fn commit_bench_measurement(
     let committed = committed.expect("a commit that succeeded named its row");
     let object = reply.as_object_mut().expect("an edit reply is an object");
     object.insert("item".into(), json!(item));
-    object.insert(
-        "measurement".into(),
-        json!({
-            "measurement_kind": committed.measurement.kind.name(),
-            "measurement_index": committed.measurement.index(),
-            "replaced": committed.replaced,
-        }),
-    );
+    object.insert("measurement".into(), committed_row(&committed));
     Ok(reply)
+}
+
+/// The row a commit wrote, or that already held the item: its kind, its
+/// index, and whether it was replaced rather than appended.
+fn committed_row(committed: &MeasurementCommitted) -> Value {
+    json!({
+        "measurement_kind": committed.measurement.kind.name(),
+        "measurement_index": committed.measurement.index(),
+        "replaced": committed.replaced,
+    })
+}
+
+/// What a step tool's reply says of the commit Auto-Commit makes with the
+/// step: `auto_commit`, whether the setting is ticked; `committed`, the row
+/// the item was committed under, as `commit_bench_measurement` names it, or
+/// `null` where it was not; and `commit_refused`, the sentence, where the
+/// commit was refused and the step stands on the bench alone.
+fn insert_auto_commit(object: &mut serde_json::Map<String, Value>, on: bool, commit: &AutoCommit) {
+    let (committed, refused) = match commit {
+        AutoCommit::NotAsked => (Value::Null, None),
+        AutoCommit::Committed(done) => (committed_row(done), None),
+        AutoCommit::Refused(why) => (Value::Null, Some(why)),
+    };
+    object.insert("auto_commit".into(), json!(on));
+    object.insert("committed".into(), committed);
+    if let Some(why) = refused {
+        object.insert("commit_refused".into(), json!(why));
+    }
 }
 
 /// The node a measurement item tool names, and the item: the one named, or
@@ -461,8 +485,9 @@ fn measurement_target(
 
 /// `set_bench_measurement_label`: the label field of Measurement View's
 /// edited mode ([`AppState::set_bench_measurement_label`]), on the item
-/// named or the focused one. The reply names the item and carries the
-/// measurement's label as it stands after the call.
+/// named or the focused one. The reply names the item, carries the
+/// measurement's label as it stands after the call, and says what became of
+/// the commit ([`insert_auto_commit`]).
 pub(super) fn set_bench_measurement_label(
     state: &mut AppState,
     reconstruction_label: &str,
@@ -470,21 +495,26 @@ pub(super) fn set_bench_measurement_label(
     label: &str,
 ) -> JsonReply {
     let (id, item) = measurement_target(state, reconstruction_label, named)?;
+    let mut step = None;
     let mut reply = edit::edited(state, id, |state| {
         state
             .set_bench_measurement_label(id, &item, label)
-            .map(|_| ())
+            .map(|done| step = Some(done))
     })?;
+    let step = step.expect("a step that succeeded said what it did");
+    let on = state.measurement_auto_commit;
     let object = reply.as_object_mut().expect("an edit reply is an object");
     object.insert("item".into(), json!(item));
     object.insert("measurement_label".into(), json!(label));
+    insert_auto_commit(object, on, &step.commit);
     Ok(reply)
 }
 
 /// `set_bench_measurement_distance`: the stated distance field of Measurement
 /// View's edited mode ([`AppState::set_bench_measurement_distance`]), on the
-/// item named or the focused one. The reply names the item and carries the
-/// stated distance and its unit as they stand after the call.
+/// item named or the focused one. The reply names the item, carries the
+/// stated distance and its unit as they stand after the call, and says what
+/// became of the commit ([`insert_auto_commit`]).
 pub(super) fn set_bench_measurement_distance(
     state: &mut AppState,
     reconstruction_label: &str,
@@ -498,13 +528,14 @@ pub(super) fn set_bench_measurement_distance(
             .set_bench_measurement_distance(id, &item, distance)
             .map(|done| set = Some(done))
     })?;
-    let (stated, unit) = set
-        .expect("a step that succeeded said what it set")
-        .distance;
+    let set = set.expect("a step that succeeded said what it set");
+    let (stated, unit) = set.distance;
+    let on = state.measurement_auto_commit;
     let object = reply.as_object_mut().expect("an edit reply is an object");
     object.insert("item".into(), json!(item));
     object.insert("stated_distance".into(), json!(stated));
     object.insert("unit".into(), json!(unit.name()));
+    insert_auto_commit(object, on, &set.commit);
     Ok(reply)
 }
 
@@ -629,8 +660,9 @@ pub(super) fn get_point_reference_pixel(
 /// `set_bench_measurement_endpoint`: move endpoint `side` of the item named,
 /// or of the focused one, to `pixel` of the camera image named
 /// ([`AppState::set_bench_measurement_endpoint`]). Any pixel inside the image
-/// is taken, not only one the popup offers. The reply names the item and
-/// carries the endpoint's image and pixel as they stand after the call.
+/// is taken, not only one the popup offers. The reply names the item,
+/// carries the endpoint's image and pixel as they stand after the call, and
+/// says what became of the commit ([`insert_auto_commit`]).
 pub(super) fn set_bench_measurement_endpoint(
     state: &mut AppState,
     reconstruction_label: &str,
@@ -641,6 +673,7 @@ pub(super) fn set_bench_measurement_endpoint(
 ) -> JsonReply {
     let (id, item) = measurement_target(state, reconstruction_label, named)?;
     let image = super::resolve_camera_image(state, id, selector)?.index() as u32;
+    let mut step = None;
     let mut reply = edit::edited(state, id, |state| {
         state
             .set_bench_measurement_endpoint(
@@ -651,14 +684,53 @@ pub(super) fn set_bench_measurement_endpoint(
                 pixel,
                 crate::bench::measurement::EndpointMove::Set,
             )
-            .map(|_| ())
+            .map(|done| step = Some(done))
     })?;
+    let step = step.expect("a step that succeeded said what it did");
+    let on = state.measurement_auto_commit;
     let object = reply.as_object_mut().expect("an edit reply is an object");
+    insert_auto_commit(object, on, &step.commit);
     object.insert("item".into(), json!(item));
     object.insert("endpoint".into(), json!(side.wire_name()));
     object.insert("camera_image".into(), json!(image));
     object.insert("pixel".into(), json!(pixel));
     Ok(reply)
+}
+
+/// `get_measurement_auto_commit`: whether Measurement View's Auto-Commit is
+/// ticked, no arguments.
+pub(super) fn get_measurement_auto_commit(state: &AppState) -> JsonReply {
+    Ok(auto_commit(state))
+}
+
+/// `set_measurement_auto_commit`: tick or clear Measurement View's
+/// Auto-Commit, through the call the checkbox makes
+/// ([`AppState::set_measurement_auto_commit`]), so it writes the checkbox's
+/// row and a tick commits what the focused item holds uncommitted. The reply
+/// is the document, with `committed` naming the row that commit wrote, or
+/// `null`; a refusal of that commit is the tool's error, the setting still
+/// changed.
+pub(super) fn set_measurement_auto_commit(state: &mut AppState, enabled: bool) -> JsonReply {
+    let committed = match state.set_measurement_auto_commit(enabled) {
+        Some(Ok(done)) => committed_row(&done),
+        Some(Err(why)) => return Err(ToolError::new(why)),
+        None => Value::Null,
+    };
+    let mut reply = auto_commit(state);
+    reply
+        .as_object_mut()
+        .expect("the document is an object")
+        .insert("committed".into(), committed);
+    Ok(reply)
+}
+
+/// The document both Auto-Commit tools answer with, read back off the state.
+fn auto_commit(state: &AppState) -> Value {
+    json!({
+        "measurement_auto_commit": {
+            "enabled": state.measurement_auto_commit,
+        }
+    })
 }
 
 /// `delete_measurement`: *Delete* in a Measurements row's menu

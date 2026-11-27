@@ -2611,9 +2611,10 @@ fn measurement_view_opens_from_the_panels_menu() {
 
 /// A double-click on a Measurements row in the Scene tree puts the
 /// measurement on the bench, selects it and raises Measurement View on the
-/// item, which draws its toolbar, its header and its two endpoint blocks. Its
-/// stored row is then deleted, and a click on *Commit* adds the item back as a
-/// new row.
+/// item, which draws its toolbar, with *Auto-Commit* ticked and no *Commit*
+/// while the row holds the item, its header and its two endpoint blocks. Its
+/// stored row is then deleted, *Commit* is offered, and a click on it adds the
+/// item back as a new row.
 #[test]
 fn a_double_click_puts_a_measurement_on_the_bench_and_commit_writes_it() {
     let (_dir, path) = measured_copy();
@@ -2666,7 +2667,8 @@ fn a_double_click_puts_a_measurement_on_the_bench_and_commit_writes_it() {
             (find_widget(listing, "label", "distance #0").is_some()
                 && find_widget(listing, "text_input", "measurement label")
                     .is_some_and(|field| field["value"] == "first")
-                && find_widget(listing, "button", "Commit").is_some()
+                && find_widget(listing, "check_box", "Auto-Commit").is_some()
+                && find_widget(listing, "button", "Commit").is_none()
                 && find_widget(listing, "combo_box", "endpoint A image").is_some()
                 && find_widget(listing, "text_input", "endpoint A pixel x").is_some())
             .then_some(())
@@ -2709,8 +2711,8 @@ fn a_double_click_puts_a_measurement_on_the_bench_and_commit_writes_it() {
 
 /// In Measurement View's edited mode, *Switch image…* on endpoint A opens
 /// the popup of other photographs that show its place; a click on one of its
-/// rows moves the endpoint there as a bench step, and *Commit* writes the
-/// moved endpoint into the stored row.
+/// rows moves the endpoint there and, with *Auto-Commit* ticked, writes the
+/// moved endpoint into the stored row in the same version.
 #[test]
 fn an_endpoint_switched_through_the_popup_is_committed() {
     let (_dir, path) = measured_copy();
@@ -2766,21 +2768,12 @@ fn an_endpoint_switched_through_the_popup_is_committed() {
     );
     assert!(
         history.to_string().contains(&format!(
-            "Moved endpoint A of distance #0 from {from} to {image_name}"
+            "Moved endpoint A of distance #0 from {from} to {image_name} and committed \
+             distance #0 in {label}"
         )),
         "{history}"
     );
 
-    let commit = viewer.wait_for(
-        json!({ "panel_name": "measurement_view" }),
-        "Measurement View never offered Commit",
-        |listing| {
-            find_widget(listing, "button", "Commit")
-                .filter(|button| button["enabled"] == true)
-                .cloned()
-        },
-    );
-    viewer.click(json!({ "widget": commit["widget"] }));
     let stored = viewer.ok(
         "get_measurement",
         json!({ "reconstruction_label": label, "measurement_index": 0 }),
@@ -2800,7 +2793,8 @@ fn an_endpoint_switched_through_the_popup_is_committed() {
 /// With a measurement item focused, a right-click on the photograph in Image
 /// Detail offers *Set Endpoint A Here* and *Set Endpoint B Here*; choosing
 /// the second moves endpoint B to the photograph shown, at the pixel
-/// right-clicked, as one bench step.
+/// right-clicked, as one step, which *Auto-Commit* writes into the stored
+/// row.
 #[test]
 fn an_endpoint_is_set_from_image_detail_s_menu() {
     let (_dir, path) = measured_copy();
@@ -2878,8 +2872,8 @@ fn an_endpoint_is_set_from_image_detail_s_menu() {
         json!({ "reconstruction_label": label, "measurement_index": 0 }),
     );
     assert_eq!(
-        stored["endpoints"][1]["camera_image"], 0,
-        "the stored row moved: {stored}"
+        stored["endpoints"][1]["camera_image"], 3,
+        "the stored row did not move: {stored}"
     );
 }
 
@@ -2993,12 +2987,13 @@ fn choose_in_image_detail(
 }
 
 /// A measurement made from Image Detail's menu: *New Measurement from Here*
-/// puts a measurement item with endpoint A on the bench and raises
-/// Measurement View on it, whose block for B says how to place it; *Set
-/// Endpoint B Here* on another photograph places B; a distance typed into the
-/// header's field is set; and *Commit* adds the measurement as a new row.
+/// puts a measurement item with endpoint A on the bench, adds it as a new
+/// row, as *Auto-Commit* is ticked, and raises Measurement View on it, whose
+/// block for B says how to place it; *Set Endpoint B Here* on another
+/// photograph places B; and a distance typed into the header's field is set,
+/// each written into the new row.
 #[test]
-fn a_measurement_is_made_from_image_detail_s_menu_and_committed() {
+fn a_measurement_is_made_from_image_detail_s_menu_and_auto_committed() {
     let (_dir, path) = measured_copy();
     let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", &path]);
     let label = wait_for_measurements(&viewer, 2);
@@ -3034,11 +3029,12 @@ fn a_measurement_is_made_from_image_detail_s_menu_and_committed() {
         json!({ "reconstruction_label": label }),
     );
     assert!(
-        history
-            .to_string()
-            .contains(&format!("Put {item} on the bench")),
+        history.to_string().contains(&format!(
+            "Put {item} on the bench and added distance #2 in {label}"
+        )),
         "{history}"
     );
+    wait_for_measurements(&viewer, 3);
     wait_for_in_measurement_view(
         &viewer,
         "Measurement View never drew the new item's unplaced endpoint B",
@@ -3096,24 +3092,13 @@ fn a_measurement_is_made_from_image_detail_s_menu_and_committed() {
     );
     assert_eq!(got["stated_distance"], 42.0, "{got}");
 
-    let commit = wait_for_in_measurement_view(
-        &viewer,
-        "Measurement View never offered Commit",
-        Toward::Start,
-        |listing| {
-            find_widget(listing, "button", "Commit")
-                .filter(|button| button["enabled"] == true)
-                .cloned()
-        },
-    );
-    viewer.click(json!({ "widget": commit["widget"] }));
-    wait_for_measurements(&viewer, 3);
     let stored = viewer.ok(
         "get_measurement",
         json!({ "reconstruction_label": label, "measurement_index": 2 }),
     );
     assert_eq!(stored["endpoints"][0]["camera_image"], 3, "{stored}");
     assert_eq!(stored["endpoints"][1]["camera_image"], 5, "{stored}");
+    assert_eq!(stored["stated_distance"], 42.0, "{stored}");
 }
 
 /// Where `pixel` of the photograph Image Detail shows lands in the panel's

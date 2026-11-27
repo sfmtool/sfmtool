@@ -4,7 +4,8 @@
 //! Measurements on the bench: putting a stored measurement on, starting a
 //! new one from a pixel, following its origin, the steps that set an item's
 //! label, its stated distance and an endpoint, the commit that writes it back,
-//! and the direct delete of a stored one.
+//! Measurement View's Auto-Commit that makes that commit with each step, and
+//! the direct delete of a stored one.
 //!
 //! See `specs/gui/bench.md` and `specs/gui/measurement-view.md`. The item and
 //! its pure steps are core's (`sfmtool_core::bench::measurement`,
@@ -53,12 +54,62 @@ pub(crate) struct MeasurementCommitted {
 
 /// What setting a measurement item's stated distance left
 /// ([`AppState::set_bench_measurement_distance`]).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StatedDistanceSet {
     /// The distance and unit the item states afterwards.
     pub(crate) distance: (f64, LengthUnit),
     /// Whether a version was pushed.
     pub(crate) changed: bool,
+    /// What became of the commit Auto-Commit makes with the step.
+    pub(crate) commit: AutoCommit,
+}
+
+/// What a step on a measurement item left: whether it pushed a version, and
+/// what became of the commit Auto-Commit makes with it
+/// ([`AppState::set_bench_measurement_label`],
+/// [`AppState::set_bench_measurement_endpoint`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MeasurementStep {
+    /// Whether a version was pushed.
+    pub(crate) changed: bool,
+    /// What became of the commit Auto-Commit makes with the step.
+    pub(crate) commit: AutoCommit,
+}
+
+/// What starting a measurement left ([`AppState::start_measurement`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MeasurementStarted {
+    /// The new item's label on the bench.
+    pub(crate) label: String,
+    /// What became of the commit Auto-Commit makes with the start.
+    pub(crate) commit: AutoCommit,
+}
+
+/// What became of the commit Measurement View's **Auto-Commit** makes with a
+/// step on a measurement item (`specs/gui/measurement-view.md` § "The
+/// commit").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AutoCommit {
+    /// No commit was made: Auto-Commit is clear, or the step pushed no
+    /// version.
+    NotAsked,
+    /// The row holds the item: the row the commit wrote in the step's own
+    /// version, or, where the step brought the item back to what its row
+    /// holds, that row, with nothing written (`changed: false`).
+    Committed(MeasurementCommitted),
+    /// The commit was refused, in this sentence, and the step stands on the
+    /// bench alone.
+    Refused(String),
+}
+
+impl AutoCommit {
+    /// The row the item was committed under, or `None`.
+    pub(crate) fn committed(&self) -> Option<&MeasurementCommitted> {
+        match self {
+            AutoCommit::Committed(done) => Some(done),
+            AutoCommit::NotAsked | AutoCommit::Refused(_) => None,
+        }
+    }
 }
 
 /// How a step that moves an endpoint was asked for, which says how its
@@ -430,18 +481,20 @@ impl AppState {
     /// through core's `start_measurement`, which mints the item's label from
     /// the image stem and the rounded pixel with the collision suffix where
     /// another item holds it. The item has no origin, so its commit appends a
-    /// row; endpoint B, the stated distance and the label are steps of their
-    /// own. Focusing it selects its node and clears the selected measurement,
-    /// since it came from no stored row. Refused while a background task
-    /// holds the node and on a view-only bench, where the item could take no
-    /// step and never be committed, and for an image past the image set or a
-    /// pixel outside its image, in the commit's sentence. The item's label
-    /// comes back.
+    /// row, which with Auto-Commit ticked is made in the same version
+    /// ([`Self::push_measurement_version`]); endpoint B, the stated distance
+    /// and the label are steps of their own. Focusing it selects its node and
+    /// its origin, the appended row, or with no row clears the selected
+    /// measurement. Refused while a background task holds the node and on a
+    /// view-only bench, where the item could take no step and never be
+    /// committed, and for an image past the image set or a pixel outside its
+    /// image, in the commit's sentence. The item's label, and what became of
+    /// the commit, come back.
     pub(crate) fn start_measurement(
         &mut self,
         image: crate::scene::ImageRef,
         pixel: [f64; 2],
-    ) -> Result<String, String> {
+    ) -> Result<MeasurementStarted, String> {
         let id = image.recon;
         if let Some(why) = self.bench_edit_refusal(id) {
             return Err(why);
@@ -455,9 +508,14 @@ impl AppState {
         let (next, label) =
             bench::start_measurement(node.history.current_bench(), node.edited(), endpoint)
                 .map_err(|e| format!("Cannot start a measurement there: {e}."))?;
-        self.push_bench_step(index, next, format!("Put {label} on the bench"));
+        let commit = self.push_measurement_version(
+            index,
+            next,
+            &label,
+            format!("Put {label} on the bench"),
+        )?;
         self.focus_put_item(id, &label);
-        Ok(label)
+        Ok(MeasurementStarted { label, commit })
     }
 
     /// *New Measurement from Here* in Image Detail's menu, at `pixel` of
@@ -535,7 +593,9 @@ impl AppState {
     }
 
     /// Replace the measurement `label` on the bench at `index` with `next`,
-    /// as one bench step labelled `text`. The item keeps its ID.
+    /// as one step labelled `text`, committed with it while Auto-Commit is
+    /// ticked ([`Self::push_measurement_version`]). The item keeps its ID.
+    /// The row a commit wrote is selected, as *Commit* selects it.
     fn push_measurement_step(
         &mut self,
         index: usize,
@@ -543,12 +603,153 @@ impl AppState {
         label: &str,
         next: EditableMeasurement,
         text: String,
-    ) -> Result<(), String> {
+    ) -> Result<AutoCommit, String> {
         let next_bench = bench
             .replace(label, BenchItem::Measurement(Arc::new(next)))
             .map_err(|e| format!("Cannot install that step: {e}"))?;
-        self.push_bench_step(index, next_bench, text);
-        Ok(())
+        let commit = self.push_measurement_version(index, next_bench, label, text)?;
+        if let Some(done) = commit.committed() {
+            self.select_measurement(done.measurement);
+        }
+        Ok(commit)
+    }
+
+    /// Push `next_bench`, a step on the measurement item `label` at node
+    /// `index` labelled `text`, as the node's next version.
+    ///
+    /// With Auto-Commit clear, a bench step ([`Self::push_bench_step`]). With
+    /// it ticked, the item as the step leaves it is committed in the same
+    /// version, which states the value and the bench as *Commit* does: one
+    /// version, labelled `<step> and committed distance #2 in dino` (or `and
+    /// added distance #4 in dino`), one `Edit` row, the node dirty, so one
+    /// undo takes back both. The item's origin is re-seated on the row
+    /// written, at the version the commit was computed from, which the step
+    /// left as it was. Where the commit is refused (a camera model proposal
+    /// open on the node, or one of core's refusals), the step is pushed alone
+    /// and the sentence comes back; where the row already holds the item, the
+    /// step is pushed alone and the row comes back.
+    fn push_measurement_version(
+        &mut self,
+        index: usize,
+        next_bench: bench::Bench,
+        label: &str,
+        text: String,
+    ) -> Result<AutoCommit, String> {
+        if !self.measurement_auto_commit {
+            self.push_bench_step(index, next_bench, text);
+            return Ok(AutoCommit::NotAsked);
+        }
+        let id = self.scene[index].id;
+        let item = match next_bench.get(label) {
+            Some(BenchItem::Measurement(item)) => Arc::clone(item),
+            _ => return Err(format!("Nothing on the bench is called {label}.")),
+        };
+        let node = &self.scene[index];
+        let origin = self.resolved_measurement_origin(node, &item);
+        let commit = match self.proposal_refusal(id) {
+            Some(why) => Err(why),
+            None => bench::commit_measurement(node.edited(), &item, origin)
+                .map_err(|e| commit_refused(label, &e)),
+        };
+        let commit = match commit {
+            Ok(commit) => commit,
+            Err(why) => {
+                self.push_bench_step(index, next_bench, text);
+                return Ok(AutoCommit::Refused(why));
+            }
+        };
+        let written = MeasurementRef {
+            recon: id,
+            kind: commit.kind,
+            index: commit.index,
+        };
+        if !commit.wrote {
+            self.push_bench_step(index, next_bench, text);
+            return Ok(AutoCommit::Committed(MeasurementCommitted {
+                measurement: written,
+                replaced: commit.replaced,
+                changed: false,
+            }));
+        }
+        let serial = node.history.current_version().serial;
+        let seated = item.with_origin(serial.as_u64(), commit.index);
+        let seated_bench = next_bench
+            .replace(label, BenchItem::Measurement(Arc::new(seated)))
+            .map_err(|e| format!("Cannot install that commit: {e}"))?;
+        let text = format!("{text} and {}", lower_first(&commit.label(&node.label)));
+        let node = &mut self.scene[index];
+        let pushed = node.history.push_pair(
+            Some(commit.value),
+            Arc::new(seated_bench),
+            None,
+            crate::document::PointMap::Removed(Vec::new()),
+            text.clone(),
+            None,
+        );
+        let parent = version_before(node, pushed);
+        self.action_log
+            .record(Kind::Edit, version_step_text(&text, parent, pushed));
+        self.settle_focused_item(id);
+        Ok(AutoCommit::Committed(MeasurementCommitted {
+            measurement: written,
+            replaced: commit.replaced,
+            changed: true,
+        }))
+    }
+
+    /// Whether the measurement item `label` on `id`'s bench holds something
+    /// its row does not: its origin names no row at the cursor, the row
+    /// differs from it as the file would store it, or it could not be stored
+    /// at all. What shows Measurement View's *Commit* while Auto-Commit is
+    /// ticked.
+    pub(crate) fn measurement_uncommitted(&self, id: ReconId, label: &str) -> bool {
+        let Some(node) = self.node(id) else {
+            return false;
+        };
+        let Some(item) = node.history.current_bench().measurement(label) else {
+            return false;
+        };
+        let origin = self.resolved_measurement_origin(node, item);
+        bench::commit_measurement(node.edited(), item, origin).map_or(true, |commit| commit.wrote)
+    }
+
+    /// Tick (`true`) or clear Measurement View's **Auto-Commit**: the checkbox,
+    /// and the wire's `set_measurement_auto_commit`.
+    ///
+    /// A change writes one `Display` row (`Auto-Commit on`, `Auto-Commit
+    /// off`), and the value it holds already writes none. Ticking it commits
+    /// the focused measurement item at once where it holds something its row
+    /// does not and its commit is not refused, as *Commit* would
+    /// ([`Self::commit_bench_measurement`]), so that while the box is ticked
+    /// the row holds what the panel shows; that commit comes back. Clearing it
+    /// commits nothing.
+    pub(crate) fn set_measurement_auto_commit(
+        &mut self,
+        on: bool,
+    ) -> Option<Result<MeasurementCommitted, String>> {
+        if on == self.measurement_auto_commit {
+            return None;
+        }
+        self.measurement_auto_commit = on;
+        let state = if on { "on" } else { "off" };
+        self.action_log.record_run(
+            Kind::Display,
+            AUTO_COMMIT_LABEL,
+            format!("{AUTO_COMMIT_LABEL} {state}"),
+        );
+        if !on {
+            return None;
+        }
+        let focused = *self.focused_item()?;
+        let label = self.focused_measurement_label(focused.node)?.to_string();
+        if !self.measurement_uncommitted(focused.node, &label)
+            || self
+                .measurement_commit_refusal(focused.node, &label)
+                .is_some()
+        {
+            return None;
+        }
+        Some(self.commit_bench_measurement(focused.node, &label))
     }
 
     /// Set the measurement's own label of the item `label` on `id`'s bench
@@ -556,29 +757,37 @@ impl AppState {
     /// wire's `set_bench_measurement_label`.
     ///
     /// One bench step (`Set the label of distance #2 to "paw width"`), which
-    /// leaves the reconstruction alone. A label the item holds already pushes
-    /// no version and writes the no-effect row. Refused while a background
-    /// task holds the node, on a view-only bench, and for a label that is
-    /// empty or only white space, in core's sentence. Whether a version was
-    /// pushed comes back.
+    /// leaves the reconstruction alone while Auto-Commit is clear and is
+    /// committed with the item while it is ticked
+    /// ([`Self::push_measurement_version`]). A label the item holds already
+    /// pushes no version and writes the no-effect row. Refused while a
+    /// background task holds the node, on a view-only bench, and for a label
+    /// that is empty or only white space, in core's sentence. Whether a
+    /// version was pushed, and what became of the commit, come back.
     pub(crate) fn set_bench_measurement_label(
         &mut self,
         id: ReconId,
         label: &str,
         to: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<MeasurementStep, String> {
         let (index, bench, item) = self.measurement_step_target(id, label)?;
         if item.label == to {
             self.no_effect(format!(
                 "Set the label of {label} to \"{to}\": no effect, it has that label already"
             ));
-            return Ok(false);
+            return Ok(MeasurementStep {
+                changed: false,
+                commit: AutoCommit::NotAsked,
+            });
         }
         let next = bench::set_measurement_label(&item, to)
             .map_err(|e| format!("Cannot set the label of {label}: {e}."))?;
         let text = format!("Set the label of {label} to \"{to}\"");
-        self.push_measurement_step(index, &bench, label, next, text)?;
-        Ok(true)
+        let commit = self.push_measurement_step(index, &bench, label, next, text)?;
+        Ok(MeasurementStep {
+            changed: true,
+            commit,
+        })
     }
 
     /// Set the stated distance of the item `label` on `id`'s bench to what
@@ -589,12 +798,14 @@ impl AppState {
     /// `parse_stated_distance`; a bare number is in the reconstruction's
     /// `world_space_unit`,
     /// or in metres where it has none. One bench step (`Set the stated
-    /// distance of distance #2 to 4.2 cm`). A distance the item states
+    /// distance of distance #2 to 4.2 cm`), committed with the item while
+    /// Auto-Commit is ticked. A distance the item states
     /// already, as the file would store it, pushes no version and writes the
     /// no-effect row. Refused while a background task holds the node, on a
     /// view-only bench, and for text that does not read or a value that is not
     /// finite and positive, in core's sentence. What the item states
-    /// afterwards, and whether a version was pushed, come back.
+    /// afterwards, whether a version was pushed, and what became of the
+    /// commit, come back.
     pub(crate) fn set_bench_measurement_distance(
         &mut self,
         id: ReconId,
@@ -626,14 +837,16 @@ impl AppState {
             return Ok(StatedDistanceSet {
                 distance: held.expect("just compared"),
                 changed: false,
+                commit: AutoCommit::NotAsked,
             });
         }
         let next = bench::set_stated_distance(&item, distance, unit).map_err(refused)?;
         let text = format!("Set the stated distance of {label} to {stated}");
-        self.push_measurement_step(index, &bench, label, next, text)?;
+        let commit = self.push_measurement_step(index, &bench, label, next, text)?;
         Ok(StatedDistanceSet {
             distance: (distance, unit),
             changed: true,
+            commit,
         })
     }
 
@@ -643,7 +856,8 @@ impl AppState {
     /// `set_bench_measurement_endpoint` (`EndpointMove::Set`).
     ///
     /// One bench step, made by core's `set_measurement_endpoint`, which leaves
-    /// the reconstruction alone: `Moved endpoint A of distance #2 from
+    /// the reconstruction alone while Auto-Commit is clear and is committed
+    /// with the item while it is ticked: `Moved endpoint A of distance #2 from
     /// IMG_0004.jpg to IMG_0011.jpg` for a switch, `Moved endpoint A of
     /// distance #2 to IMG_0004.jpg (412.3, 230.5)` for a set, and `Set
     /// endpoint B of distance #2 to IMG_0050.jpg (88.0, 301.5)` for a set of
@@ -652,7 +866,8 @@ impl AppState {
     /// no-effect row. Refused while a background task holds the node, on a
     /// view-only bench, for a switch of an endpoint not placed, and for an
     /// image past the image set or a pixel outside its image, in core's
-    /// sentence. Whether a version was pushed comes back.
+    /// sentence. Whether a version was pushed, and what became of the commit,
+    /// come back.
     pub(crate) fn set_bench_measurement_endpoint(
         &mut self,
         id: ReconId,
@@ -661,7 +876,7 @@ impl AppState {
         image: u32,
         pixel: [f64; 2],
         how: EndpointMove,
-    ) -> Result<bool, String> {
+    ) -> Result<MeasurementStep, String> {
         let (index, bench, item) = self.measurement_step_target(id, label)?;
         let letter = side.letter();
         let held = item.as_distance().and_then(|d| d.endpoints[side.index()]);
@@ -688,7 +903,10 @@ impl AppState {
         let as_stored = |p: [f64; 2]| [p[0] as f32, p[1] as f32];
         if held.is_some_and(|e| e.image == image && as_stored(e.pixel) == as_stored(pixel)) {
             self.no_effect(format!("{text}: no effect, the endpoint is there already"));
-            return Ok(false);
+            return Ok(MeasurementStep {
+                changed: false,
+                commit: AutoCommit::NotAsked,
+            });
         }
         let endpoint = bench::MeasurementEndpoint { image, pixel };
         let next = bench::set_measurement_endpoint(
@@ -698,8 +916,11 @@ impl AppState {
             endpoint,
         )
         .map_err(|e| format!("Cannot move endpoint {letter} of {label}: {e}."))?;
-        self.push_measurement_step(index, &bench, label, next, text)?;
-        Ok(true)
+        let commit = self.push_measurement_step(index, &bench, label, next, text)?;
+        Ok(MeasurementStep {
+            changed: true,
+            commit,
+        })
     }
 
     /// The focused measurement item as the menus that set its endpoints see
@@ -934,6 +1155,20 @@ impl AppState {
         self.action_log
             .record(Kind::Edit, version_step_text(&text, parent, serial));
         Ok(())
+    }
+}
+
+/// The label of Measurement View's checkbox that commits each step on a
+/// measurement item with it, and of its Action Log rows.
+pub(crate) const AUTO_COMMIT_LABEL: &str = "Auto-Commit";
+
+/// `text` with its first letter in lower case: a commit's sentence
+/// (`Committed distance #2 in dino`) where it follows a step's in one label.
+fn lower_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 

@@ -620,8 +620,9 @@ impl History {
     }
 
     /// Append the next version stating as many of the three halves as the step
-    /// changed. A commit of a bench track is the only step that states two,
-    /// the value and the bench; a bake is the only one that states all three.
+    /// changed. A commit of a bench item, and a measurement step committed
+    /// with it while Auto-Commit is ticked, state two, the value and the
+    /// bench; a bake is the only one that states all three.
     ///
     /// `value` is `None` for a step that left the document half alone; such a
     /// version shares its predecessor's document serial, which is what keeps a
