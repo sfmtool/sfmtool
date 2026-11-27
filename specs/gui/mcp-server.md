@@ -5454,7 +5454,7 @@ its `origin` (`{ "measurement_index": n }` or null), its `label` and
 `counts.endpoints`, and `get_measurement` with `item` reads it whole.
 
 **The four steps follow Measurement View's Auto-Commit**
-([measurement-view.md](measurement-view.md) § "The commit"), which is ticked
+([measurement-view.md](measurement-view.md) § "Auto-Commit"), which is ticked
 at launch. While it is ticked, `create_bench_measurement` and the three
 `set_bench_measurement_*` tools commit the item with the step, in the same
 version, as `commit_bench_measurement` would: one `Edit` version labelled with

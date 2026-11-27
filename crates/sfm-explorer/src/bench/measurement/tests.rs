@@ -1826,7 +1826,8 @@ fn ticking_auto_commit_commits_what_the_item_holds() {
 /// With a camera model proposal open on the node, a step is allowed and its
 /// commit is refused: the step stands on the bench alone, as a bench version,
 /// the refusal comes back, and the item holds what its row does not until the
-/// proposal ends and the next step commits it.
+/// proposal ends and the next step commits it. A step that brings the item
+/// back to its row is pushed alone and names the row.
 #[test]
 fn a_refused_commit_leaves_the_step_on_the_bench() {
     use crate::bench::measurement::AutoCommit;
@@ -1866,11 +1867,33 @@ fn a_refused_commit_leaves_the_step_on_the_bench() {
     );
 
     assert!(state.drop_camera_model_proposal(id, crate::camera_model_proposal::Dropped::Cancelled));
+    // A step that brings the item back to what its row holds is pushed alone
+    // and names the row, with nothing written.
+    let back = was[2].label.clone();
+    let before = version_count(&state, id);
+    let step = state
+        .set_bench_measurement_label(id, "distance #2", &back)
+        .unwrap();
+    assert_eq!(
+        step.commit,
+        AutoCommit::Committed(crate::bench::measurement::MeasurementCommitted {
+            measurement: MeasurementRef::distance(id, 2),
+            replaced: true,
+            changed: false,
+        })
+    );
+    assert_eq!(version_count(&state, id), before + 1);
+    assert_eq!(
+        version_label(&state, id),
+        format!("Set the label of distance #2 to \"{back}\"")
+    );
+    assert_eq!(stored_rows(&state, id), was);
+
     let set = state
         .set_bench_measurement_distance(id, "distance #2", "42 cm")
         .unwrap();
     assert!(set.commit.committed().is_some());
-    assert_eq!(stored_rows(&state, id)[2].label, "paw width");
+    assert_eq!(stored_rows(&state, id)[2].label, back);
     assert!(!state.measurement_uncommitted(id, "distance #2"));
 }
 
@@ -1898,6 +1921,10 @@ fn with_auto_commit_a_step_adds_a_deleted_row_back_and_a_discard_keeps_it() {
     let done = step.commit.committed().expect("committed");
     assert!(!done.replaced);
     assert_eq!(done.measurement, MeasurementRef::distance(id, count));
+    assert_eq!(
+        state.selected_measurement,
+        Some(MeasurementRef::distance(id, count))
+    );
     assert!(
         version_label(&state, id).ends_with(&format!("and added distance #{count} in measured"))
     );

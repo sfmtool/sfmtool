@@ -2358,8 +2358,8 @@ starts, endpoint A alone, focused, the selected measurement cleared, the node
 clean, the collision suffix, its undo, Measurement View raised and never over
 the panel the gesture was made in, the 3D view's start at a point's reference
 pixel and a point with none, the refusals while busy, on a view-only bench and
-of a pixel outside its image, and the commit refused until endpoint B and the
-distance are given and then appending a row. Those steps run with
+of a pixel outside its image, and its commit appending a row with or without
+endpoint B and the stated distance. Those steps run with
 Measurement View's Auto-Commit cleared; with it ticked, the same file covers
 each step and its commit as one version with its undo and redo, the start
 appending its row, a tick committing what the item holds, a commit refused by

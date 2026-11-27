@@ -1630,8 +1630,9 @@ at-infinity case is covered by the Rust tests.
   node clean; a tick writing its `Display` row and committing what the item
   holds, the same value writing none, and a tick over an item its row holds
   committing nothing; a commit refused by an open camera model proposal
-  leaving the step on the bench alone, until the proposal is cancelled and the
-  next step commits; and a step adding a deleted row back, then a discard
+  leaving the step on the bench alone, a step that brings the item back to its
+  row then pushed alone and naming the row, and the next step committing once
+  the proposal is cancelled; and a step adding a deleted row back, then a discard
   leaving it. (`measurement_view/tests.rs`): the toolbar with the box ticked
   and no *Commit* while the row holds the item, a click on the box asking to
   clear it, *Commit* back with it cleared, and a refused commit's greyed
