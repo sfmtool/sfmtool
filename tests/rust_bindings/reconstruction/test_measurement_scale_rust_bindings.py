@@ -62,7 +62,7 @@ def test_a_measurement_that_disagrees_is_reported(demo):
                 "units": np.repeat(d["units"][:1], 3),
                 "image_indexes": np.repeat(d["image_indexes"][:1], 3, axis=0),
                 "endpoints_xy": np.repeat(d["endpoints_xy"][:1], 3, axis=0),
-                "labels": ["", "", "too long"],
+                "labels": ["edge", "edge again", "too long"],
             }
         }
     )
@@ -70,7 +70,7 @@ def test_a_measurement_that_disagrees_is_reported(demo):
     scale = three.distance_measurement_scale("m")
 
     assert scale["factor"] == pytest.approx(one, rel=1e-9)
-    assert [f["label"] for f in scale["factors"]] == ["", "", "too long"]
+    assert [f["label"] for f in scale["factors"]] == ["edge", "edge again", "too long"]
     deviations = [f["deviation_percent"] for f in scale["factors"]]
     assert deviations == pytest.approx([0.0, 0.0, 20.0], abs=1e-4)
     assert scale["statistics"]["mean"] == pytest.approx(one * 3.2 / 3, rel=1e-6)
@@ -95,7 +95,7 @@ def test_no_usable_measurement_raises_with_each_reason(demo):
                 "units": d["units"][:1],
                 "image_indexes": d["image_indexes"][:1],
                 "endpoints_xy": np.full((1, 2, 2), 0.5, dtype=np.float32),
-                "labels": [""],
+                "labels": ["off the cube"],
             }
         }
     )
@@ -104,6 +104,33 @@ def test_no_usable_measurement_raises_with_each_reason(demo):
         match="none of the 1 distance measurements gives a scale; measurement 0:",
     ):
         bare.distance_measurement_scale("mm")
+
+
+def test_a_ruler_and_an_endpoint_not_placed_are_left_out_with_their_reasons(demo):
+    d = demo.measurements["distance"]
+    endpoints = np.repeat(d["endpoints_xy"][:1], 3, axis=0)
+    endpoints[2, 1] = np.nan
+    images = np.repeat(d["image_indexes"][:1], 3, axis=0)
+    images[2, 1] = 0xFFFFFFFF
+    mixed = demo.clone_with_changes(
+        measurements={
+            "distance": {
+                "distances": np.array(
+                    [d["distances"][0], np.nan, d["distances"][0]], dtype=np.float32
+                ),
+                "units": np.repeat(d["units"][:1], 3),
+                "image_indexes": images,
+                "endpoints_xy": endpoints,
+                "labels": ["edge", "ruler", "half placed"],
+            }
+        }
+    )
+    scale = mixed.distance_measurement_scale("m")
+    assert [f["index"] for f in scale["factors"]] == [0]
+    assert [(e["index"], e["label"], e["reason"]) for e in scale["excluded"]] == [
+        (1, "ruler", "it states no distance, so it reads a length but gives no scale"),
+        (2, "half placed", "endpoint B is not placed"),
+    ]
 
 
 def test_an_unknown_unit_raises(demo):

@@ -41,8 +41,17 @@ pub struct MeasurementScaleFactor {
 /// Why a stored distance measurement gives no scale factor.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MeasurementScaleExclusion {
+    /// The measurement states no distance, so it reads a length but gives
+    /// no scale.
+    NoStatedDistance,
+    /// An endpoint is not placed: the first such one, `0` for `A` and `1`
+    /// for `B`.
+    EndpointNotPlaced {
+        /// The endpoint, `0` or `1`.
+        endpoint: usize,
+    },
     /// An endpoint has no position. `endpoint` is `0` for `A` and `1` for `B`,
-    /// the first refused one.
+    /// the first refused one, where both are placed.
     EndpointRefused {
         /// The endpoint, `0` or `1`.
         endpoint: usize,
@@ -81,6 +90,13 @@ impl std::fmt::Display for MeasurementScaleExclusion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let letter = |endpoint: usize| if endpoint == 0 { "A" } else { "B" };
         match self {
+            Self::NoStatedDistance => write!(
+                f,
+                "it states no distance, so it reads a length but gives no scale"
+            ),
+            Self::EndpointNotPlaced { endpoint } => {
+                write!(f, "endpoint {} is not placed", letter(*endpoint))
+            }
             Self::EndpointRefused { endpoint, refusal } => {
                 write!(
                     f,
@@ -235,10 +251,11 @@ impl std::error::Error for DistanceMeasurementScaleError {}
 /// distance converted to `unit` over the distance its endpoints lie apart in
 /// the file's own coordinates. The factor is the median of those, so
 /// multiplying the reconstruction's coordinates by it puts them in `unit`,
-/// whatever `world_space_unit` the file declares before. A measurement with
-/// an endpoint refused, an endpoint at infinity, a scene distance that is
-/// zero or not finite, or a factor that overflows to infinity or underflows
-/// to zero is excluded, with its reason.
+/// whatever `world_space_unit` the file declares before. A measurement that
+/// states no distance, or with an endpoint not placed, an endpoint refused, an
+/// endpoint at infinity, a scene distance that is zero or not finite, or a
+/// factor that overflows to infinity or underflows to zero, is excluded, with
+/// its reason.
 ///
 /// # Errors
 ///
@@ -339,14 +356,29 @@ pub fn distance_measurement_scale(
 }
 
 /// Measurement `index`'s stated distance in `unit` and its scene distance, or
-/// why it gives no factor. A refusal is reported before a point at infinity,
-/// `A` before `B`, as Measurement View reports them.
+/// why it gives no factor.
+///
+/// What the row lacks is reported before what its reading gives: no stated
+/// distance first, then an endpoint not placed, then an endpoint refused,
+/// then an endpoint at infinity, `A` before `B` each time, as Measurement View
+/// reports them. A ruler that states no distance is left out for that,
+/// whatever its endpoints read.
 fn usable(
     m: &crate::DistanceMeasurementsData,
     index: usize,
     reading: &ResolvedDistanceMeasurement,
     unit: LengthUnit,
 ) -> Result<(f64, f64, f64), MeasurementScaleExclusion> {
+    let Some(stated) = m.stated_distance(index) else {
+        return Err(MeasurementScaleExclusion::NoStatedDistance);
+    };
+    let not_placed = reading
+        .endpoints
+        .iter()
+        .position(|e| matches!(e, Err(EndpointRefusal::NotPlaced)));
+    if let Some(endpoint) = not_placed {
+        return Err(MeasurementScaleExclusion::EndpointNotPlaced { endpoint });
+    }
     for (endpoint, resolved) in reading.endpoints.iter().enumerate() {
         if let Err(refusal) = resolved {
             return Err(MeasurementScaleExclusion::EndpointRefused {
@@ -368,10 +400,10 @@ fn usable(
     if !(scene_distance.is_finite() && scene_distance > 0.0) {
         return Err(MeasurementScaleExclusion::UnusableSceneDistance { scene_distance });
     }
-    let stated = m.distances.get(index).map(|&d| f64::from(d));
+    let stated = f64::from(stated);
     let stated_unit = m.units.get(index).and_then(|&c| LengthUnit::from_code(c));
-    let stated = match (stated, stated_unit) {
-        (Some(d), Some(u)) if d.is_finite() && d > 0.0 => d * u.in_metres() / unit.in_metres(),
+    let stated = match stated_unit {
+        Some(u) if stated.is_finite() && stated > 0.0 => stated * u.in_metres() / unit.in_metres(),
         _ => return Err(MeasurementScaleExclusion::UnusableStatedDistance),
     };
     // Both are finite and positive, so the ratio is never NaN, but it can

@@ -1527,10 +1527,16 @@ the reconstructed distance and the error in the measurement's own unit, the
 error as a percentage, and `implied_scale`, stated over reconstructed),
 `scene_units` (it declares none: `scene_distance`, and `unit_per_scene_unit`,
 the length of one scene unit in the measurement's unit), `at_infinity` and
-`refused`, each of the last two naming the `endpoint`. Every reading is in the
+`refused`, each of the last two naming the `endpoint`, `not_placed`, naming
+the `endpoint` that is not placed, and `no_stated_distance`, for a
+measurement that states none and whose endpoints are both finite: its
+`reconstructed_distance` in the file's `world_space_unit`, named by `unit`, or
+in scene units where `unit` is null. A measurement that states no distance has
+a null `stated_distance` and keeps its `unit`, and an endpoint not placed is
+null in `endpoints`. Every reading is in the
 file's own coordinates: a display transform never scales one.
 
-`get_measurement` gives each endpoint's `endpoint`, `camera_image`,
+`get_measurement` gives each placed endpoint's `endpoint`, `camera_image`,
 `camera_image_name` and `pixel` as above, its `position_unit` (the file's
 `world_space_unit`, null where it declares none), and in place of `resolved`
 its `resolution` (`chosen`, an index into
@@ -1539,17 +1545,19 @@ its `resolution` (`chosen`, an index into
 a ranked candidate's `cost` factors, as
 [measurement-endpoint.md](../core/reconstruction/measurement-endpoint.md)
 names them) or its `refusal` (`sentence`, which names the remedy, and
-`short`, the words the row shows), and `median`, the header's comparison line
-(`count`, `median_unit_per_scene_unit`, `deviation_percent` and `text`), null
-with fewer than two readings.
+`short`, the words the row shows), with an endpoint not placed null, and
+`median`, the header's comparison line (`count`,
+`median_unit_per_scene_unit`, `deviation_percent` and `text`), null with fewer
+than two measurements that state a distance and have a reading.
 
 **Naming `item` in place of `measurement_index`** reads a measurement item on
 the bench, live from the item as Measurement View's edited mode reads it
 ([measurement-view.md](measurement-view.md) § "Live readings"): the same
 fields, plus `item`, `focused`, and `origin`, `{ "measurement_index": n }` for
 the row its commit would replace or null where it would append one. An
-endpoint not placed is null in `endpoints`, and then `result` is null too; the
-median line leaves the item's origin out. A call naming neither is refused.
+endpoint not placed is null in `endpoints`, and `result` is then
+`not_placed`; the median line leaves the item's origin out. A call naming
+neither is refused.
 
 ### `get_measurement_endpoint_views`
 
@@ -5389,9 +5397,12 @@ raise (`AppState::start_measurement`): a new measurement item with endpoint A
 at that pixel and nothing else, labelled by where it starts, `distance from
 IMG_0042@142,198` (the image stem and the rounded pixel, with the bench's
 collision suffix), put on the bench and focused in one version, `Put distance
-from IMG_0042@142,198 on the bench`. It has no origin, so its commit appends a
-row once `set_bench_measurement_endpoint` has placed endpoint B and
-`set_bench_measurement_distance` has given the distance. An agent starts one
+from IMG_0042@142,198 on the bench`. Its own label is `measurement N`, the
+first `N` from 1 that no stored distance measurement and no measurement item
+on the bench holds. It has no origin, so its commit appends a row, with
+endpoint B and the stated distance absent until
+`set_bench_measurement_endpoint` and `set_bench_measurement_distance` give
+them. An agent starts one
 from a 3D point, as the 3D view's point menu does, by passing the
 `camera_image` and `pixel` `get_point_reference_pixel` gives. It is refused
 while a background task holds the node, on a view-only bench, and for a pixel
@@ -5410,7 +5421,8 @@ version, `Set the stated distance of distance #2 to 4.2 cm`. The reply names
 the `item` and carries `stated_distance` and `unit`. Each answers `changed:
 false` with the no-effect row as its `report` where the item holds that value
 already, and is refused while a background task holds the node and on a
-view-only bench; the distance is refused too for text that does not read, an
+view-only bench; the label is refused too where it is empty or only white
+space, and the distance for text that does not read, an
 unknown unit, and a value that is not finite and strictly positive, in core's
 sentence ([measurement-view.md](measurement-view.md) § "The label and the
 stated distance").

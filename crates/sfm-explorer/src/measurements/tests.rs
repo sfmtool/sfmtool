@@ -86,7 +86,7 @@ fn a_reading_without_a_unit_is_in_scene_units() {
 fn a_measurement_in_inches_reads_a_file_in_metres_in_inches() {
     let (mut rows, readings) = read(Some("m"));
     rows[0].unit = LengthUnit::Inch;
-    rows[0].stated = 60.0;
+    rows[0].stated = Some(60.0);
     let DistanceResult::WithUnit {
         reconstructed,
         error,
@@ -173,7 +173,7 @@ fn the_rows_read_as_the_scene_tree_draws_them() {
     );
     assert_eq!(
         text(2, Some("m")),
-        "Distance #2  1 m  \u{26a0} endpoint B: no patch holds the pixel"
+        "Distance #2  bare pixel  1 m  \u{26a0} endpoint B: no patch holds the pixel"
     );
     assert_eq!(
         text(3, Some("m")),
@@ -233,6 +233,89 @@ fn the_median_line_flags_the_bad_measurement_among_good_ones() {
     // A measurement with no reading still gets the line, saying so.
     let refused = scale_comparison(&rows, &readings.distance, 2).expect("three readings");
     assert_eq!(refused.deviation_percent, None);
+}
+
+/// The fixture with measurement 0 stating no distance (a ruler) and
+/// measurement 1's endpoint B not placed, its file declaring `unit`.
+fn with_ruler_and_unplaced(unit: Option<&str>) -> (Vec<DistanceRow>, MeasurementReadings) {
+    let mut recon = measured_reconstruction(unit);
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    m.distances[0] = f32::NAN;
+    m.image_indexes[[1, 1]] = u32::MAX;
+    m.endpoints_xy[[1, 1, 0]] = f32::NAN;
+    m.endpoints_xy[[1, 1, 1]] = f32::NAN;
+    let rows = distance_rows(&recon.image_set.measurements);
+    let readings = MeasurementReadings::of(&EditedReconstruction::new(Arc::new(recon)));
+    (rows, readings)
+}
+
+/// A measurement that states no distance reads the reconstructed distance
+/// alone, in the file's unit or in scene units, and its row prints no stated
+/// distance; one with an endpoint not placed says so in its result and row.
+#[test]
+fn a_ruler_reads_its_distance_and_an_unplaced_endpoint_says_so() {
+    let (rows, readings) = with_ruler_and_unplaced(Some("cm"));
+    assert_eq!(rows[0].stated, None);
+    assert_eq!(rows[0].stated_text(), None);
+    let result = distance_result(&rows[0], &readings.distance[0], Some("cm"));
+    let DistanceResult::Unstated {
+        reconstructed,
+        unit,
+    } = result
+    else {
+        panic!("not a ruler's reading: {result:?}");
+    };
+    // The file is in centimetres, and the reading is in the file's unit
+    // whatever the row's own unit is.
+    assert_close(reconstructed, 1.5, 1e-5, "reconstructed");
+    assert_eq!(unit, Some(LengthUnit::Centimetre));
+    let measurement = MeasurementRef::distance(crate::scene::ReconId::from_raw(0), 0);
+    assert_eq!(
+        row_text(measurement, &rows[0], &readings.distance[0], Some("cm")),
+        format!("Distance #0  ear to ear  {ARROW} 1.500 cm")
+    );
+    assert_eq!(
+        distance_result(&rows[0], &readings.distance[0], None),
+        DistanceResult::Unstated {
+            reconstructed,
+            unit: None
+        }
+    );
+    assert_eq!(
+        reading_text(
+            &rows[0],
+            &readings.distance[0],
+            distance_result(&rows[0], &readings.distance[0], None)
+        ),
+        format!("{ARROW} 1.50 su")
+    );
+
+    assert_eq!(rows[1].endpoint(EndpointSide::B), None);
+    assert!(rows[1].endpoint(EndpointSide::A).is_some());
+    let result = distance_result(&rows[1], &readings.distance[1], Some("cm"));
+    assert_eq!(result, DistanceResult::NotPlaced(EndpointSide::B));
+    assert_eq!(
+        reading_text(&rows[1], &readings.distance[1], result),
+        "endpoint B: not placed"
+    );
+}
+
+/// The median line counts only measurements that state a distance and have a
+/// reading, and a ruler's line says it states none.
+#[test]
+fn the_median_line_leaves_out_a_ruler() {
+    let (rows, readings) = with_ruler_and_unplaced(Some("m"));
+    // Of the five, 0 states nothing, 1 has B not placed, 2 is refused and 3 is
+    // at infinity: only 4 is left, so there is no line.
+    assert_eq!(scale_comparison(&rows, &readings.distance, 4), None);
+    let (full_rows, full) = read(Some("m"));
+    let mut rows = full_rows;
+    rows[1].stated = None;
+    let line = scale_comparison(&rows, &full.distance, 1).expect("two readings left");
+    assert_eq!(line.count, 2);
+    assert_eq!(line.deviation_percent, None);
+    assert!(!line.states_distance);
+    assert!(scale_comparison_text(&line, rows[1].unit).ends_with("; this one states no distance"));
 }
 
 /// With only one reading there is nothing to compare with, and no line.
@@ -350,7 +433,10 @@ fn a_deleted_image_moves_the_selection_with_its_measurement_or_clears_it() {
     );
     let node = crate::scene::node_by_id(&state.scene, id).unwrap();
     assert_eq!(measurement_count(node.edited().measurements()), 3);
-    assert_eq!(distance_rows(node.edited().measurements())[1].label, "");
+    assert_eq!(
+        distance_rows(node.edited().measurements())[1].label,
+        "bare pixel"
+    );
 
     let (mut state, id) = measured_state(Some("m"));
     state.select_measurement(MeasurementRef::distance(id, 4));
@@ -408,7 +494,8 @@ fn the_fixtures_endpoints_resolve_to_its_points() {
 
 /// Deleting an image of a value built by hand whose measurement columns
 /// disagree in length does not panic, and the selection follows the rows the
-/// subset keeps: the row with no image index survives no delete.
+/// subset keeps: the row with no image index reads as one whose endpoints are
+/// not placed, which no delete drops.
 #[test]
 fn deleting_an_image_of_mismatched_measurement_columns_does_not_panic() {
     let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
@@ -425,9 +512,14 @@ fn deleting_an_image_of_mismatched_measurement_columns_does_not_panic() {
     state
         .delete_image(ImageRef::new(id, 2))
         .expect("the delete runs");
-    // Rows 0 to 3 name images 0 and 1 only and survive; row 4 has none.
+    // Rows 0 to 3 name images 0 and 1 only and survive, and row 4 names
+    // none.
     let node = state.node(id).unwrap();
-    assert_eq!(measurement_count(node.edited().measurements()), 4);
+    assert_eq!(measurement_count(node.edited().measurements()), 5);
+    assert_eq!(
+        distance_rows(node.edited().measurements())[4].endpoints,
+        [None, None]
+    );
     assert_eq!(
         state.selected_measurement,
         Some(MeasurementRef::distance(id, 3))

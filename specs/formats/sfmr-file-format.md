@@ -93,6 +93,12 @@ current version, after the last release, sfmtool 0.4.1, which writes version
 16. No released build and no checked-in file writes version 17, so version 17
 changed in place, with no new version.
 
+The distance kind changed in place the same way: a row's stated distance and
+each of its endpoints became optional, stored as `NaN` and as `0xFFFFFFFF`
+with `NaN` coordinates, and its label became required, neither empty nor only
+white space. A version 17 file written before the change that has an empty
+label is refused; no checked-in file stores measurements.
+
 ## Coordinate System Conventions
 
 All geometric data in a `.sfmr` file — camera poses, 3D point positions,
@@ -293,9 +299,9 @@ reconstruction.sfmr (ZIP archive)
 │   └── metadata.json.zst                      # Tracks metadata
 └── measurements/                              # (Optional, version 17+) One subdirectory per kind of measurement
     └── distance/                              # (Optional) Physical distance measurements
-        ├── distances.{N}.float32.zst          # Measured physical distance per measurement
-        ├── endpoints_xy.{N}.2.2.float32.zst   # Sub-pixel (x, y) coordinates of the two endpoints
-        ├── image_indexes.{N}.2.uint32.zst     # Observing image index pair per measurement
+        ├── distances.{N}.float32.zst          # Stated physical distance per measurement (NaN for none)
+        ├── endpoints_xy.{N}.2.2.float32.zst   # Sub-pixel (x, y) coordinates of the two endpoints (NaN for an absent one)
+        ├── image_indexes.{N}.2.uint32.zst     # Observing image index pair per measurement (0xFFFFFFFF for an absent endpoint)
         ├── labels.json.zst                    # Human-readable label per measurement
         ├── metadata.json.zst                  # Measurement count and unit_names legend
         └── units.{N}.uint8.zst                # Length unit code per measurement, indexing unit_names
@@ -2826,10 +2832,20 @@ distance measurements, under `measurements/distance/`.
 #### Distance measurements (`measurements/distance/`)
 
 The distance kind stores physical distance measurements between pairs of
-points observed in images of the reconstruction. Each row records a measured
+points observed in images of the reconstruction. Each row records a stated
 length, its physical unit, the pair of images in which the two endpoints were
 observed, the sub-pixel image coordinates of both endpoints, and a
 human-readable label.
+
+The stated length and each endpoint are optional, so a row can be stored
+while it is still being placed, or kept as a ruler that only reads the
+reconstruction's distance between two places. An absent value is stored as a
+sentinel, as the [per-point constraints](#per-point-constraints-optional) store
+an unconstrained point (`NaN` in `points3d/constraint_distances`, `0xFFFFFFFF`
+in `points3d/constraint_reference_images`): a row that states no length
+stores `NaN` in `distances`, and an absent endpoint stores `0xFFFFFFFF` in
+`image_indexes` and `NaN` for both of its coordinates in `endpoints_xy`. The
+unit and the label are required on every row.
 
 **Why image observations rather than 3D point indexes.** Each endpoint is
 stored as an image index and pixel coordinate `(x, y)` rather than an index
@@ -2864,12 +2880,14 @@ patch maps the coordinate to a 3D point
 
 ##### `measurements/distance/distances.{N}.float32.zst`
 
-Measured physical distance for each measurement:
+Stated physical distance for each measurement:
 
 - **Shape**: `(N,)` where `N = distance_measurement_count`
 - **Data type**: `float32` (little-endian)
 - **Format**: Strictly positive, finite distance (`> 0.0` and finite), in the
-  unit named by the matching row of `measurements/distance/units`.
+  unit named by the matching row of `measurements/distance/units`, or `NaN`
+  for a measurement that states no distance. Infinity, zero and negative
+  values are invalid.
 - **Precision**: Physical distance measurements (tape measures, laser
   rangefinders, calibrated scale bars) carry at most four to five significant
   digits. IEEE-754 `float32` has a 24-bit significand (relative rounding error
@@ -2888,7 +2906,9 @@ Physical length unit per measurement:
   A writer emits the canonical codes (`0` = `"mm"`, `1` = `"cm"`, `2` = `"m"`,
   `3` = `"in"`, `4` = `"ft"`). A reader resolves every code through the file's
   `unit_names` legend and hands back the canonical numbering, so a file's own
-  numbering stops at the I/O boundary.
+  numbering stops at the I/O boundary. Required on every row: on a row that
+  states no distance it is the unit the distance is to be given in, so a
+  writer that later states one keeps the row's unit.
 
 ##### `measurements/distance/image_indexes.{N}.2.uint32.zst`
 
@@ -2897,9 +2917,10 @@ Observing image pair for each measurement:
 - **Shape**: `(N, 2)` where `N = distance_measurement_count`
 - **Data type**: `uint32` (little-endian)
 - **Format**: Row `i` holds `[img_0, img_1]`, the indexes into `images/` of the
-  images in which endpoint `0` and endpoint `1` are observed. Each index must
-  be `< image_count`. Both endpoints may lie in the same image
-  (`img_0 == img_1`).
+  images in which endpoint `0` and endpoint `1` are observed, or `0xFFFFFFFF`
+  (`u32::MAX`, the `uint32` form of `-1`) for an absent endpoint. Each other
+  index must be `< image_count`. Both endpoints may lie in the same image
+  (`img_0 == img_1`), and both may be absent.
 
 ##### `measurements/distance/endpoints_xy.{N}.2.2.float32.zst`
 
@@ -2910,9 +2931,11 @@ Sub-pixel image coordinates of the two endpoints of each measurement:
 - **Format**: Element `[i, k, 0..2]` is `(x, y)` in pixel coordinates of
   `images[image_indexes[i, k]]` for endpoint `k ∈ {0, 1}`, following the same
   top-left origin, half-pixel-centre convention as
-  [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst). Every coordinate
-  must be finite and lie within `[0, width) × [0, height)` of that image's
-  camera intrinsics.
+  [`tracks/keypoints_xy`](#trackskeypoints_xym2float32zst). A present
+  endpoint's coordinates must be finite and lie within
+  `[0, width) × [0, height)` of that image's camera intrinsics. An absent
+  endpoint, one whose `image_indexes` entry is `0xFFFFFFFF`, stores `NaN` for
+  both coordinates.
 - **Precision**: `float32` matches `tracks/keypoints_xy`: sub-pixel coordinates
   on images up to tens of thousands of pixels wide need far fewer than seven
   significant digits.
@@ -2924,13 +2947,14 @@ Human-readable label or description for each measurement:
 ```json
 [
   "ruler edge",
-  ""
+  "measurement 2"
 ]
 ```
 
 - **Format**: JSON array of `N` UTF-8 strings (`N = distance_measurement_count`),
-  mirroring `images/names.json.zst`. An empty string `""` is valid for an
-  unlabelled measurement.
+  mirroring `images/names.json.zst`. Every measurement has a label: an empty
+  string, and a string of only white space, are invalid. A label is stored as
+  given, without trimming.
 
 #### Presence and validity
 
@@ -2951,13 +2975,19 @@ reader and verifier all enforce them:
 - `unit_names` is a non-empty list of unique names from `["mm", "cm", "m",
   "in", "ft"]`;
 - every `units` code is below `unit_names.len()`;
-- every `distances` value is finite and strictly positive (`> 0.0`);
-- every `image_indexes` value is `< image_count`;
-- every `endpoints_xy` coordinate `(x, y)` is finite and within
+- every `distances` value is `NaN` (no stated distance) or finite and
+  strictly positive (`> 0.0`);
+- every `image_indexes` value is `0xFFFFFFFF` (an absent endpoint) or
+  `< image_count`;
+- `image_indexes[i, k]` is `0xFFFFFFFF` if and only if both coordinates of
+  `endpoints_xy[i, k]` are `NaN`: a `NaN` in one coordinate only, `NaN`
+  coordinates with a present image index, and `0xFFFFFFFF` with a
+  coordinate that is not `NaN` are each refused;
+- every present endpoint's coordinate `(x, y)` is finite and within
   `[0, width) × [0, height)` of the camera assigned to
   `images[image_indexes[i, k]]`;
 - `labels.json.zst` is a JSON array of exactly `distance_measurement_count`
-  strings.
+  strings, none of them empty or only white space.
 
 ### Observation source
 
@@ -3114,7 +3144,7 @@ frame is per point (not per observation), two views of the same point share
 - `image_indexes[j]` → index into `images` arrays
 - `feature_indexes[j]` (sift_files) → index into feature file for `images[image_indexes[j]]`; in `embedded_patches`, `keypoints_xy[j]` carries the 2D coordinate directly
 - `point_indexes[j]` → index into `points3d` arrays
-- `measurements/distance/image_indexes[i, k]` → index into `images` arrays (for endpoint `k ∈ {0, 1}` of distance measurement `i`)
+- `measurements/distance/image_indexes[i, k]` → index into `images` arrays (for endpoint `k ∈ {0, 1}` of distance measurement `i`), or `0xFFFFFFFF` for an absent endpoint
 - `measurements/distance/units[i]` → index into `measurements/distance/metadata.json`'s `unit_names` legend
 
 ## Compression Details
@@ -3431,7 +3461,14 @@ describes. Other parts of this spec are implemented by:
   kind present) and `validate_distance_measurements` live in
   [`measurements.rs`](../../crates/sfmtool-sfmr-format/src/measurements.rs);
   `LengthUnit` derives its names and metre factors directly from
-  `WORLD_SPACE_UNITS`. Read, write and verify in `sfmtool-sfmr-format` all
+  `WORLD_SPACE_UNITS`. The distance columns stay flat arrays in their on-disk
+  shapes, sentinels included; `DistanceMeasurementsData::row`, `rows`,
+  `stated_distance` and `endpoint` read a row as a `DistanceMeasurementRow`
+  whose absent stated distance and endpoints (`DistanceMeasurementEndpoint`)
+  are `None`, and `from_rows` writes the sentinels back
+  (`ABSENT_ENDPOINT_IMAGE`, `NaN`), so a Rust reader outside the crate tests no
+  sentinel; `is_valid_measurement_label` is the label rule. Read, write and
+  verify in `sfmtool-sfmr-format` all
   route through `validate_distance_measurements`, and every writer of the top-level
   counts sets them from the data through
   `MeasurementsData::set_metadata_counts`. In memory, `ImageSet::measurements`
@@ -3442,7 +3479,10 @@ describes. Other parts of this spec are implemented by:
   dict with one key per kind present, `{"distance": {...}}` with the five
   distance columns (`distances`, `units`, `image_indexes`, `endpoints_xy`,
   `labels`), or `None` when there are no measurements; a kind that is absent
-  has no key, and a dict naming no kind or an unknown kind is refused.
+  has no key, and a dict naming no kind or an unknown kind is refused. The
+  arrays carry the file's sentinels as they are: `NaN` in `distances` for no
+  stated distance, and `4294967295` (`0xFFFFFFFF`) in `image_indexes` with
+  `NaN` in both of its `endpoints_xy` coordinates for an absent endpoint.
   `sfmtool.fileio.LENGTH_UNIT_NAMES` names the canonical unit codes. The form
   is taken by `read_sfmr` / `write_sfmr`, `SfmrReconstruction.from_data`,
   `SfmrReconstruction.measurements`,
@@ -3664,8 +3704,10 @@ reads versions 1 to 15; this build reads versions 16 and 17
   `image_indexes`, `labels.json`, `metadata.json` with `unit_names` legend,
   `units`), top-level optional `distance_measurement_count`, and optional
   `measurements_xxh128` folded into `content_xxh128` after `tracks_xxh128`.
-  A `sift_files` file must carry `tracks/keypoints_xy`, optional in it
-  before.
+  A distance measurement's stated distance (`NaN`) and each endpoint
+  (`0xFFFFFFFF` with `NaN` coordinates) may be absent, and its label is
+  required. A `sift_files` file must carry `tracks/keypoints_xy`, optional in
+  it before.
 - **Version 16**: the sharpness and five of the
   observation-reading columns are stored as `float16`, and the two bitmap
   scores as their ZNCC deficits `1 − z` in `float16` under names ending

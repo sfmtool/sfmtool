@@ -80,7 +80,9 @@ pub struct ScaleFactorStatistics {
 pub struct ExcludedMeasurement { pub index: usize, pub reason: MeasurementScaleExclusion }
 
 pub enum MeasurementScaleExclusion {
-    EndpointRefused { endpoint: usize, refusal: EndpointRefusal }, // 0 is A, 1 is B
+    NoStatedDistance,                              // a ruler: reads a length, states none
+    EndpointNotPlaced { endpoint: usize },         // 0 is A, 1 is B
+    EndpointRefused { endpoint: usize, refusal: EndpointRefusal },
     EndpointAtInfinity { endpoint: usize },
     UnusableSceneDistance { scene_distance: f64 }, // zero or not finite
     NoSceneDistance,                               // only in a reading built by hand
@@ -126,10 +128,18 @@ converted to the target unit.
 reconstruction needs to see which measurements were left out and why, beside
 the ones that counted, so each carries its stored index and its reason; a
 refused endpoint keeps the resolver's `EndpointRefusal`, whose sentence names
-the remedy. A refusal is reported before an endpoint at infinity, `A` before
-`B`, as Measurement View reports them, since the refusal is the one a person can
-act on. Only when nothing is usable is the call an error, and that error still
-carries every exclusion.
+the remedy. One reason is given per measurement, the first that applies, in
+this order: no stated distance, an endpoint not placed, an endpoint refused,
+an endpoint at infinity, no scene distance, a scene distance that is zero or
+not finite, a stated distance that is not usable, and a factor that is not.
+What the row lacks comes before what its reading gives, so a ruler, a
+measurement stored with no stated distance to read lengths with, is left out
+for stating none whatever its endpoints read; a not-placed endpoint, which the
+resolver gives as `EndpointRefusal::NotPlaced`, has its own reason rather than
+a refusal's. Among the endpoint reasons `A` comes before `B`, and a refusal
+comes before a point at infinity, as Measurement View reports them, since the
+refusal is the one a person can act on. Only when nothing is usable is the
+call an error, and that error still carries every exclusion.
 
 **Why no histogram.** The factors are in the result, and the bins a histogram
 draws are a choice of the drawing: a plot sized to a panel chooses its own
@@ -214,8 +224,9 @@ their **median**, which one misplaced endpoint cannot move far; the mean and
 standard deviation are reported beside it for the spread, not used to choose.
 The median and the median absolute deviation come from `sfmtool_core::numeric`.
 
-A measurement is left out where it has no finite scene distance: an endpoint
-the resolver refuses, an endpoint on a point at infinity (a direction, with no
+A measurement that states no distance is left out, as is one with an endpoint
+not placed. A measurement is left out where it has no finite scene distance:
+an endpoint the resolver refuses, an endpoint on a point at infinity (a direction, with no
 distance to it), or two endpoints whose distance is zero or not finite. A
 stated length that is not finite and strictly positive, or a unit code that
 names no unit, is left out too; a load refuses such a row, so only a value
@@ -251,6 +262,10 @@ reading's endpoint outcomes and scene distance:
 - An endpoint refused, an endpoint at infinity, a zero and an infinite scene
   distance, and a stated length that is negative or in no known unit are each
   excluded with their index and reason, a refusal before infinity.
+- A measurement with no stated distance and one with an endpoint not placed
+  are excluded with their own reasons and sentences: no stated distance before
+  any endpoint, an endpoint not placed before one refused, `A` before `B`; a
+  file of rulers alone has no usable measurement.
 - A factor that overflows to infinity and one that underflows to zero are
   excluded while the rest give a finite factor, three factors of `6e307` have a
   finite mean, and finite endpoints with no scene distance are excluded with a

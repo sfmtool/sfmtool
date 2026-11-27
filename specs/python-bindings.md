@@ -260,7 +260,11 @@ depends on how `sfmtool-core` stores the column:
 
 `observation_readings` returns a dict of arrays built on each read,
 `measurements` a dict of kinds holding such dicts (`{"distance": {...}}`, or
-`None` when there are no measurements), `image_to_gray` a new dict on each
+`None` when there are no measurements; the distance arrays carry the file's
+sentinels, `NaN` for no stated distance and `0xFFFFFFFF` with `NaN`
+coordinates for an absent endpoint,
+[formats/sfmr-file-format.md](formats/sfmr-file-format.md#distance-measurements-measurementsdistance)),
+`image_to_gray` a new dict on each
 read, and the list getters (`cameras`, `image_names`, the hash lists, …) build
 a new list on each read.
 

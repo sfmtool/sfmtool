@@ -679,9 +679,10 @@ impl MeasurementView {
         };
         let unit = node.recon().metadata.world_space_unit.as_deref();
         let blocks = EndpointSide::BOTH.map(|side| {
+            let endpoint = row.endpoint(side)?;
             Some(Endpoint {
-                image: row.image(side),
-                pixel: row.pixel(side),
+                image: endpoint.image,
+                pixel: endpoint.pixel,
                 resolution: measurements::endpoint(resolved, side).clone(),
             })
         });
@@ -742,10 +743,14 @@ impl MeasurementView {
                 ui.separator();
                 show_item_origin(ui, node, label, &item, origin);
                 self.show_header_fields(ui, width, state, node, label, &item, response);
-                show_item_comparison(ui, row.as_ref(), || {
-                    let row = row.as_ref()?;
-                    let reading = reading.resolved.as_ref()?;
-                    measurements::item_scale_comparison(rows, resolved, origin, row, reading)
+                show_item_comparison(ui, &row, || {
+                    measurements::item_scale_comparison(
+                        rows,
+                        resolved,
+                        origin,
+                        &row,
+                        &reading.resolved,
+                    )
                 });
                 ui.separator();
                 let edit = ItemEdit {
@@ -764,13 +769,7 @@ impl MeasurementView {
                     response,
                 );
                 ui.separator();
-                match (&row, &reading.resolved) {
-                    (Some(row), Some(resolved)) => show_result(ui, row, resolved, unit),
-                    _ => {
-                        ui.label(egui::RichText::new("Result").strong());
-                        ui.label(item_without_result(&item));
-                    }
-                }
+                show_result(ui, &row, &reading.resolved, unit);
             });
     }
 
@@ -796,12 +795,9 @@ impl MeasurementView {
         let refusal = state.bench_edit_refusal(node.id);
         let bare =
             crate::bench::measurement::bare_unit(node.recon().metadata.world_space_unit.as_deref());
-        let stated = item
-            .as_distance()
-            .and_then(|d| d.distance)
-            .map_or(String::new(), |(distance, unit)| {
-                format!("{} {}", measurements::length_number(distance), unit.name())
-            });
+        let stated = measurements::item_row(item)
+            .stated_text()
+            .unwrap_or_default();
         // The fields take what the panel has beside the wider name, up to
         // their full width, so neither row is wider than the panel. Two rows
         // with the names at the measured width line the fields up as a grid
@@ -1010,7 +1006,7 @@ impl MeasurementView {
                 )
             });
             let Some(endpoint) = &blocks[side.index()] else {
-                let drawn = show_unplaced(ui, width, side, switch);
+                let drawn = show_unplaced(ui, width, side, switch.is_some(), switch);
                 this.note_block(side, &drawn);
                 return;
             };
@@ -1514,13 +1510,20 @@ pub(crate) fn place_instruction(side: EndpointSide) -> String {
     )
 }
 
+/// What a read-only block for a stored endpoint that is not placed says to
+/// do: put the measurement on the bench, where the endpoint can be placed.
+pub(crate) const PLACE_ON_BENCH: &str =
+    "Tick Edit to put the measurement on the bench, where the endpoint can be placed.";
+
 /// An endpoint that is not placed, in a block `width` points wide: a block
-/// saying so and how to place it, with *Switch image…* greyed in the edited
-/// mode (`switch`).
+/// saying so and how to place it ([`place_instruction`] in the edited mode,
+/// `editing`, and [`PLACE_ON_BENCH`] for a stored measurement), with *Switch
+/// image…* greyed in the edited mode (`switch`).
 fn show_unplaced(
     ui: &mut egui::Ui,
     width: f32,
     side: EndpointSide,
+    editing: bool,
     switch: Option<Option<String>>,
 ) -> BlockDrawn {
     let mut button = None;
@@ -1550,7 +1553,12 @@ fn show_unplaced(
         // wrapped line to the column's width with wide gaps between its words.
         targets.push(
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.add(egui::Label::new(place_instruction(side)).sense(egui::Sense::click()))
+                let instruction = if editing {
+                    place_instruction(side)
+                } else {
+                    PLACE_ON_BENCH.to_string()
+                };
+                ui.add(egui::Label::new(instruction).sense(egui::Sense::click()))
             })
             .inner,
         );
@@ -1704,19 +1712,6 @@ fn unit_of(node: &SceneNode) -> Option<&str> {
         .filter(|u| LengthUnit::from_name(u).is_some())
 }
 
-/// The result block's line for an item that has no result: what it lacks.
-pub(crate) fn item_without_result(item: &EditableMeasurement) -> String {
-    let Some(distance) = item.as_distance() else {
-        return "No distance.".to_string();
-    };
-    for side in EndpointSide::BOTH {
-        if distance.endpoints[side.index()].is_none() {
-            return format!("No distance: endpoint {} is not placed.", side.letter());
-        }
-    }
-    "No distance: no stated distance is given.".to_string()
-}
-
 /// The start of the edited mode's header: the item's bench label and node,
 /// and where it came from. The label and stated distance fields follow
 /// ([`MeasurementView::show_header_fields`]), then the median line
@@ -1752,10 +1747,10 @@ fn show_item_origin(
 /// item with the stored measurements other than its origin.
 fn show_item_comparison(
     ui: &mut egui::Ui,
-    row: Option<&DistanceRow>,
+    row: &DistanceRow,
     comparison: impl FnOnce() -> Option<measurements::ScaleComparison>,
 ) {
-    if let (Some(row), Some(line)) = (row, comparison()) {
+    if let Some(line) = comparison() {
         ui.label(measurements::scale_comparison_text(&line, row.unit))
             .on_hover_text(
                 "The median of the scales this measurement and the other stored ones imply, \
@@ -1786,7 +1781,14 @@ fn show_header(
     } else {
         ui.label(format!("Label: {}", row.label));
     }
-    ui.label(format!("Stated distance: {}", row.stated_text()));
+    match row.stated_text() {
+        Some(stated) => {
+            ui.label(format!("Stated distance: {stated}"));
+        }
+        None => {
+            ui.weak(measurements::NO_STATED_DISTANCE);
+        }
+    }
     if let Some(line) = measurements::scale_comparison(rows, resolved, measurement.index()) {
         ui.label(measurements::scale_comparison_text(&line, row.unit))
             .on_hover_text(
@@ -1796,7 +1798,7 @@ fn show_header(
     }
 }
 
-/// The result block: exactly one of the four results.
+/// The result block: exactly one of the results.
 fn show_result(
     ui: &mut egui::Ui,
     row: &DistanceRow,
@@ -1913,6 +1915,28 @@ pub(crate) fn result_lines(
             "No distance: endpoint {} has no 3D position.",
             side.letter()
         ))],
+        DistanceResult::NotPlaced(side) => vec![ResultLine::Text(format!(
+            "No distance: endpoint {} is not placed.",
+            side.letter()
+        ))],
+        DistanceResult::Unstated {
+            reconstructed,
+            unit: Some(unit),
+        } => vec![ResultLine::Text(format!(
+            "Reconstructed: {}",
+            measurements::unstated_text(reconstructed, Some(unit), 4)
+        ))],
+        DistanceResult::Unstated {
+            reconstructed,
+            unit: None,
+        } => vec![ResultLine::Hovered(
+            format!(
+                "Reconstructed: {}",
+                measurements::unstated_text(reconstructed, None, 4)
+            ),
+            "su: the reconstruction declares no unit, so its lengths are in scene units"
+                .to_string(),
+        )],
     }
 }
 

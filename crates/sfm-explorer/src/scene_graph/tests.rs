@@ -4500,7 +4500,8 @@ fn the_measurements_group_appears_only_on_a_node_with_measurements() {
     assert!(
         texts
             .iter()
-            .any(|t| t == "Distance #2  1 m  \u{26a0} endpoint B: no patch holds the pixel"),
+            .any(|t| t
+                == "Distance #2  bare pixel  1 m  \u{26a0} endpoint B: no patch holds the pixel"),
         "{texts:?}"
     );
 }

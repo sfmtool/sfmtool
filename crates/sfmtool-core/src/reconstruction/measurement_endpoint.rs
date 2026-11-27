@@ -225,6 +225,11 @@ impl EndpointResolution {
 /// the remedy.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EndpointRefusal {
+    /// The endpoint is not placed: the stored row, or the measurement being
+    /// edited, has no image and pixel for it. Only
+    /// [`resolve_distance_measurements`] and [`resolve_distance_endpoints`]
+    /// give it, since [`resolve_measurement_endpoint`] is always given a pixel.
+    NotPlaced,
     /// The image index is past the reconstruction's images.
     NoSuchImage {
         /// The index asked for.
@@ -271,6 +276,10 @@ pub enum EndpointRefusal {
 impl std::fmt::Display for EndpointRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            EndpointRefusal::NotPlaced => write!(
+                f,
+                "the endpoint is not placed; place it at a pixel of one of the images"
+            ),
             EndpointRefusal::NoSuchImage { image, image_count } => write!(
                 f,
                 "image {image} is not in the reconstruction, which has {image_count} images; \
@@ -1018,7 +1027,8 @@ fn view_at(
 /// Resolve both endpoints of every distance measurement the reconstruction
 /// stores ([`MeasurementsData::distance`](crate::MeasurementsData::distance)), in
 /// stored order, with the distance between them in scene units where both
-/// are finite. Empty where it stores none.
+/// are finite. Empty where it stores none. An endpoint the row leaves absent
+/// reads as [`EndpointRefusal::NotPlaced`].
 ///
 /// ```
 /// use std::sync::Arc;
@@ -1047,35 +1057,27 @@ pub fn resolve_distance_measurements(
     };
     (0..m.len())
         .map(|i| {
-            // A row missing from a column (a value built by hand, which a load
-            // refuses) reads as an image past the set or a pixel that is not a
-            // number, and is refused as such.
-            let endpoint = |k: usize| {
-                let image = m.image_indexes.get((i, k)).copied().unwrap_or(u32::MAX);
-                let xy = |c: usize| {
-                    m.endpoints_xy
-                        .get((i, k, c))
-                        .map_or(f64::NAN, |&v| f64::from(v))
-                };
-                (image, [xy(0), xy(1)])
-            };
+            let endpoint = |k: usize| m.endpoint(i, k).map(|e| (e.image, e.xy.map(f64::from)));
             resolve_distance_endpoints(edited, [endpoint(0), endpoint(1)], options)
         })
         .collect()
 }
 
 /// Resolve the two endpoints of one distance measurement, each an image and
-/// a pixel in it, with the distance between them in scene units where both
-/// are finite: what [`resolve_distance_measurements`] does for each stored
-/// row, for a measurement that is not stored, such as one being edited on the
-/// bench (`specs/core/bench/editable-measurement.md`).
+/// a pixel in it or `None` for one not placed, with the distance between them
+/// in scene units where both are finite: what [`resolve_distance_measurements`]
+/// does for each stored row, for a measurement that is not stored, such as one
+/// being edited on the bench (`specs/core/bench/editable-measurement.md`). An
+/// endpoint not placed reads as [`EndpointRefusal::NotPlaced`].
 pub fn resolve_distance_endpoints(
     edited: &EditedReconstruction,
-    endpoints: [(u32, [f64; 2]); 2],
+    endpoints: [Option<(u32, [f64; 2])>; 2],
     options: &MeasurementEndpointOptions,
 ) -> ResolvedDistanceMeasurement {
-    let endpoints =
-        endpoints.map(|(image, pixel)| resolve_measurement_endpoint(edited, image, pixel, options));
+    let endpoints = endpoints.map(|endpoint| {
+        let (image, pixel) = endpoint.ok_or(EndpointRefusal::NotPlaced)?;
+        resolve_measurement_endpoint(edited, image, pixel, options)
+    });
     let finite = |e: &Result<EndpointResolution, EndpointRefusal>| {
         e.as_ref().ok().and_then(|r| r.position().finite())
     };

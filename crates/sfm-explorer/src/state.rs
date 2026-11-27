@@ -1667,12 +1667,15 @@ impl AppState {
             return;
         };
         self.select_measurement(measurement);
-        let image = row.image(side) as usize;
-        let in_set = self
-            .node(measurement.recon)
-            .is_some_and(|node| image < node.recon().image_set.images.len());
-        if in_set {
-            let [x, y] = row.pixel(side);
+        // An endpoint not placed is selected with nothing to reveal.
+        let placed = row.endpoint(side);
+        let in_set = placed.is_some_and(|e| {
+            self.node(measurement.recon)
+                .is_some_and(|node| (e.image as usize) < node.recon().image_set.images.len())
+        });
+        if let (true, Some(e)) = (in_set, placed) {
+            let image = e.image as usize;
+            let [x, y] = e.pixel;
             self.reveal_in_image(
                 ImageRef::new(measurement.recon, image),
                 [x as f32, y as f32],

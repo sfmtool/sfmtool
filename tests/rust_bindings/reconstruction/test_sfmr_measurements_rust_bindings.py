@@ -36,7 +36,7 @@ def _sample_measurements() -> dict:
             ],
             dtype=np.float32,
         ),
-        "labels": ["ruler edge", "", "door — height"],
+        "labels": ["ruler edge", "shelf", "door — height"],
     }
 
 

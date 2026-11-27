@@ -53,11 +53,14 @@ fn edit_item(
 
 fn set_stated(item: &mut EditableMeasurement, stated: f64, unit: LengthUnit) {
     let EditableMeasurementBody::Distance(d) = &mut item.body;
-    d.distance = Some((stated, unit));
+    d.distance = Some(stated);
+    d.unit = unit;
 }
 
 fn stated_of(state: &AppState, id: ReconId, row: usize) -> f64 {
-    crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())[row].stated
+    crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())[row]
+        .stated
+        .expect("a stated distance")
 }
 
 /// A put copies the row as the file holds it, labels the item by its kind
@@ -78,9 +81,8 @@ fn a_put_copies_the_row_focuses_the_item_and_selects_its_row() {
     let d = held.as_distance().unwrap();
     let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
     let row = &rows[1];
-    assert_eq!(d.distance, Some((row.stated, LengthUnit::Metre)));
-    assert_eq!(d.endpoints[0].unwrap().image, row.images[0]);
-    assert_eq!(d.endpoints[1].unwrap().pixel, row.pixels[1]);
+    assert_eq!((d.distance, d.unit), (row.stated, LengthUnit::Metre));
+    assert_eq!(d.endpoints, row.endpoints);
     assert_eq!(state.focused_measurement_label(id), Some("distance #1"));
     assert_eq!(state.focused_track_label(id), None);
     assert_eq!(state.focused_item_kind(), Some(ItemKind::Measurement));
@@ -293,10 +295,7 @@ fn a_commit_replaces_the_row_and_an_undo_restores_it() {
     state.undo(id).unwrap();
     assert!((stated_of(&state, id, 1) - 3.06).abs() < 1e-6);
     assert_eq!(
-        item(&state, id, "distance #1")
-            .as_distance()
-            .unwrap()
-            .distance,
+        distance_of(&state, id, "distance #1"),
         Some((3.5, LengthUnit::Metre))
     );
 }
@@ -324,8 +323,9 @@ fn a_commit_that_changes_nothing_pushes_no_version() {
         .any(|e| e.text.contains("no effect, the row already holds it")));
 }
 
-/// The commit's refusals are the button's: an endpoint not placed, and a
-/// track named as the item.
+/// The commit's refusals are the button's: an empty label, and a track named
+/// as the item. An endpoint not placed is no refusal: the row stores it as
+/// absent.
 #[test]
 fn the_commit_refusal_is_the_button_s() {
     let (mut state, id) = measured_state(Some("m"));
@@ -337,6 +337,8 @@ fn the_commit_refusal_is_the_button_s() {
         let EditableMeasurementBody::Distance(d) = &mut m.body;
         d.endpoints[1] = None;
     });
+    assert_eq!(state.measurement_commit_refusal(id, "distance #0"), None);
+    edit_item(&mut state, id, "distance #0", |m| m.label = " ".into());
     let greyed = state.measurement_commit_refusal(id, "distance #0");
     let refused = state
         .commit_bench_measurement(id, "distance #0")
@@ -344,8 +346,8 @@ fn the_commit_refusal_is_the_button_s() {
     assert_eq!(greyed, Some(refused.clone()));
     assert_eq!(
         refused,
-        "Cannot commit distance #0: endpoint B is not placed, and a distance needs both \
-         endpoints."
+        "Cannot commit distance #0: a measurement needs a label, and this one is empty or \
+         only white space."
     );
     state
         .put_point_on_bench(PointRef::new(id, 0), None)
@@ -564,7 +566,9 @@ fn a_cleared_selection_stays_cleared_across_an_undo() {
 // ---- Setting the label and the stated distance ----------------------------
 
 fn distance_of(state: &AppState, id: ReconId, label: &str) -> Option<(f64, LengthUnit)> {
-    item(state, id, label).as_distance().unwrap().distance
+    let item = item(state, id, label);
+    let d = item.as_distance().unwrap();
+    Some((d.distance?, d.unit))
 }
 
 /// The newest Action Log row's text, and whether it is a failure.
@@ -621,12 +625,12 @@ fn setting_the_label_is_one_bench_step_and_undoes() {
     assert_eq!(item(&state, id, "distance #2").label, "paw width");
     assert_eq!(state.focused_item().unwrap().item, item_id);
     let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
-    assert_eq!(rows[2].label, "", "the stored row changed");
+    assert_eq!(rows[2].label, "bare pixel", "the stored row changed");
     assert!(last_row(&state)
         .0
         .starts_with("Set the label of distance #2 to \"paw width\""));
     state.undo(id).unwrap();
-    assert_eq!(item(&state, id, "distance #2").label, "");
+    assert_eq!(item(&state, id, "distance #2").label, "bare pixel");
 }
 
 /// The label an item holds already pushes no version and writes the
@@ -699,8 +703,8 @@ fn setting_the_stated_distance_reads_the_unit_and_is_one_bench_step() {
     assert!(committed.changed);
     let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
     assert_eq!(
-        (rows[2].stated as f32, rows[2].unit),
-        (4.2, LengthUnit::Centimetre)
+        (rows[2].stated.map(|d| d as f32), rows[2].unit),
+        (Some(4.2), LengthUnit::Centimetre)
     );
 }
 
@@ -903,7 +907,11 @@ fn switching_an_endpoint_is_one_bench_step_and_undoes() {
     assert_eq!(now[0].map(|e| (e.image, e.pixel)), Some((1, view.pixel)));
     assert_eq!(now[1], was[1]);
     let rows = crate::measurements::distance_rows(node.edited().measurements());
-    assert_eq!(rows[1].images, [0, 1], "the stored row changed");
+    assert_eq!(
+        rows[1].endpoints.map(|e| e.map(|e| e.image)),
+        [Some(0), Some(1)],
+        "the stored row changed"
+    );
     let reading =
         crate::measurements::item_reading(node.edited(), &item(&state, id, "distance #1"));
     let a = reading.endpoints[0].as_ref().unwrap().as_ref().unwrap();
@@ -1294,7 +1302,8 @@ fn new_measurement_from_image_detail_puts_a_one_endpoint_item_on_and_focuses_it(
     assert_eq!(state.selected_recon, Some(id));
     let held = item(&state, id, label);
     assert_eq!(held.origin, None);
-    assert_eq!(held.label, "");
+    // Its own label is core's default, the first `measurement N` free.
+    assert_eq!(held.label, "measurement 1");
     let d = held.as_distance().unwrap();
     assert_eq!(d.distance, None);
     assert_eq!(
@@ -1467,11 +1476,11 @@ fn new_measurement_is_refused_while_busy_on_a_view_only_bench_and_outside_the_im
 
 /// A new measurement is finished with the steps that already exist: *Set
 /// Endpoint B Here*, then the stated distance and the label. *Commit* is
-/// refused, in the button's sentence, until both endpoints and the distance
-/// are given, and then appends a row, which is selected; an undo takes the
-/// row off again.
+/// taken at every stage: before B and the distance it appends a row with them
+/// absent, and once they are given it appends one holding them, which is
+/// selected; an undo takes the row off again. An empty label is refused.
 #[test]
-fn a_new_measurement_commits_once_it_has_both_endpoints_and_a_distance() {
+fn a_new_measurement_commits_with_or_without_endpoint_b_and_a_distance() {
     use crate::bench::measurement::EndpointSet;
     let (mut state, id) = measured_state(Some("m"));
     let label = state
@@ -1479,16 +1488,22 @@ fn a_new_measurement_commits_once_it_has_both_endpoints_and_a_distance() {
         .unwrap();
     let stored =
         crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements()).len();
+    assert_eq!(state.measurement_commit_refusal(id, &label), None);
+    let bare = state.commit_bench_measurement(id, &label).unwrap();
+    assert_eq!(bare.measurement, MeasurementRef::distance(id, stored));
+    let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
+    assert_eq!(rows[stored].endpoint(EndpointSide::B), None);
+    assert_eq!(rows[stored].stated, None);
+    assert_eq!(rows[stored].label, "measurement 1");
+    state.undo(id).unwrap();
     assert_eq!(
-        state.measurement_commit_refusal(id, &label),
-        Some(format!(
-            "Cannot commit {label}: endpoint B is not placed, and a distance needs both \
-             endpoints."
-        ))
-    );
-    assert_eq!(
-        state.commit_bench_measurement(id, &label).unwrap_err(),
-        state.measurement_commit_refusal(id, &label).unwrap()
+        state
+            .set_bench_measurement_label(id, &label, "  ")
+            .unwrap_err(),
+        format!(
+            "Cannot set the label of {label}: a measurement needs a label, and this one is \
+             empty or only white space."
+        )
     );
     let target = state.endpoint_target().expect("the new item is focused");
     assert_eq!(target.item, label);
@@ -1503,12 +1518,7 @@ fn a_new_measurement_commits_once_it_has_both_endpoints_and_a_distance() {
         version_label(&state, id),
         format!("Set endpoint B of {label} to image_001.jpg (300.0, 200.5)")
     );
-    assert_eq!(
-        state.measurement_commit_refusal(id, &label),
-        Some(format!(
-            "Cannot commit {label}: no stated distance is given."
-        ))
-    );
+    assert_eq!(state.measurement_commit_refusal(id, &label), None);
     state
         .set_bench_measurement_distance(id, &label, "42 cm")
         .unwrap();
@@ -1529,7 +1539,7 @@ fn a_new_measurement_commits_once_it_has_both_endpoints_and_a_distance() {
     let rows = crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
     assert_eq!(rows.len(), stored + 1);
     assert_eq!(rows[stored].label, "door width");
-    assert_eq!(rows[stored].stated, 42.0);
+    assert_eq!(rows[stored].stated, Some(42.0));
     assert_eq!(
         state.selected_measurement,
         Some(MeasurementRef::distance(id, stored))

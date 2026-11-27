@@ -5,8 +5,12 @@
 //! `.sfmr` file, one subdirectory per kind of measurement.
 //!
 //! The one kind is **distance**, under `measurements/distance/`: each row
-//! records a known physical distance between two 3D points observed at pixel
-//! coordinates in a pair of images of the reconstruction. See
+//! records a physical distance between two points observed at pixel
+//! coordinates in a pair of images of the reconstruction. A row may leave its
+//! stated distance or either endpoint absent, which its columns store as a
+//! sentinel; [`DistanceMeasurementsData::row`] reads those as `None` and
+//! [`DistanceMeasurementsData::from_rows`] writes them, so no reader outside
+//! this crate tests a sentinel. See
 //! `specs/formats/sfmr-file-format.md` § "10. Measurements (Optional, version 17+)".
 
 use ndarray::{Array1, Array2, Array3};
@@ -111,6 +115,40 @@ pub const LENGTH_UNIT_IN: u8 = LengthUnit::Inch.code();
 /// In-memory [`DistanceMeasurementsData::units`] code for [`LengthUnit::Foot`].
 pub const LENGTH_UNIT_FT: u8 = LengthUnit::Foot.code();
 
+/// The image index an absent endpoint stores in
+/// `measurements/distance/image_indexes`: `u32::MAX`, the `uint32` form of
+/// `-1`. Its two coordinates in `measurements/distance/endpoints_xy` are both
+/// `NaN`, as an unconstrained point stores `NaN` in
+/// `points3d/constraint_distances` beside `0xFFFFFFFF` in
+/// `points3d/constraint_reference_images`.
+pub const ABSENT_ENDPOINT_IMAGE: u32 = u32::MAX;
+
+/// One endpoint of a stored distance measurement as the file stores it: an
+/// image of the reconstruction and the `float32` pixel in it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DistanceMeasurementEndpoint {
+    /// The image, by its index into `images/`.
+    pub image: u32,
+    /// The pixel `(x, y)` in that image (top-left origin, half-pixel centres).
+    pub xy: [f32; 2],
+}
+
+/// One row of [`DistanceMeasurementsData`] with its absent parts as `None`:
+/// what [`DistanceMeasurementsData::row`] gives and
+/// [`DistanceMeasurementsData::from_rows`] takes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DistanceMeasurementRow {
+    /// Endpoints `0` and `1`, each `None` where it is absent.
+    pub endpoints: [Option<DistanceMeasurementEndpoint>; 2],
+    /// The stated distance in [`Self::unit`], or `None` where the row states
+    /// none.
+    pub distance: Option<f32>,
+    /// The unit the stated distance is in, or is given in once there is one.
+    pub unit: LengthUnit,
+    /// The label ([`is_valid_measurement_label`]).
+    pub label: String,
+}
+
 /// Metadata from `measurements/distance/metadata.json.zst`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DistanceMeasurementsMetadata {
@@ -127,10 +165,19 @@ pub struct DistanceMeasurementsMetadata {
 /// Physical distance measurements, the distance kind of the `.sfmr`
 /// `measurements/` section, stored under `measurements/distance/`.
 ///
-/// Each row records a known physical distance between two points observed in
+/// Each row records a physical distance between two points observed in
 /// images of the reconstruction. Absent (`None` on
 /// [`MeasurementsData::distance`]) when the reconstruction has no distance
 /// measurements; when present, there is at least one (`len() >= 1`).
+///
+/// The columns are flat arrays in the shapes the file stores, as every other
+/// column of the format is, and the Python binding hands them over as arrays.
+/// A row's stated distance and each of its endpoints may be absent, stored as a
+/// sentinel: `NaN` in [`Self::distances`], and [`ABSENT_ENDPOINT_IMAGE`] with
+/// `(NaN, NaN)` for an endpoint. [`Self::row`], [`Self::stated_distance`] and
+/// [`Self::endpoint`] read them as `None`, and [`Self::from_rows`] writes them,
+/// so a reader of the rows works with `Option`s. Equality treats two `NaN`s
+/// as equal, since both say the same thing is absent.
 ///
 /// Both distances and endpoint pixel coordinates are stored as `float32`.
 /// Physical distance measurements (tape measures, laser rangefinders,
@@ -141,16 +188,18 @@ pub struct DistanceMeasurementsMetadata {
 /// coordinates use `float32` for the same reason `tracks/keypoints_xy` does:
 /// sub-pixel image coordinates up to tens of thousands of pixels need far fewer
 /// than seven digits.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct DistanceMeasurementsData {
-    /// `(N,)` measured physical distance per measurement, strictly positive and
-    /// finite, in the unit named by the matching row of [`Self::units`].
+    /// `(N,)` stated physical distance per measurement, strictly positive and
+    /// finite, in the unit named by the matching row of [`Self::units`], or
+    /// `NaN` for a measurement that states none.
     ///
     /// On disk `measurements/distance/distances.{N}.float32.zst`.
     pub distances: Array1<f32>,
     /// `(N,)` physical length unit code per measurement in the canonical
     /// numbering of [`LengthUnit`] ([`LENGTH_UNIT_MM`] through
-    /// [`LENGTH_UNIT_FT`]).
+    /// [`LENGTH_UNIT_FT`]). A row that states no distance still carries a
+    /// unit: the one its distance is given in once it is given.
     ///
     /// On disk `measurements/distance/units.{N}.uint8.zst`, indexing the
     /// `unit_names` legend in `measurements/distance/metadata.json.zst`. The reader resolves every
@@ -159,23 +208,46 @@ pub struct DistanceMeasurementsData {
     /// [`LengthUnit::NAMES`].
     pub units: Array1<u8>,
     /// `(N, 2)` image index pair `[img_0, img_1]` into `images/`, each below
-    /// `image_count`. Both endpoints may lie in the same image
-    /// (`img_0 == img_1`).
+    /// `image_count`, or [`ABSENT_ENDPOINT_IMAGE`] for an absent endpoint.
+    /// Both endpoints may lie in the same image (`img_0 == img_1`).
     ///
     /// On disk `measurements/distance/image_indexes.{N}.2.uint32.zst`.
     pub image_indexes: Array2<u32>,
     /// `(N, 2, 2)` sub-pixel endpoint coordinates where `[i, k, 0..2]` is
     /// `(x, y)` in pixel coordinates of `images[image_indexes[[i, k]]]` for
     /// endpoint `k` in `{0, 1}` (top-left origin, half-pixel centres, finite
-    /// and within `[0, width) × [0, height)` of that image's camera).
+    /// and within `[0, width) × [0, height)` of that image's camera), or
+    /// `(NaN, NaN)` for an absent endpoint.
     ///
     /// On disk `measurements/distance/endpoints_xy.{N}.2.2.float32.zst`.
     pub endpoints_xy: Array3<f32>,
-    /// `N` human-readable labels or descriptions, one per measurement. An empty
-    /// string `""` is allowed for an unlabelled measurement.
+    /// `N` human-readable labels or descriptions, one per measurement, each
+    /// valid by [`is_valid_measurement_label`]: not empty and not only white
+    /// space.
     ///
     /// On disk `measurements/distance/labels.json.zst`.
     pub labels: Vec<String>,
+}
+
+impl PartialEq for DistanceMeasurementsData {
+    fn eq(&self, other: &Self) -> bool {
+        let same = |a: &f32, b: &f32| a == b || (a.is_nan() && b.is_nan());
+        self.distances.shape() == other.distances.shape()
+            && self
+                .distances
+                .iter()
+                .zip(&other.distances)
+                .all(|(a, b)| same(a, b))
+            && self.units == other.units
+            && self.image_indexes == other.image_indexes
+            && self.endpoints_xy.shape() == other.endpoints_xy.shape()
+            && self
+                .endpoints_xy
+                .iter()
+                .zip(&other.endpoints_xy)
+                .all(|(a, b)| same(a, b))
+            && self.labels == other.labels
+    }
 }
 
 impl DistanceMeasurementsData {
@@ -189,6 +261,84 @@ impl DistanceMeasurementsData {
     pub fn is_empty(&self) -> bool {
         self.distances.is_empty()
     }
+
+    /// Row `i`'s stated distance, or `None` where it states none (`NaN`) or
+    /// there is no row `i`.
+    pub fn stated_distance(&self, i: usize) -> Option<f32> {
+        self.distances.get(i).copied().filter(|d| !d.is_nan())
+    }
+
+    /// Endpoint `k` (`0` or `1`) of row `i`, or `None` where it is absent
+    /// ([`ABSENT_ENDPOINT_IMAGE`]) or there is no such entry.
+    ///
+    /// Read through `.get`, so a value built by hand whose columns disagree in
+    /// length reads a missing image index as an absent endpoint and a missing
+    /// coordinate as not a number, never as a panic. A load refuses such a
+    /// value, so an endpoint read from a file is read exactly.
+    pub fn endpoint(&self, i: usize, k: usize) -> Option<DistanceMeasurementEndpoint> {
+        let image = self.image_indexes.get((i, k)).copied()?;
+        if image == ABSENT_ENDPOINT_IMAGE {
+            return None;
+        }
+        let xy = [0, 1].map(|c| {
+            self.endpoints_xy
+                .get((i, k, c))
+                .copied()
+                .unwrap_or(f32::NAN)
+        });
+        Some(DistanceMeasurementEndpoint { image, xy })
+    }
+
+    /// Row `i`, with its absent stated distance and endpoints read as `None`.
+    ///
+    /// Read through `.get`, as [`Self::endpoint`] is: in a value built by hand
+    /// whose columns disagree in length, a missing distance reads as none, a
+    /// missing unit code or one that names no unit as metres, and a missing
+    /// label as empty.
+    pub fn row(&self, i: usize) -> DistanceMeasurementRow {
+        DistanceMeasurementRow {
+            endpoints: [self.endpoint(i, 0), self.endpoint(i, 1)],
+            distance: self.stated_distance(i),
+            unit: self
+                .units
+                .get(i)
+                .and_then(|&code| LengthUnit::from_code(code))
+                .unwrap_or(LengthUnit::Metre),
+            label: self.labels.get(i).cloned().unwrap_or_default(),
+        }
+    }
+
+    /// Every row, in stored order ([`Self::row`]).
+    pub fn rows(&self) -> Vec<DistanceMeasurementRow> {
+        (0..self.len()).map(|i| self.row(i)).collect()
+    }
+
+    /// The columns that hold `rows`, each `None` written as its sentinel.
+    ///
+    /// A file holds at least one row, so for an empty `rows` this gives
+    /// columns [`validate_distance_measurements`] refuses; leave
+    /// [`MeasurementsData::distance`] `None` instead.
+    pub fn from_rows(rows: &[DistanceMeasurementRow]) -> Self {
+        let n = rows.len();
+        let endpoint = |i: usize, k: usize| rows[i].endpoints[k];
+        Self {
+            distances: Array1::from_iter(rows.iter().map(|r| r.distance.unwrap_or(f32::NAN))),
+            units: Array1::from_iter(rows.iter().map(|r| r.unit.code())),
+            image_indexes: Array2::from_shape_fn((n, 2), |(i, k)| {
+                endpoint(i, k).map_or(ABSENT_ENDPOINT_IMAGE, |e| e.image)
+            }),
+            endpoints_xy: Array3::from_shape_fn((n, 2, 2), |(i, k, c)| {
+                endpoint(i, k).map_or(f32::NAN, |e| e.xy[c])
+            }),
+            labels: rows.iter().map(|r| r.label.clone()).collect(),
+        }
+    }
+}
+
+/// Whether `label` is one a stored measurement may carry: not empty, and not
+/// only white space (`str::trim`). The label is stored as given, untrimmed.
+pub fn is_valid_measurement_label(label: &str) -> bool {
+    !label.trim().is_empty()
 }
 
 /// The measurements a `.sfmr` file stores in its optional `measurements/`
@@ -322,11 +472,17 @@ pub fn validate_measurements(
 /// and cameras.
 ///
 /// Checks that `measurements` has at least one row (`>= 1` and fits in `u32`),
-/// all five columns agree in shape, every distance is finite and strictly
-/// positive, every unit code is a canonical [`LengthUnit`] code (`0..=4`),
-/// every image index is below `camera_indexes.len()` with a valid camera index,
-/// and every endpoint `(x, y)` is finite and within `[0, width) × [0, height)`
-/// of its image's camera.
+/// all five columns agree in shape, every distance is NaN (none stated) or
+/// finite and strictly positive, every unit code is a canonical
+/// [`LengthUnit`] code (`0..=4`), every label is valid
+/// ([`is_valid_measurement_label`]), and every endpoint is either absent,
+/// [`ABSENT_ENDPOINT_IMAGE`] with both coordinates `NaN`, or present, an image
+/// index below `camera_indexes.len()` with a valid camera index and an
+/// `(x, y)` that is finite and within `[0, width) × [0, height)` of its
+/// image's camera. The index is [`ABSENT_ENDPOINT_IMAGE`] if and only if both
+/// coordinates are `NaN`: a `NaN` in one coordinate only, `NaN` coordinates
+/// with a present index, and that index with a coordinate that is not `NaN`
+/// are each refused.
 ///
 /// Read, write and verify all route through this so the three enforce the same
 /// rules.
@@ -376,9 +532,10 @@ pub fn validate_distance_measurements(
     let image_count = camera_indexes.len();
     for i in 0..n {
         let d = measurements.distances[i];
-        if !d.is_finite() || d <= 0.0 {
+        if !d.is_nan() && !(d.is_finite() && d > 0.0) {
             return Err(format!(
-                "measurements/distance/distances row {i} is {d}, which must be finite and strictly positive"
+                "measurements/distance/distances row {i} is {d}, which must be finite and \
+                 strictly positive, or NaN for no stated distance"
             ));
         }
         let code = measurements.units[i];
@@ -388,8 +545,36 @@ pub fn validate_distance_measurements(
                 LengthUnit::ALL.len()
             ));
         }
+        let label = &measurements.labels[i];
+        if !is_valid_measurement_label(label) {
+            return Err(format!(
+                "measurements/distance/labels row {i} is {label:?}, and a label must not be \
+                 empty or only white space"
+            ));
+        }
         for k in 0..2 {
-            let img = measurements.image_indexes[[i, k]] as usize;
+            let x = measurements.endpoints_xy[[i, k, 0]];
+            let y = measurements.endpoints_xy[[i, k, 1]];
+            let absent_xy = x.is_nan() && y.is_nan();
+            let image = measurements.image_indexes[[i, k]];
+            if image == ABSENT_ENDPOINT_IMAGE {
+                if !absent_xy {
+                    return Err(format!(
+                        "measurements/distance/endpoints_xy[{i}, {k}] is ({x}, {y}), but \
+                         image_indexes[{i}, {k}] is {ABSENT_ENDPOINT_IMAGE}, an absent endpoint, \
+                         whose coordinates must both be NaN"
+                    ));
+                }
+                continue;
+            }
+            if absent_xy {
+                return Err(format!(
+                    "measurements/distance/endpoints_xy[{i}, {k}] is ({x}, {y}), an absent \
+                     endpoint, but image_indexes[{i}, {k}] is {image}, not \
+                     {ABSENT_ENDPOINT_IMAGE}"
+                ));
+            }
+            let img = image as usize;
             let cam = *camera_indexes.get(img).ok_or_else(|| {
                 format!(
                     "measurements/distance/image_indexes[{i}, {k}] = {img} is out of range for \
@@ -401,8 +586,6 @@ pub fn validate_distance_measurements(
                     "measurements/distance/image_indexes[{i}, {k}] = {img}: camera index {cam} out of range"
                 )
             })?;
-            let x = measurements.endpoints_xy[[i, k, 0]];
-            let y = measurements.endpoints_xy[[i, k, 1]];
             if !x.is_finite() || !y.is_finite() {
                 return Err(format!(
                     "measurements/distance/endpoints_xy[{i}, {k}] is not finite: ({x}, {y})"

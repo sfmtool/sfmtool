@@ -31,7 +31,7 @@ The item and its steps live in
 [bench/measurement.rs](../../../crates/sfmtool-core/src/bench/measurement.rs),
 re-exported from `sfmtool_core::bench`, and bound as
 `sfmtool.bench.EditableMeasurement`, `sfmtool.bench.put_measurement`,
-`sfmtool.bench.start_measurement`,
+`sfmtool.bench.start_measurement`, `sfmtool.bench.default_measurement_label`,
 `sfmtool.bench.set_measurement_label`, `sfmtool.bench.set_stated_distance`,
 `sfmtool.bench.set_measurement_endpoint`,
 `sfmtool.bench.parse_stated_distance` and `sfmtool.bench.commit_measurement`.
@@ -65,7 +65,10 @@ pub enum EditableMeasurementBody {
 pub struct EditableDistance {
     /// Endpoints A and B; `None` for one not placed.
     pub endpoints: [Option<MeasurementEndpoint>; 2],
-    pub distance: Option<(f64, LengthUnit)>,
+    /// The stated length in `unit`; `None` for none.
+    pub distance: Option<f64>,
+    /// The unit the stated length is in, or is given in once there is one.
+    pub unit: LengthUnit,
 }
 
 pub struct MeasurementEndpoint {
@@ -102,7 +105,8 @@ pub fn put_measurement(
     version: u64,
 ) -> Result<(Bench, String), NoSuchMeasurement>;
 
-/// A new distance with endpoint A at `endpoint` and nothing else, labelled
+/// A new distance with endpoint A at `endpoint` and nothing else, its own
+/// label `default_measurement_label`, on the bench as
 /// `distance from IMG_0042@142,198`.
 pub fn start_measurement(
     bench: &Bench,
@@ -110,7 +114,18 @@ pub fn start_measurement(
     endpoint: MeasurementEndpoint,
 ) -> Result<(Bench, String), EndpointPlacementRefusal>;
 
-pub fn set_measurement_label(item: &EditableMeasurement, label: &str) -> EditableMeasurement;
+/// `measurement N`, the first `N` from 1 no stored distance and no
+/// measurement item on `bench` has as its own label.
+pub fn default_measurement_label(bench: &Bench, edited: &EditedReconstruction) -> String;
+
+pub fn set_measurement_label(
+    item: &EditableMeasurement,
+    label: &str,
+) -> Result<EditableMeasurement, MeasurementLabelRefusal>;
+
+pub enum MeasurementLabelRefusal {
+    Empty, // empty or only white space
+}
 
 pub fn set_stated_distance(
     item: &EditableMeasurement,
@@ -169,8 +184,7 @@ impl MeasurementCommit {
 }
 
 pub enum MeasurementCommitRefusal {
-    EndpointNotPlaced { side: usize },
-    NoStatedDistance,
+    EmptyLabel,
     DistanceNotPositive { distance: f64 },
     NoSuchImage { side: usize, image: u32, image_count: usize },
     PixelOutsideImage { side: usize, image: u32, pixel: [f64; 2], width: u32, height: u32 },
@@ -201,11 +215,18 @@ item. A caller reads them when it needs them, with
 `resolve_measurement_endpoint` for one
 ([`../reconstruction/measurement-endpoint.md`](../reconstruction/measurement-endpoint.md)).
 
-**An endpoint can be absent.** A stored measurement always has both, but a
-new measurement starts with endpoint A alone (§ "Starting a measurement"), and
+**An endpoint and the stated distance can be absent.** The file allows a row
+with either endpoint absent and with no stated distance, so an item may have
+any of them missing and still be committed. A new measurement starts with
+endpoint A alone and no stated distance (§ "Starting a measurement"), and
 deleting the image an endpoint was in clears it (§ "When an image is
 deleted"). An item with one endpoint is still worth keeping: the person who
-placed it can place the other.
+placed it can place the other. An item with both endpoints and no stated
+distance is a ruler: it reads the reconstruction's distance between two
+places, which is what a person wants once a reconstruction has a scale. The
+unit is held apart from the distance because the file stores a unit on every
+row, so a stored row with no stated distance keeps its unit through the
+bench and a commit of the item unchanged writes the same row.
 
 **The origin is a row at a version.** A measurement has no portable id, so its
 row is the only name it has, and rows are renumbered by the edits that drop
@@ -216,7 +237,8 @@ lands on. The commit does not follow anything itself, because core has no
 history.
 
 **The label is the measurement's, not the item's.** `label` is the text the
-file stores for the measurement; it may be empty and need not be unique. The
+file stores for the measurement; it must not be empty or only white space,
+as the file requires, and need not be unique. The
 item's name on the bench is the bench's, minted by `put_measurement` from the
 kind and the row: `distance #2`, with the bench's collision suffix where
 another item holds that ([bench.md](bench.md) § "Labels"). One started from a
@@ -258,7 +280,13 @@ assert!(!commit.wrote); // nothing changed, so nothing is written
 `start_measurement` puts a new distance measurement on the bench with endpoint
 A at an image and a pixel and nothing else: no origin, so its commit appends a
 row; no endpoint B and no stated distance, which `set_measurement_endpoint`
-and `set_stated_distance` give it; and an empty label of its own. Its bench
+and `set_stated_distance` give it; the unit a bare stated distance is read in,
+the reconstruction's `world_space_unit` where it names one of the five units
+and metres otherwise; and its own label from `default_measurement_label`,
+`measurement N` for the smallest `N` from 1 that no stored distance
+measurement of the reconstruction and no measurement item on the bench holds
+as its own label, so it starts with a label the file accepts that tells it
+from the measurements around it. Its bench
 label is minted from where it starts, `distance from ` and the form a cluster
 seeded at the pixel is labelled with (`ClusterSeed::label`): the image's stem
 and the pixel rounded to whole pixels, `distance from IMG_0042@142,198`, with
@@ -275,6 +303,7 @@ use sfmtool_core::bench::{start_measurement, Bench, MeasurementEndpoint};
 let at = MeasurementEndpoint { image: 41, pixel: [141.6, 198.4] };
 let (bench, label) = start_measurement(&Bench::new(), &edited, at)?;
 assert_eq!(label, "distance from IMG_0042@142,198"); // image 41 is IMG_0042.jpg
+assert_eq!(bench.measurement(&label).unwrap().label, "measurement 1");
 ```
 
 ## The label and the stated distance
@@ -282,10 +311,14 @@ assert_eq!(label, "distance from IMG_0042@142,198"); // image 41 is IMG_0042.jpg
 `set_measurement_label` and `set_stated_distance` are the steps that edit an
 item's label and stated distance, each from one `EditableMeasurement` to the
 next, with nothing else changed. A caller that keeps versions replaces the item's `Arc` under the same
-`ItemId` with the result. Any text is a label, the empty one included. A stated
-distance is refused where it is not finite and strictly positive as the
+`ItemId` with the result. Any text is a label, kept as given, except one that
+is empty or only white space (`str::trim`), which the file refuses: it is
+refused as `MeasurementLabelRefusal::Empty`, in the commit's sentence, *"a
+measurement needs a label, and this one is empty or only white space"*. A
+stated distance is refused where it is not finite and strictly positive as the
 `float32` the file will hold, in the commit's sentence: *"the stated distance
-is -2, which must be finite and strictly positive"*.
+is -2, which must be finite and strictly positive"*. `set_stated_distance`
+sets the distance and its unit together.
 
 **A typed distance is read by `parse_stated_distance`.** It is a number with an
 optional unit suffix, `12in`, `30.48cm` or `30.48 cm`: an optional sign, digits
@@ -322,13 +355,16 @@ than 0 and 1 is `NoSuchEndpoint`.
 
 ## The commit
 
-The commit checks, in order, that both endpoints are placed, that each names an
-image of the reconstruction and a pixel inside `[0, width) × [0, height)` of
-that image's camera (as the `float32` the file will hold), that a stated
-distance is given and is finite and strictly positive as a `float32`, and that
-`origin_row`, where given, is a row of the item's kind. Each refusal's
-`Display` is the sentence a person reads: *"endpoint B is not placed, and a
-distance needs both endpoints"*.
+The commit checks, in order, that the label is not empty or only white space,
+that each placed endpoint names an image of the reconstruction and a pixel
+inside `[0, width) × [0, height)` of that image's camera (as the `float32` the
+file will hold), that a stated distance, where one is given, is finite and
+strictly positive as a `float32`, and that `origin_row`, where given, is a row
+of the item's kind. An endpoint not placed and no stated distance do not stop
+it: the row stores them as absent
+([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#distance-measurements-measurementsdistance)).
+Each refusal's `Display` is the sentence a person reads: *"a measurement
+needs a label, and this one is empty or only white space"*.
 
 An endpoint that the resolver refuses does not stop a commit: the pixel is what
 the file stores, and it stores it whether or not a square of the reconstruction
@@ -336,7 +372,8 @@ holds it.
 
 **Replacing a row that already holds the item writes nothing.** The row is
 compared with the item as the file stores it, `float32` pixels and distance,
-the unit code and the label; where they are equal, the commit reports
+an absent endpoint or distance as absent, the unit and the label; where they
+are equal, the commit reports
 `wrote: false` with the value unchanged, and the caller pushes no version.
 Otherwise the rows are rebuilt with the item in place of row `origin_row`, or
 appended after the last, and the kind's columns are rebuilt from them.
@@ -373,8 +410,9 @@ endpoint ([bench.md](bench.md) § "Deleting an image").
 
 `sfmtool.bench.EditableMeasurement` has the read-only properties `kind`
 (`"distance"`), `label`, `origin` (`{"version", "kind", "index"}` or `None`),
-`endpoints` (two entries, each `(image, (x, y))` or `None`) and `distance`
-(`(value, unit_name)` or `None`), and `with_origin(version, index)`.
+`endpoints` (two entries, each `(image, (x, y))` or `None`), `distance` (the
+stated value or `None`) and `unit` (its unit's name, `"cm"`, present with or
+without a distance), and `with_origin(version, index)`.
 `Bench.measurement(label)` gives the measurement called `label`, or `None`;
 `Bench.kind(label)` gives `"track"` or `"measurement"`; `Bench.replace` takes
 either kind of item.
@@ -392,7 +430,8 @@ assert report["wrote"] is False
 
 `put_measurement(bench, edited, kind, index, *, version=0)` and
 `start_measurement(bench, edited, image, xy)` return
-`(Bench, EditableMeasurement)`. `set_measurement_label(measurement, label)`,
+`(Bench, EditableMeasurement)`; `default_measurement_label(bench, edited)`
+returns the label a new one would take. `set_measurement_label(measurement, label)`,
 `set_stated_distance(measurement, distance, unit)`, the unit a name (`"cm"`),
 and `set_measurement_endpoint(edited, measurement, side, image, xy)`, `side`
 0 for A and 1 for B, each return the next `EditableMeasurement` and leave
@@ -407,11 +446,14 @@ origin_row=None, *, node="the reconstruction")` returns
 [bench/tests/measurement.rs](../../../crates/sfmtool-core/src/bench/tests/measurement.rs)
 covers putting a stored measurement on the bench (its endpoints, distance,
 unit and label copied as stored, its origin, its label and the collision
-suffix, a row past the rows refused with the count), starting one from a pixel
-(endpoint A alone, no origin, distance or label, its label and the collision
-suffix, its commit refused until B and the distance are given and then
-appending a row, an image past the image set and a pixel outside the image
-refused in the commit's sentence), the kind's names, deleting
+suffix, a row past the rows refused with the count, a stored row with an
+absent endpoint and no distance going on with them absent and its unit kept),
+starting one from a pixel (endpoint A alone, no origin or distance, the
+default label, the next free default label for a second one, the
+`world_space_unit` as its unit, its commit taken with B and the distance
+absent and appending a row, an image past the image set and a pixel outside
+the image refused in the commit's sentence), the default label skipping the
+labels stored rows and bench items hold, the kind's names, deleting
 an image (an endpoint cleared, one moved down, an item left with none
 discarded, an item the delete does not reach keeping its `Arc` and every item
 its ID), the commit (a replaced row and the rows around it, an appended row, a
@@ -419,9 +461,11 @@ first row of a kind, the no-effect case, each refusal with the preconditions
 giving the same sentence, a re-seated item committing to no effect), the
 pointer equality of the shared base and point column, the direct delete and
 its row map, the last row leaving the kind absent, a value with
-measurements of its own materializing them, the three steps changing their
+measurements of its own materializing them, an item with no endpoints and no
+distance committed as such, the three steps changing their
 field and nothing else (an endpoint placed where none was, and a moved one
-written by the commit), a stated distance that is not finite and positive
+written by the commit), an empty or white-space label refused in the commit's
+sentence, a stated distance that is not finite and positive
 refused in the commit's sentence, an endpoint outside the images refused in
 the commit's sentence and a side past B refused, and the parser: each unit
 suffix with and without a space, a bare number in the unit given, the number's

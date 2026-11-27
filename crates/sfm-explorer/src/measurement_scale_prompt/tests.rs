@@ -195,7 +195,7 @@ fn the_dialog_draws_the_factor_the_table_and_the_exclusions() {
     assert!(
         texts
             .iter()
-            .any(|t| t.starts_with("Distance #2: Endpoint B has no position")),
+            .any(|t| t.starts_with("Distance #2  bare pixel: Endpoint B has no position")),
         "{texts:?}"
     );
 }

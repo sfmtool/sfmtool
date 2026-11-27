@@ -101,6 +101,35 @@ fn an_endpoint_is_placed_finite_at_infinity_or_refused() {
     assert_eq!(layer.drawn[3].world_points().len(), 1);
 }
 
+/// A stored measurement with endpoint A not placed draws its endpoint B
+/// alone, so no line, with no stated distance in its hover text where it
+/// states none.
+#[test]
+fn a_stored_endpoint_not_placed_draws_nothing() {
+    let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    m.image_indexes[[1, 0]] = u32::MAX;
+    m.endpoints_xy[[1, 0, 0]] = f32::NAN;
+    m.endpoints_xy[[1, 0, 1]] = f32::NAN;
+    m.distances[1] = f32::NAN;
+    let mut state = AppState::new();
+    state.append_node(crate::scene::SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
+    let layer = state.measurement_layer(true);
+    let drawn = &layer.drawn[1];
+    assert_eq!(
+        drawn.endpoints.iter().map(|e| e.side).collect::<Vec<_>>(),
+        [EndpointSide::B]
+    );
+    assert_eq!(drawn.world_points().len(), 1);
+    assert_eq!(
+        drawn.hover,
+        "Distance #1  nose to tail  endpoint A: not placed"
+    );
+}
+
 /// The focused item is drawn in the bench's colour with its one placed
 /// endpoint, its marks handles; on a view-only bench they are not handles.
 #[test]

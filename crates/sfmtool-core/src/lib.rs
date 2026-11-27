@@ -84,6 +84,7 @@ pub use sfmtool_sfmr_format::THUMBNAIL_SIZE;
 /// or building measurements needs to name them without depending on
 /// `sfmtool-sfmr-format` itself.
 pub use sfmtool_sfmr_format::{
+    is_valid_measurement_label, DistanceMeasurementEndpoint, DistanceMeasurementRow,
     DistanceMeasurementsData, LengthUnit, MeasurementsData, LENGTH_UNIT_CM, LENGTH_UNIT_FT,
     LENGTH_UNIT_IN, LENGTH_UNIT_M, LENGTH_UNIT_MM,
 };

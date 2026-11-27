@@ -329,8 +329,17 @@ Every distance is read in the file's own coordinates. The node's display
 transform is view state and never scales a reading, so a node drawn under a
 scaled alignment still reports the file's own error.
 
-A distance measurement's result (`DistanceResult`) is exactly one of:
+A measurement may state no distance and may have an endpoint not placed, as
+the file allows
+([formats/sfmr-file-format.md](../formats/sfmr-file-format.md#distance-measurements-measurementsdistance)).
+One with both endpoints and no stated distance is a ruler: it reads the
+reconstruction's distance between two places, which is what a person wants
+once the reconstruction has a scale. A distance measurement's result
+(`DistanceResult`) is exactly one of:
 
+- **Both endpoints finite, no stated distance.** The reconstructed distance
+  alone, in the file's `world_space_unit`, or in scene units (`su`) where it
+  declares none.
 - **Both endpoints finite, the file declares a `world_space_unit`.** The
   reconstructed distance in the measurement's own unit (the file's unit
   converted through metres), the error `reconstructed − stated` in that unit
@@ -341,12 +350,16 @@ A distance measurement's result (`DistanceResult`) is exactly one of:
   `stated / reconstructed`, which is the factor `Scale to Median Measurement`
   and `sfm xform --scale-to-median-measurement` would apply were this the only
   measurement.
-- **An endpoint refused.** The first refused side, `A` before `B`.
+- **An endpoint not placed.** The first side not placed, `A` before `B`.
+- **An endpoint refused.** The first refused side, where both are placed.
 - **An endpoint at infinity.** The first side at infinity, where neither is
   refused.
 
-A refusal is reported before a point at infinity because the refusal is the one
-a person can act on.
+The two cases with a stated distance need one; the rest do not read it. An
+endpoint not placed is reported first, as core's scale reports it
+([core/reconstruction/measurement-scale.md](../core/reconstruction/measurement-scale.md)),
+and a refusal before a point at infinity because the refusal is the one a
+person can act on.
 
 ## The Scene tree's Measurements group
 
@@ -357,11 +370,12 @@ measurements, after the Points group and before the Bench groups
 ```
 ├── Reconstruction "dino"
 │   ├── Points (23,412)
-│   ├── Measurements (4)
+│   ├── Measurements (5)
 │   │   ├── Distance #0  ear to ear  12 cm  → 11.94 cm  −0.5%
 │   │   ├── Distance #1  nose to tail  31.5 cm  → 31.71 cm  +0.7%
 │   │   ├── Distance #2  paw width  4.2 cm  ⚠ endpoint B: no patch holds the pixel
-│   │   └── Distance #3  8 cm  → 7.96 cm  −0.5%
+│   │   ├── Distance #3  tail  8 cm  → 7.96 cm  −0.5%
+│   │   └── Distance #4  measurement 1  → 22.81 cm
 │   ├── Bench Points (2)
 ```
 
@@ -370,14 +384,18 @@ measurements, after the Points group and before the Bench groups
 - The rows sit directly under the group. A subgroup per kind is for when a
   second kind exists.
 - Each row names its kind and index, then its label (left out when it is
-  empty), its stated distance, and the reading: with a unit, the reconstructed
+  empty, which only a value built by hand holds), its stated distance (left
+  out where there is none), and the reading: with a unit, the reconstructed
   distance in the measurement's own unit to four significant digits and the
   signed error as a percentage; without one, the reconstructed distance in
-  scene units (`0.317 su`). An endpoint with no position puts a warning mark,
-  the side and the refusal's short form in place of the reading; an endpoint at
-  infinity shows `∞`. The row's hover text gives each endpoint's image and
-  pixel, the whole refusal sentence for an endpoint that has none, and what
-  `su` means where the file has no unit.
+  scene units (`0.317 su`); with no stated distance, the reconstructed
+  distance alone, in the file's unit to four significant digits (`→ 11.94 cm`)
+  or in scene units. An endpoint not placed shows `endpoint B: not placed` in
+  place of the reading; an endpoint with no position puts a warning mark, the
+  side and the refusal's short form there; an endpoint at infinity shows `∞`.
+  The row's hover text gives each endpoint's image and pixel, or that it is
+  not placed, the whole refusal sentence for an endpoint that has no
+  position, and what `su` means where the file has no unit.
 
 The row gestures follow the interaction rules of
 [interaction-rules.md](interaction-rules.md):
@@ -434,8 +452,10 @@ link that selects it, so the panel is usable without the tree.
 ### The header
 
 - The kind and index (`Distance #2`) and the reconstruction's label.
-- The label, or *No label*.
-- For a distance, the stated distance and its unit.
+- The label, or *No label* for an empty one, which only a value built by hand
+  holds.
+- For a distance, the stated distance and its unit, or *No stated distance* in
+  grey where it states none.
 - A line comparing this measurement with the others of its kind in the same
   reconstruction, when at least two have a reading: the median length of one
   scene unit they imply (`sfmtool_core::numeric::median` of `stated /
@@ -443,8 +463,10 @@ link that selects it, so the panel is usable without the tree.
   measurement's deviation from it (`Median over 4: 1 su = 37.8 cm; this one
   +0.4%`). It does not read the file's unit, so it is the same check with one
   and without one, and it is the one that catches a bad measurement among good
-  ones. A measurement with no reading gets the line with *this one has no
-  reading*. The line is the same median that Scale to Median Measurement
+  ones. Only measurements that state a distance and have a reading count
+  toward it: a ruler implies no scale. A measurement with no reading gets the
+  line with *this one has no reading*, and one that states no distance *this
+  one states no distance*. The line is the same median that Scale to Median Measurement
   applies ([edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)),
   but it is computed here (`measurements::scale_comparison`) rather than by
   core's `distance_measurement_scale`, because the edited mode draws it for a
@@ -538,13 +560,24 @@ The selected endpoint's block is drawn as Track View draws its selected row.
 
 The **result block** gives the result (§ "The readings"):
 
+- With no stated distance: `Reconstructed: 11.94 cm` in the file's
+  `world_space_unit`, or `Reconstructed: 0.3175 su`, whose hover text says
+  what `su` means, where it declares none; no error and no implied scale.
 - With a unit: `Reconstructed: 11.94 cm`, `Error: −0.0600 cm (−0.50%)`, whose
   hover text says the sign in words ("the reconstruction is 0.0600 cm shorter
   than the stated distance"), and `Implied scale: 1.0050×`.
 - Without one: `Reconstructed: 0.3175 su` and `Implied scale: 1 su = 37.80 cm`.
+- `No distance: endpoint B is not placed.`
 - `No distance: endpoint B lies on a point at infinity.`
 - `No distance: endpoint A has no 3D position.`, with the refusal's sentence
   in A's block above it.
+
+These hold in both modes, for a stored measurement and for the focused item.
+An endpoint that is not placed has no crop, patch or resolution: its block
+says `Endpoint B is not placed.` and, in the read-only mode, "Tick Edit to put
+the measurement on the bench, where the endpoint can be placed."
+(`measurement_view::PLACE_ON_BENCH`); the edited mode's block is below
+(§ "The edited mode").
 
 ### Endpoint gestures
 
@@ -635,8 +668,9 @@ With the box ticked the panel shows the focused item:
   is not placed.` and how to place it, "Right-click a pixel in Image Detail, or
   a point in the 3D view, and choose Set Endpoint B Here."
   (`measurement_view::place_instruction`), with its *Switch image…* greyed.
-- **The result block**, from the live readings, or `No distance: endpoint B is
-  not placed.` where an endpoint is missing.
+- **The result block**, from the live readings, as for a stored measurement:
+  the reconstructed distance alone where no stated distance is given, and
+  `No distance: endpoint B is not placed.` where an endpoint is missing.
 
 ### The label and the stated distance
 
@@ -668,8 +702,11 @@ item is committed.
 | Set the measurement's label (`AppState::set_bench_measurement_label`) | `Set the label of distance #2 to "paw width"` |
 | Set the stated distance (`AppState::set_bench_measurement_distance`) | `Set the stated distance of distance #2 to 4.2 cm` |
 
-- **The label** is any text, the empty one included; it is not the item's name
-  on the bench, which *Rename* sets.
+- **The label** is any text but an empty one or one of only white space, which
+  is refused with core's sentence: *Cannot set the label of distance #2: a
+  measurement needs a label, and this one is empty or only white space.* It is
+  kept as typed and is not the item's name on the bench, which *Rename*
+  sets.
 - **The stated distance** is read by core's `parse_stated_distance`: a number
   with an optional unit suffix, `12in`, `30.48cm` or `30.48 cm`. A bare number is in
   the reconstruction's `world_space_unit`, or in metres where it has none, and
@@ -932,11 +969,12 @@ no-effect row, and still selects the row.
 The button is greyed with the refusal as its hover text, asked of the item it
 would commit (`AppState::measurement_commit_refusal`), so the button and the
 step cannot disagree: a background task or a camera model proposal holding the
-node, a view-only bench, and core's refusals, an endpoint not placed, no stated
-distance, an endpoint's image past the image set, a pixel outside its image
+node, a view-only bench, and core's refusals, an empty label, a placed
+endpoint's image past the image set or its pixel outside its image
 ([core/bench/editable-measurement.md](../core/bench/editable-measurement.md)
-§ "The commit"). An endpoint the resolver refuses does not stop a commit, since
-the pixel is what the file stores.
+§ "The commit"). An endpoint not placed and no stated distance do not stop a
+commit, since the file stores them as absent, and an endpoint the resolver
+refuses does not either, since the pixel is what the file stores.
 
 ## Creating a measurement
 
@@ -966,10 +1004,12 @@ stored row: Commit adds it as a new row`. Its bench label is minted in core
 from where it started, the image stem and the rounded pixel after `distance
 from `, `distance from IMG_0042@142,198`, with the bench's collision suffix
 (`distance from IMG_0042@142,198 (2)`) where another item holds that
-([core/bench/bench.md](../core/bench/bench.md) § "Labels"). Its own label and
-stated distance are empty, and the header's two fields show *No label* and *No
-stated distance* in grey, the second's hover text naming the unit a bare
-number is in.
+([core/bench/bench.md](../core/bench/bench.md) § "Labels"). Its own label is
+core's default, `measurement N`, the first `N` from 1 that no stored distance
+measurement of the reconstruction and no measurement item on its bench holds,
+which the header's **Label** field shows; its stated distance is empty, and
+the **Stated distance** field shows *No stated distance* in grey, its hover
+text naming the unit a bare number is in.
 
 **Refused**, with the sentence as the entries' hover text and as one failed
 `Bench` row: while a background task holds the node, and on a view-only bench
@@ -990,11 +1030,12 @@ distance from IMG_0042@142,198 to IMG_0050.jpg (88.0, 301.5)`). The stated
 distance and the label are typed into the header's fields. Each is a bench
 step, so a mistake is undone like any other, and a half-made measurement waits
 on the bench, in the Scene tree's Bench Measurements group, until it is
-finished or discarded. *Commit* is greyed with the refusal naming what is
-missing, first endpoint B and then the stated distance, until both endpoints
-and the distance are given, and then appends the measurement as a new row
-(`Added distance #5 in dino`), as it does for any item whose origin resolves to
-none (§ "The commit").
+finished or discarded. *Commit* is not greyed for what is missing: it appends
+the measurement as a new row (`Added distance #5 in dino`) with endpoint B and
+the stated distance absent where they are not given yet, as it does for any
+item whose origin resolves to none (§ "The commit"). With both endpoints
+placed and no stated distance the item reads the reconstruction's distance,
+a ruler's reading.
 
 ## Deleting a measurement
 
@@ -1106,8 +1147,9 @@ one endpoint placed, such as a new one, draws that mark alone.
 
 **Hover and click.** Hovering a mark or a line in either view shows the
 measurement's row text beside the pointer: the Scene tree row's for a stored
-measurement and, for the item, its label with the reading, or with where each
-endpoint is while one is not placed or no stated distance is given. The text
+measurement and, for the item, its label with its stated distance, where it
+has one, and the reading, or with where each endpoint is while one is not
+placed. The text
 sits right of and below the pointer where that fits and on another side of it
 where it does not (G6), and the pointer takes the pointing hand. A click on a
 stored measurement's line selects the measurement (G1); a click on a mark selects the measurement and that endpoint,
@@ -1282,8 +1324,12 @@ at-infinity case is covered by the Rust tests.
   (`camera_lock/tests.rs`).
 - **The panel** (`measurement_view/tests.rs`, whole headless egui frames): the
   empty state and its links; the header, both blocks and the result's numbers;
-  the result block's scene-unit, at-infinity and refused cases; a refused
-  endpoint's sentence; a block's click, double-click, hover and right-click.
+  the result block's scene-unit, at-infinity and refused cases; a stored
+  measurement with no stated distance, whose header says *No stated
+  distance* and whose result is the reconstructed distance alone with a unit
+  and without one, and one with an endpoint not placed, whose block and
+  result say so; a refused endpoint's sentence; a block's click,
+  double-click, hover and right-click.
   (`dock/tests.rs`): a double-click's camera view is the one
   `look_through_toward_feature` gives the endpoint's pixel.
 - **The crops** (`measurement_view/tests/crops.rs`): the two endpoints' crops
@@ -1324,8 +1370,10 @@ at-infinity case is covered by the Rust tests.
   panel beside the Scene tree, never over it.
 - **The edited mode** (`measurement_view/tests.rs`): ticking the box asks for
   the put; the toolbar, the header and the live readings, which follow a step
-  on the item while the stored row's do not; an unplaced endpoint's block, the
-  result's line and *Commit* greyed with the refusal; the label field
+  on the item while the stored row's do not; an unplaced endpoint's block and
+  the result's line, *Commit* left enabled for it, the reconstructed distance
+  alone for an item with no stated distance, and *Commit* greyed with the
+  refusal for an empty label; the label field
   committing on Enter, the stated distance field when it loses focus, Escape
   putting a field back, a field left unchanged asking for nothing, and the
   fields greyed while a task holds the node; and an empty field taking typing
@@ -1362,7 +1410,8 @@ at-infinity case is covered by the Rust tests.
   alone, the item's ID kept, undo and redo; a bare number in the file's unit,
   in feet, and in metres with no unit; the no-effect row; text that does not
   read, an unknown unit and a value that is not positive refused in core's
-  sentence; both refused while busy, on a view-only bench, and for a track.
+  sentence; an empty or white-space label refused in core's sentence; both
+  refused while busy, on a view-only bench, and for a track.
 - **The bench tools** (`mcp/tests/measurements.rs`): `put_measurement_on_bench`
   once and twice, the second's `report` naming the item, `get_bench` listing
   the item, a track tool refusing it; `set_bench_measurement_label` and its
@@ -1407,8 +1456,9 @@ at-infinity case is covered by the Rust tests.
   tab behind it; the 3D view's start at a point's reference pixel, and a point
   with none a failed row with no version; the refusals while busy, on a
   view-only bench and of a pixel outside the image, the node's before the
-  point's; and *Commit* refused until endpoint B and then the distance are
-  given, then appending a row, with its undo. (`image_detail/tests.rs`): the
+  point's; its own label `measurement 1`, and `measurement 2` for a second;
+  and *Commit* appending a row with endpoint B and the distance absent, and
+  appending one with both given, with its undo. (`image_detail/tests.rs`): the
   entry after the bench entries and before *Set Endpoint A Here*, offered
   with nothing focused and greyed while busy and on a view-only bench.
   (`viewer_3d/tests.rs`): the entry after the point's own, a click reporting

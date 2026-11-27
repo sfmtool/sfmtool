@@ -124,37 +124,54 @@ impl EndpointSide {
     }
 }
 
+/// One end of a stored distance measurement: its image and its pixel there,
+/// core's form of an endpoint.
+pub(crate) use sfmtool_core::bench::MeasurementEndpoint as RowEndpoint;
+
 /// One stored distance measurement, read out of the file's columns.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DistanceRow {
-    /// What was measured; empty for an unlabelled measurement.
+    /// What was measured. The file requires one, but a value built by hand
+    /// can hold an empty one.
     pub(crate) label: String,
-    /// The stated distance, in [`Self::unit`].
-    pub(crate) stated: f64,
-    /// The unit the stated distance is in.
+    /// The stated distance, in [`Self::unit`], or `None` for a measurement
+    /// that states none.
+    pub(crate) stated: Option<f64>,
+    /// The unit the stated distance is in, or is given in once there is one.
     pub(crate) unit: LengthUnit,
-    /// The image of each endpoint, `A` first.
-    pub(crate) images: [u32; 2],
-    /// The pixel of each endpoint in its image, `A` first.
-    pub(crate) pixels: [[f64; 2]; 2],
+    /// Each endpoint, `A` first, or `None` for one not placed.
+    pub(crate) endpoints: [Option<RowEndpoint>; 2],
 }
 
 impl DistanceRow {
-    /// The image of the endpoint on `side`.
+    /// The endpoint on `side`, or `None` where it is not placed.
+    pub(crate) fn endpoint(&self, side: EndpointSide) -> Option<RowEndpoint> {
+        self.endpoints[side.index()]
+    }
+
+    /// The image of the endpoint on `side`, which a test knows is placed.
+    #[cfg(test)]
     pub(crate) fn image(&self, side: EndpointSide) -> u32 {
-        self.images[side.index()]
+        self.endpoint(side).expect("a placed endpoint").image
     }
 
-    /// The pixel of the endpoint on `side`.
+    /// The pixel of the endpoint on `side`, which a test knows is placed.
+    #[cfg(test)]
     pub(crate) fn pixel(&self, side: EndpointSide) -> [f64; 2] {
-        self.pixels[side.index()]
+        self.endpoint(side).expect("a placed endpoint").pixel
     }
 
-    /// `12 cm`: the stated distance with its unit.
-    pub(crate) fn stated_text(&self) -> String {
-        format!("{} {}", length_number(self.stated), self.unit.name())
+    /// `12 cm`: the stated distance with its unit, or `None` where it states
+    /// none.
+    pub(crate) fn stated_text(&self) -> Option<String> {
+        self.stated
+            .map(|stated| format!("{} {}", length_number(stated), self.unit.name()))
     }
 }
+
+/// What a read-only header and a hover say for a measurement that states no
+/// distance.
+pub(crate) const NO_STATED_DISTANCE: &str = "No stated distance";
 
 /// The distance measurements `measurements` holds, in stored order; empty
 /// where it holds none.
@@ -166,25 +183,19 @@ pub(crate) fn distance_rows(measurements: &MeasurementsData) -> Vec<DistanceRow>
     let Some(m) = measurements.distance.as_ref() else {
         return Vec::new();
     };
-    // Read through `.get`, so a value built by hand whose columns disagree in
-    // length reads as rows the resolver refuses rather than as a panic: a
-    // missing image is past the image set, a missing pixel or distance is not
-    // a number and a missing unit is metres, as core's readers take them.
-    (0..m.len())
-        .map(|i| DistanceRow {
-            label: m.labels.get(i).cloned().unwrap_or_default(),
-            stated: m.distances.get(i).map_or(f64::NAN, |&d| f64::from(d)),
-            unit: m
-                .units
-                .get(i)
-                .and_then(|&code| LengthUnit::from_code(code))
-                .unwrap_or(LengthUnit::Metre),
-            images: [0, 1].map(|k| m.image_indexes.get((i, k)).copied().unwrap_or(u32::MAX)),
-            pixels: [0, 1].map(|k| {
-                [0, 1].map(|c| {
-                    m.endpoints_xy
-                        .get((i, k, c))
-                        .map_or(f64::NAN, |&v| f64::from(v))
+    // The format crate's rows read the absent parts as `None`, and read a
+    // value built by hand whose columns disagree in length without a panic,
+    // as core's readers take it.
+    m.rows()
+        .into_iter()
+        .map(|row| DistanceRow {
+            label: row.label,
+            stated: row.distance.map(f64::from),
+            unit: row.unit,
+            endpoints: row.endpoints.map(|e| {
+                e.map(|e| RowEndpoint {
+                    image: e.image,
+                    pixel: e.xy.map(f64::from),
                 })
             }),
         })
@@ -228,6 +239,14 @@ pub(crate) fn readings(node: &SceneNode) -> Arc<MeasurementReadings> {
 /// block of Measurement View, and the reading its Scene tree row prints.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum DistanceResult {
+    /// Both endpoints finite and no stated distance: the reconstructed distance
+    /// alone, a ruler's reading.
+    Unstated {
+        /// The reconstructed distance, in [`Self::Unstated::unit`].
+        reconstructed: f64,
+        /// The file's `world_space_unit`, or `None` for scene units.
+        unit: Option<LengthUnit>,
+    },
     /// Both endpoints finite, and the file declares a `world_space_unit`.
     WithUnit {
         /// The reconstructed distance in the measurement's own unit.
@@ -251,21 +270,34 @@ pub(crate) enum DistanceResult {
     /// The endpoint on this side lies on a point at infinity (the first such
     /// side, where neither is refused).
     AtInfinity(EndpointSide),
-    /// The endpoint on this side has no 3D position (the first such side).
+    /// The endpoint on this side has no 3D position (the first such side,
+    /// where both are placed).
     Refused(EndpointSide),
+    /// The endpoint on this side is not placed (the first such side).
+    NotPlaced(EndpointSide),
 }
 
 /// The result of `row` as `resolved` reads it, in a reconstruction whose file
 /// declares `world_space_unit` (`None` for scene units).
 ///
-/// A refusal is reported before a point at infinity, `A` before `B`, since the
-/// refusal is the one a person can act on. A `world_space_unit` the format
-/// does not know is read as scene units.
+/// An endpoint not placed is reported first, then a refusal, then a point at
+/// infinity, `A` before `B` each time, since the refusal is the one a person
+/// can act on. A `world_space_unit` the format does not know is read as scene
+/// units. With both endpoints finite and no stated distance, the result is the
+/// reconstructed distance alone, in the file's unit.
 pub(crate) fn distance_result(
     row: &DistanceRow,
     resolved: &ResolvedDistanceMeasurement,
     world_space_unit: Option<&str>,
 ) -> DistanceResult {
+    for side in EndpointSide::BOTH {
+        if matches!(
+            resolved.endpoints[side.index()],
+            Err(EndpointRefusal::NotPlaced)
+        ) {
+            return DistanceResult::NotPlaced(side);
+        }
+    }
     for side in EndpointSide::BOTH {
         if resolved.endpoints[side.index()].is_err() {
             return DistanceResult::Refused(side);
@@ -282,28 +314,42 @@ pub(crate) fn distance_result(
             .unwrap_or(EndpointSide::A);
         return DistanceResult::AtInfinity(side);
     };
+    let Some(stated) = row.stated else {
+        return DistanceResult::Unstated {
+            reconstructed: scene_distance,
+            unit: world_space_unit.and_then(LengthUnit::from_name),
+        };
+    };
     match world_space_unit.and_then(sfmtool_core::world_space_unit_in_metres) {
         Some(metres_per_unit) => {
             let reconstructed = scene_distance * metres_per_unit / row.unit.in_metres();
-            let error = reconstructed - row.stated;
+            let error = reconstructed - stated;
             DistanceResult::WithUnit {
                 reconstructed,
                 error,
-                error_percent: 100.0 * error / row.stated,
-                implied_scale: row.stated / reconstructed,
+                error_percent: 100.0 * error / stated,
+                implied_scale: stated / reconstructed,
             }
         }
         None => DistanceResult::SceneUnits {
             scene_distance,
-            unit_per_scene_unit: row.stated / scene_distance,
+            unit_per_scene_unit: stated / scene_distance,
         },
     }
+}
+
+/// `11.94 cm`, or `0.3175 su` without a unit: a ruler's reading, the
+/// reconstructed distance of a measurement that states none.
+pub(crate) fn unstated_text(reconstructed: f64, unit: Option<LengthUnit>, digits: i32) -> String {
+    let name = unit.map_or("su", LengthUnit::name);
+    format!("{} {name}", significant(reconstructed, digits))
 }
 
 /// The few words that stand for `refusal` where a row has no room for its
 /// sentence: `no patch holds the pixel`.
 pub(crate) fn refusal_short(refusal: &EndpointRefusal) -> &'static str {
     match refusal {
+        EndpointRefusal::NotPlaced => "not placed",
         EndpointRefusal::NoSuchImage { .. } => "no such image",
         EndpointRefusal::NoPose { .. } => "the image has no pose",
         EndpointRefusal::PixelOutsideImage { .. } => "the pixel is outside the image",
@@ -357,9 +403,11 @@ pub(crate) fn signed(value: f64, decimals: usize) -> String {
 }
 
 /// The reading a Scene tree row prints after the stated distance:
-/// `→ 11.94 cm  −0.5%` with a unit, `→ 0.317 su` without one, `→ ∞` for an
-/// endpoint at infinity, and `⚠ endpoint B: no patch holds the pixel` for a
-/// refused endpoint.
+/// `→ 11.94 cm  −0.5%` with a unit, `→ 0.317 su` without one, the
+/// reconstructed distance alone (`→ 11.94 cm`) for a measurement that states
+/// none, `→ ∞` for an endpoint at infinity, `⚠ endpoint B: no patch holds the
+/// pixel` for a refused endpoint and `endpoint B: not placed` for one not
+/// placed.
 pub(crate) fn reading_text(
     row: &DistanceRow,
     resolved: &ResolvedDistanceMeasurement,
@@ -379,6 +427,14 @@ pub(crate) fn reading_text(
         DistanceResult::SceneUnits { scene_distance, .. } => {
             format!("{ARROW} {} su", significant(scene_distance, 3))
         }
+        DistanceResult::Unstated {
+            reconstructed,
+            unit,
+        } => format!(
+            "{ARROW} {}",
+            unstated_text(reconstructed, unit, if unit.is_some() { 4 } else { 3 })
+        ),
+        DistanceResult::NotPlaced(side) => format!("endpoint {}: not placed", side.letter()),
         DistanceResult::AtInfinity(_) => format!("{ARROW} \u{221e}"),
         DistanceResult::Refused(side) => {
             let why = resolved.endpoints[side.index()]
@@ -391,7 +447,8 @@ pub(crate) fn reading_text(
 }
 
 /// A Scene tree row's whole text: `Distance #0  ear to ear  12 cm  → 11.94 cm
-/// −0.5%`, the label left out where it is empty.
+/// −0.5%`, the label left out where it is empty and the stated distance where
+/// there is none.
 pub(crate) fn row_text(
     measurement: MeasurementRef,
     row: &DistanceRow,
@@ -404,11 +461,11 @@ pub(crate) fn row_text(
         text.push_str("  ");
         text.push_str(&row.label);
     }
-    format!(
-        "{text}  {}  {}",
-        row.stated_text(),
-        reading_text(row, resolved, result)
-    )
+    if let Some(stated) = row.stated_text() {
+        text.push_str("  ");
+        text.push_str(&stated);
+    }
+    format!("{text}  {}", reading_text(row, resolved, result))
 }
 
 /// What the header's comparison line says: the median scale the measurements
@@ -422,17 +479,21 @@ pub(crate) struct ScaleComparison {
     pub(crate) median_unit_per_scene_unit: f64,
     /// This measurement's implied scale against the median, as a percentage:
     /// `+0.4` for a measurement whose stated distance is 0.4% longer than the
-    /// median scale gives its reading. `None` where it has no reading.
+    /// median scale gives its reading. `None` where it has no reading or
+    /// states no distance.
     pub(crate) deviation_percent: Option<f64>,
+    /// Whether this measurement states a distance.
+    pub(crate) states_distance: bool,
 }
 
 /// The comparison line for measurement `index` of `rows`, or `None` where
 /// fewer than two have a reading.
 ///
-/// Each reading implies a length for one scene unit, `stated / scene_distance`
-/// in metres; the line gives the median of those (`sfmtool_core::numeric`)
-/// in `rows[index]`'s unit. It does not read the file's unit, so it is the
-/// same check with one and without one.
+/// Each measurement with a stated distance and a reading implies a length for
+/// one scene unit, `stated / scene_distance` in metres; the line gives the
+/// median of those (`sfmtool_core::numeric`) in `rows[index]`'s unit, and a
+/// measurement that states no distance counts toward neither. It does not
+/// read the file's unit, so it is the same check with one and without one.
 pub(crate) fn scale_comparison(
     rows: &[DistanceRow],
     resolved: &[ResolvedDistanceMeasurement],
@@ -441,18 +502,20 @@ pub(crate) fn scale_comparison(
     let implied = |i: usize| -> Option<f64> {
         let d = resolved.get(i)?.scene_distance?;
         let row = rows.get(i)?;
-        (d > 0.0).then(|| row.stated * row.unit.in_metres() / d)
+        let stated = row.stated?;
+        (d > 0.0).then(|| stated * row.unit.in_metres() / d)
     };
     let metres_per_scene_unit: Vec<f64> = (0..rows.len()).filter_map(implied).collect();
     if metres_per_scene_unit.len() < 2 {
         return None;
     }
     let median = sfmtool_core::numeric::median(&metres_per_scene_unit);
-    let unit = rows.get(index)?.unit;
+    let row = rows.get(index)?;
     Some(ScaleComparison {
         count: metres_per_scene_unit.len(),
-        median_unit_per_scene_unit: median / unit.in_metres(),
+        median_unit_per_scene_unit: median / row.unit.in_metres(),
         deviation_percent: implied(index).map(|mine| 100.0 * (mine / median - 1.0)),
+        states_distance: row.stated.is_some(),
     })
 }
 
@@ -460,6 +523,7 @@ pub(crate) fn scale_comparison(
 pub(crate) fn scale_comparison_text(line: &ScaleComparison, unit: LengthUnit) -> String {
     let mine = match line.deviation_percent {
         Some(percent) => format!("this one {}%", signed(percent, 1)),
+        None if !line.states_distance => "this one states no distance".to_string(),
         None => "this one has no reading".to_string(),
     };
     format!(
@@ -480,9 +544,10 @@ pub(crate) fn scale_comparison_text(line: &ScaleComparison, unit: LengthUnit) ->
 pub(crate) struct ItemReading {
     /// Each endpoint's resolution, `A` first, or `None` for one not placed.
     pub(crate) endpoints: [Option<Result<EndpointResolution, EndpointRefusal>>; 2],
-    /// Both endpoints resolved together, where both are placed: what a
-    /// stored row with the item's endpoints would read as.
-    pub(crate) resolved: Option<ResolvedDistanceMeasurement>,
+    /// Both endpoints resolved together, as a stored row with the item's
+    /// endpoints reads: an endpoint not placed is `EndpointRefusal::NotPlaced`
+    /// there.
+    pub(crate) resolved: ResolvedDistanceMeasurement,
 }
 
 /// The live readings of `item` against `edited`.
@@ -494,49 +559,30 @@ pub(crate) fn item_reading(
     let endpoints = item
         .as_distance()
         .map_or([None, None], |distance| distance.endpoints);
-    match endpoints {
-        [Some(a), Some(b)] => {
-            let resolved = sfmtool_core::reconstruction::measurement_endpoint::resolve_distance_endpoints(
-                edited,
-                [(a.image, a.pixel), (b.image, b.pixel)],
-                &options,
-            );
-            ItemReading {
-                endpoints: [
-                    Some(resolved.endpoints[0].clone()),
-                    Some(resolved.endpoints[1].clone()),
-                ],
-                resolved: Some(resolved),
-            }
-        }
-        partial => ItemReading {
-            endpoints: partial.map(|endpoint| {
-                endpoint.map(|e| {
-                    sfmtool_core::reconstruction::measurement_endpoint::resolve_measurement_endpoint(
-                        edited, e.image, e.pixel, &options,
-                    )
-                })
-            }),
-            resolved: None,
-        },
+    let resolved = sfmtool_core::reconstruction::measurement_endpoint::resolve_distance_endpoints(
+        edited,
+        endpoints.map(|e| e.map(|e| (e.image, e.pixel))),
+        &options,
+    );
+    ItemReading {
+        endpoints: [0, 1].map(|k| endpoints[k].map(|_| resolved.endpoints[k].clone())),
+        resolved,
     }
 }
 
-/// `item` as a stored row would hold it, or `None` where an endpoint is not
-/// placed or no stated distance is given.
-pub(crate) fn item_row(item: &sfmtool_core::bench::EditableMeasurement) -> Option<DistanceRow> {
-    let distance = item.as_distance()?;
-    let [Some(a), Some(b)] = distance.endpoints else {
-        return None;
-    };
-    let (stated, unit) = distance.distance?;
-    Some(DistanceRow {
+/// `item` as a stored row would hold it.
+pub(crate) fn item_row(item: &sfmtool_core::bench::EditableMeasurement) -> DistanceRow {
+    let (endpoints, stated, unit) = item
+        .as_distance()
+        .map_or(([None, None], None, LengthUnit::Metre), |d| {
+            (d.endpoints, d.distance, d.unit)
+        });
+    DistanceRow {
         label: item.label.clone(),
         stated,
         unit,
-        images: [a.image, b.image],
-        pixels: [a.pixel, b.pixel],
-    })
+        endpoints,
+    }
 }
 
 /// The median line for an item: the item compared with every stored
@@ -776,23 +822,24 @@ pub(crate) fn world_endpoints(
 /// deleted: `None` for a row with an endpoint in it or past the image set,
 /// which the subset drops, and otherwise its index among the rows that
 /// survive, in stored order, as
-/// `SfmrReconstruction::subset_by_image_indices` keeps them.
+/// `SfmrReconstruction::subset_by_image_indices` keeps them. An endpoint not
+/// placed is in no image, so it drops no row.
 pub(crate) fn distance_rows_after_deleting_image(
     recon: &SfmrReconstruction,
     removed: u32,
 ) -> Vec<Option<u32>> {
     let mut next = 0;
-    // A row survives where both its images do, as the subset keeps it: an
-    // image past the set (or missing from a hand-built value) survives no
-    // delete.
+    // A row survives where the image of each placed endpoint does, as the
+    // subset keeps it: an image past the set survives no delete.
     let count = recon.image_count() as u32;
     distance_rows(&recon.image_set.measurements)
         .iter()
         .map(|row| {
             if row
-                .images
+                .endpoints
                 .iter()
-                .any(|&image| image == removed || image >= count)
+                .flatten()
+                .any(|e| e.image == removed || e.image >= count)
             {
                 None
             } else {

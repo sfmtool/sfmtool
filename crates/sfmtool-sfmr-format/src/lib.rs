@@ -29,9 +29,10 @@ mod write;
 pub use depth_stats::{compute_depth_statistics, DepthStatsResult};
 pub use image_readings::{validate_image_readings, ImageReadingColumns};
 pub use measurements::{
-    validate_distance_measurements, validate_measurements, DistanceMeasurementsData,
-    DistanceMeasurementsMetadata, LengthUnit, MeasurementsData, LENGTH_UNIT_CM, LENGTH_UNIT_FT,
-    LENGTH_UNIT_IN, LENGTH_UNIT_M, LENGTH_UNIT_MM,
+    is_valid_measurement_label, validate_distance_measurements, validate_measurements,
+    DistanceMeasurementEndpoint, DistanceMeasurementRow, DistanceMeasurementsData,
+    DistanceMeasurementsMetadata, LengthUnit, MeasurementsData, ABSENT_ENDPOINT_IMAGE,
+    LENGTH_UNIT_CM, LENGTH_UNIT_FT, LENGTH_UNIT_IN, LENGTH_UNIT_M, LENGTH_UNIT_MM,
 };
 pub use observation_readings::{
     ObservationReading, ObservationReadingColumns, ObservationReadingOptions, ReadingSampler,

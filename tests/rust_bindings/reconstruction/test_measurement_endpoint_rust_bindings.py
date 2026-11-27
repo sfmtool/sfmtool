@@ -106,7 +106,7 @@ def test_distance_measurements_resolve_with_their_scene_distance(demo_workspace_
                 "units": np.array([LENGTH_UNIT_NAMES.index("m")], dtype=np.uint8),
                 "image_indexes": np.array([_CUBE_EDGE_IMAGES], dtype=np.uint32),
                 "endpoints_xy": np.array([endpoints], dtype=np.float32),
-                "labels": [""],
+                "labels": ["cube edge"],
             }
         }
     )

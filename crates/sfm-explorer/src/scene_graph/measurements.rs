@@ -127,11 +127,15 @@ fn row_hover(
 ) -> String {
     let mut lines = Vec::new();
     for side in measurements::EndpointSide::BOTH {
-        let [x, y] = row.pixel(side);
+        let Some(endpoint) = row.endpoint(side) else {
+            lines.push(format!("Endpoint {} is not placed", side.letter()));
+            continue;
+        };
+        let [x, y] = endpoint.pixel;
         lines.push(format!(
             "Endpoint {}: {} at ({x:.1}, {y:.1})",
             side.letter(),
-            measurements::image_name(recon, row.image(side))
+            measurements::image_name(recon, endpoint.image)
         ));
         if let Err(refusal) = measurements::endpoint(resolved, side) {
             lines.push(format!("  No position: {refusal}"));

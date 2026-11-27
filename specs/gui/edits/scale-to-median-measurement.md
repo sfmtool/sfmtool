@@ -115,7 +115,7 @@ from `app/modals.rs`. From the top:
   median. A row more than 5% off is drawn in the warning colour. The table
   scrolls past 220 points.
 - **Left out**: each measurement that gives no factor, with core's reason as a
-  sentence (*Distance #2: Endpoint B has no position: no observation's square
+  sentence (*Distance #2  bare pixel: Endpoint B has no position: no observation's square
   in image 0 holds pixel (5, 5); use Create Track Here …*).
 - **Apply** and **Cancel**. `Enter` applies and `Escape` cancels, as in the
   Bundle Adjust dialog; `Enter` does nothing while `Apply` is greyed. `Apply`

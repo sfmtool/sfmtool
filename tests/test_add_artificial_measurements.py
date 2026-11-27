@@ -72,7 +72,7 @@ def test_the_copy_holds_every_case_with_its_known_reading(copies):
     assert labels == [
         "one image",
         "two images",
-        "",
+        "one image again",
         "bad measurement",
         "refused endpoint",
         "several squares",

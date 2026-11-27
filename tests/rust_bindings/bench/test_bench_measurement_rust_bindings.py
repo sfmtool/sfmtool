@@ -12,6 +12,7 @@ from sfmtool import bench as bench_module
 from sfmtool.bench import (
     Bench,
     commit_measurement,
+    default_measurement_label,
     parse_stated_distance,
     put_measurement,
     set_measurement_endpoint,
@@ -40,7 +41,7 @@ def measured():
             [[[10.5, 20.25], [100.0, 200.5]], [[120.0, 220.0], [200.5, 350.25]]],
             dtype=np.float32,
         ),
-        "labels": ["ruler edge", ""],
+        "labels": ["ruler edge", "plinth"],
     }
     return recon.clone_with_changes(measurements={"distance": distance})
 
@@ -61,9 +62,8 @@ def test_a_put_copies_the_row_and_labels_the_item(edited):
     assert item.label == "ruler edge"
     assert item.origin == {"version": 7, "kind": "distance", "index": 0}
     assert item.endpoints == [(0, (10.5, 20.25)), (3, (100.0, 200.5))]
-    distance, unit = item.distance
-    assert unit == "m"
-    assert distance == pytest.approx(0.42, rel=1e-6)
+    assert item.unit == "m"
+    assert item.distance == pytest.approx(0.42, rel=1e-6)
     assert nxt.measurement("distance #0").label == "ruler edge"
     again, _ = put_measurement(nxt, edited, "distance", 0)
     assert again.labels == ["distance #0", "distance #0 (2)"]
@@ -98,7 +98,11 @@ def test_a_commit_with_no_row_appends_one_and_keeps_the_points(edited):
     assert nxt.point_count == edited.point_count
     plain = nxt.materialize()[0]
     assert plain.distance_measurement_count == 3
-    assert plain.measurements["distance"]["labels"] == ["ruler edge", "", "ruler edge"]
+    assert plain.measurements["distance"]["labels"] == [
+        "ruler edge",
+        "plinth",
+        "ruler edge",
+    ]
     # The value committed into is unchanged.
     assert edited.materialize()[0].distance_measurement_count == 2
 
@@ -133,14 +137,17 @@ def test_setting_the_label_gives_a_new_item_and_commits(edited):
     nxt, report = commit_measurement(edited, renamed, 0)
     assert report["wrote"] is True
     labels = nxt.materialize()[0].measurements["distance"]["labels"]
-    assert labels == ["tape across the base", ""]
+    assert labels == ["tape across the base", "plinth"]
+    for empty in ["", "  "]:
+        with pytest.raises(ValueError, match="needs a label"):
+            set_measurement_label(item, empty)
 
 
 def test_setting_the_stated_distance_gives_a_new_item_or_refuses(edited):
     _, item = put_measurement(Bench(), edited, "distance", 0)
     restated = set_stated_distance(item, 4.2, "cm")
-    assert restated.distance == (4.2, "cm")
-    assert item.distance[1] == "m"
+    assert (restated.distance, restated.unit) == (4.2, "cm")
+    assert item.unit == "m"
     assert restated.endpoints == item.endpoints
     with pytest.raises(ValueError, match="must be finite and strictly positive"):
         set_stated_distance(item, 0.0, "cm")
@@ -191,11 +198,31 @@ def test_a_measurement_started_from_a_pixel_holds_endpoint_a_alone(measured, edi
     assert bench.labels == [f"distance from {stem}@142,198"]
     assert bench.kind(bench.labels[0]) == "measurement"
     assert item.origin is None
-    assert item.label == ""
+    assert item.label == "measurement 1"
     assert item.distance is None
+    # The ground truth declares metres, so that is the unit it starts in.
+    assert item.unit == "m"
+    assert default_measurement_label(bench, edited) == "measurement 2"
     assert item.endpoints[0] == (3, pytest.approx((141.6, 198.4)))
     assert item.endpoints[1] is None
     again, _ = start_measurement(bench, edited, 3, (142.4, 197.6))
     assert again.labels[1] == f"distance from {stem}@142,198 (2)"
     with pytest.raises(ValueError, match="is outside image 3"):
         start_measurement(Bench(), edited, 3, (-1.0, 5.0))
+
+
+def test_a_measurement_with_absent_parts_commits_and_round_trips(edited):
+    """A new measurement commits with endpoint B and the distance absent, and
+    reads back with them absent: NaN, and 0xFFFFFFFF with NaN coordinates."""
+    _, item = start_measurement(Bench(), edited, 3, (141.5, 198.5))
+    nxt, report = commit_measurement(edited, item, None)
+    assert report["index"] == 2
+    stored = nxt.materialize()[0].measurements["distance"]
+    assert np.isnan(stored["distances"][2])
+    assert stored["image_indexes"][2].tolist() == [3, 0xFFFFFFFF]
+    assert np.isnan(stored["endpoints_xy"][2, 1]).all()
+    assert stored["labels"][2] == "measurement 1"
+    _, back = put_measurement(Bench(), nxt, "distance", 2)
+    assert back.distance is None
+    assert back.unit == "m"
+    assert back.endpoints[1] is None

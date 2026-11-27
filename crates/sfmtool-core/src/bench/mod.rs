@@ -85,12 +85,12 @@ pub use geometry_search::{
     GeometrySearchReport,
 };
 pub use measurement::{
-    commit_measurement, commit_measurement_preconditions, delete_measurement, measurement_title,
-    parse_stated_distance, put_measurement, set_measurement_endpoint, set_measurement_label,
-    set_stated_distance, start_measurement, EditableDistance, EditableMeasurement,
-    EditableMeasurementBody, EndpointPlacementRefusal, MeasurementCommit, MeasurementCommitRefusal,
-    MeasurementEndpoint, MeasurementKind, MeasurementOrigin, NoSuchMeasurement,
-    StatedDistanceRefusal,
+    commit_measurement, commit_measurement_preconditions, default_measurement_label,
+    delete_measurement, measurement_title, parse_stated_distance, put_measurement,
+    set_measurement_endpoint, set_measurement_label, set_stated_distance, start_measurement,
+    EditableDistance, EditableMeasurement, EditableMeasurementBody, EndpointPlacementRefusal,
+    MeasurementCommit, MeasurementCommitRefusal, MeasurementEndpoint, MeasurementKind,
+    MeasurementLabelRefusal, MeasurementOrigin, NoSuchMeasurement, StatedDistanceRefusal,
 };
 pub use nearby::{
     camera_spread, classify_range, constellation_seeds, depth_layers, distance_range,

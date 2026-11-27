@@ -166,9 +166,11 @@ fn distance_measurements_from_py(value: &Bound<'_, PyAny>) -> PyResult<DistanceM
 /// or non-list / non-str `labels`; `KeyError` for a missing required column;
 /// and `ValueError` for an unknown kind or column key, or for a dict naming no
 /// kind (`None` is the form for no measurements). Value and shape constraints
-/// (`N >= 1`, consistent column lengths, positive finite distances, valid unit
-/// codes, in-bounds image indexes and endpoint coordinates) are enforced by
-/// `sfmtool_sfmr_format::validate_measurements`.
+/// (`N >= 1`, consistent column lengths, positive finite distances or NaN for
+/// none, valid unit codes, in-bounds image indexes and endpoint coordinates or
+/// an absent endpoint's `0xFFFFFFFF` and NaN coordinates, labels that are not
+/// empty) are enforced by `sfmtool_sfmr_format::validate_measurements`, so the
+/// arrays carry the file's sentinels as they are.
 pub(crate) fn measurements_from_py(value: &Bound<'_, PyAny>) -> PyResult<MeasurementsData> {
     if value.is_none() {
         return Ok(MeasurementsData::default());

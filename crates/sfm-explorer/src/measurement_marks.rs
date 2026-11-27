@@ -355,13 +355,17 @@ impl AppState {
                 let Some(resolved) = readings.distance.get(index) else {
                     continue;
                 };
+                // An endpoint not placed draws nothing, and so no line.
                 let endpoints = EndpointSide::BOTH
                     .into_iter()
-                    .map(|side| DrawnEndpoint {
-                        side,
-                        image: row.image(side),
-                        pixel: row.pixel(side),
-                        place: place(node, Some(measurements::endpoint(resolved, side))),
+                    .filter_map(|side| {
+                        let endpoint = row.endpoint(side)?;
+                        Some(DrawnEndpoint {
+                            side,
+                            image: endpoint.image,
+                            pixel: endpoint.pixel,
+                            place: place(node, Some(measurements::endpoint(resolved, side))),
+                        })
                     })
                     .collect();
                 let (role, color, width) = match (is_selected, show_all) {
@@ -456,8 +460,8 @@ fn place(
     }
 }
 
-/// The focused item's hover text: its label, then, where both endpoints and a
-/// stated distance are given, the stated distance and the reading a Scene tree
+/// The focused item's hover text: its label, then, where both endpoints are
+/// placed, the stated distance where one is given and the reading a Scene tree
 /// row prints; otherwise where each endpoint is.
 fn item_hover(
     node: &crate::scene::SceneNode,
@@ -466,15 +470,18 @@ fn item_hover(
     reading: &measurements::ItemReading,
 ) -> String {
     let unit = node.recon().metadata.world_space_unit.as_deref();
-    if let (Some(row), Some(resolved)) = (measurements::item_row(item), &reading.resolved) {
-        let result = measurements::distance_result(&row, resolved, unit);
+    let row = measurements::item_row(item);
+    if row.endpoints.iter().all(Option::is_some) {
+        let result = measurements::distance_result(&row, &reading.resolved, unit);
+        let stated = row
+            .stated_text()
+            .map_or_else(String::new, |stated| format!("  {stated}"));
         return format!(
-            "{label}  {}  {}",
-            row.stated_text(),
-            measurements::reading_text(&row, resolved, result)
+            "{label}{stated}  {}",
+            measurements::reading_text(&row, &reading.resolved, result)
         );
     }
-    let endpoints = item.as_distance().map_or([None, None], |d| d.endpoints);
+    let endpoints = row.endpoints;
     let parts: Vec<String> = EndpointSide::BOTH
         .into_iter()
         .map(|side| match endpoints[side.index()] {

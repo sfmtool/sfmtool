@@ -1159,12 +1159,10 @@ impl TabContext<'_> {
             }
             crate::measurement_marks::DrawnId::Stored(measurement) => {
                 self.state.select_endpoint(measurement, side);
-                self.state.distance_row(measurement).map(|row| {
-                    (
-                        ImageRef::new(measurement.recon, row.image(side) as usize),
-                        row.pixel(side),
-                    )
-                })
+                self.state
+                    .distance_row(measurement)
+                    .and_then(|row| row.endpoint(side))
+                    .map(|e| (ImageRef::new(measurement.recon, e.image as usize), e.pixel))
             }
         };
         let Some((image, [x, y])) = target else {
