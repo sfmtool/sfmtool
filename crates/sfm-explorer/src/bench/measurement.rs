@@ -558,7 +558,8 @@ impl AppState {
     /// One bench step (`Set the label of distance #2 to "paw width"`), which
     /// leaves the reconstruction alone. A label the item holds already pushes
     /// no version and writes the no-effect row. Refused while a background
-    /// task holds the node and on a view-only bench. Whether a version was
+    /// task holds the node, on a view-only bench, and for a label that is
+    /// empty or only white space, in core's sentence. Whether a version was
     /// pushed comes back.
     pub(crate) fn set_bench_measurement_label(
         &mut self,
@@ -573,7 +574,8 @@ impl AppState {
             ));
             return Ok(false);
         }
-        let next = bench::set_measurement_label(&item, to);
+        let next = bench::set_measurement_label(&item, to)
+            .map_err(|e| format!("Cannot set the label of {label}: {e}."))?;
         let text = format!("Set the label of {label} to \"{to}\"");
         self.push_measurement_step(index, &bench, label, next, text)?;
         Ok(true)
@@ -616,7 +618,7 @@ impl AppState {
             crate::measurements::length_number(distance),
             unit.name()
         );
-        let held = item.as_distance().and_then(|d| d.distance);
+        let held = item.as_distance().and_then(|d| Some((d.distance?, d.unit)));
         if held.is_some_and(|(d, u)| u == unit && d as f32 == distance as f32) {
             self.no_effect(format!(
                 "Set the stated distance of {label} to {stated}: no effect, it states that already"

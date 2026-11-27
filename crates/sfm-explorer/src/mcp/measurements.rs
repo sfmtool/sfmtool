@@ -212,17 +212,19 @@ pub(super) fn get_measurement(
     let resolved = &readings.distance[index];
     let mut out = summary(node, measurement, row, resolved, unit);
     let object = out.as_object_mut().expect("a summary is an object");
+    // An endpoint not placed is `null`, as an item's is.
     let endpoints: Vec<Value> = EndpointSide::BOTH
         .into_iter()
-        .map(|side| {
-            endpoint_detail(
+        .map(|side| match row.endpoint(side) {
+            Some(e) => endpoint_detail(
                 node,
                 side,
-                row.image(side),
-                row.pixel(side),
+                e.image,
+                e.pixel,
                 measurements::endpoint(resolved, side),
                 unit,
-            )
+            ),
+            None => Value::Null,
         })
         .collect();
     object.insert("endpoints".into(), Value::Array(endpoints));
@@ -305,28 +307,26 @@ fn item_detail(state: &AppState, id: ReconId, item: &str) -> JsonReply {
         })
         .collect();
     let row = measurements::item_row(measurement);
-    let result_value = match (&row, &reading.resolved) {
-        (Some(row), Some(resolved)) => result(measurements::distance_result(row, resolved, unit)),
-        _ => Value::Null,
+    let result_value = result(measurements::distance_result(&row, &reading.resolved, unit));
+    let median = {
+        let rows = measurements::distance_rows(node.edited().measurements());
+        let stored = measurements::readings(node);
+        measurements::item_scale_comparison(
+            &rows,
+            &stored.distance,
+            origin,
+            &row,
+            &reading.resolved,
+        )
+        .map(|line| {
+            json!({
+                "count": line.count,
+                "median_unit_per_scene_unit": line.median_unit_per_scene_unit,
+                "deviation_percent": line.deviation_percent,
+                "text": measurements::scale_comparison_text(&line, row.unit),
+            })
+        })
     };
-    let median = match (&row, &reading.resolved) {
-        (Some(row), Some(resolved)) => {
-            let rows = measurements::distance_rows(node.edited().measurements());
-            let stored = measurements::readings(node);
-            measurements::item_scale_comparison(&rows, &stored.distance, origin, row, resolved).map(
-                |line| {
-                    json!({
-                        "count": line.count,
-                        "median_unit_per_scene_unit": line.median_unit_per_scene_unit,
-                        "deviation_percent": line.deviation_percent,
-                        "text": measurements::scale_comparison_text(&line, row.unit),
-                    })
-                },
-            )
-        }
-        _ => None,
-    };
-    let distance = measurement.as_distance().and_then(|d| d.distance);
     Ok(json!({
         "reconstruction_label": node.label,
         "item": item,
@@ -334,8 +334,8 @@ fn item_detail(state: &AppState, id: ReconId, item: &str) -> JsonReply {
         "measurement_kind": measurement.kind().name(),
         "origin": origin.map(|index| json!({ "measurement_index": index })),
         "label": measurement.label,
-        "stated_distance": distance.map(|(d, _)| d),
-        "unit": distance.map(|(_, u)| u.name()),
+        "stated_distance": row.stated,
+        "unit": row.unit.name(),
         "result": result_value,
         "endpoints": endpoint_values,
         "median": median,
@@ -714,15 +714,18 @@ fn summary(
     unit: Option<&str>,
 ) -> Value {
     let recon = node.recon();
+    // An endpoint not placed is `null`.
     let endpoints: Vec<Value> = EndpointSide::BOTH
         .into_iter()
         .map(|side| {
-            let image = row.image(side);
+            let Some(e) = row.endpoint(side) else {
+                return Value::Null;
+            };
             json!({
                 "endpoint": side.wire_name(),
-                "camera_image": image,
-                "camera_image_name": recon.image_set.images.get(image as usize).map(|i| i.name.clone()),
-                "pixel": row.pixel(side),
+                "camera_image": e.image,
+                "camera_image_name": recon.image_set.images.get(e.image as usize).map(|i| i.name.clone()),
+                "pixel": e.pixel,
                 "resolved": measurements::endpoint(resolved, side).is_ok(),
             })
         })
@@ -769,6 +772,18 @@ fn result(result: DistanceResult) -> Value {
         DistanceResult::Refused(side) => json!({
             "state": "refused",
             "endpoint": side.wire_name(),
+        }),
+        DistanceResult::NotPlaced(side) => json!({
+            "state": "not_placed",
+            "endpoint": side.wire_name(),
+        }),
+        DistanceResult::Unstated {
+            reconstructed,
+            unit,
+        } => json!({
+            "state": "no_stated_distance",
+            "reconstructed_distance": reconstructed,
+            "unit": unit.map(sfmtool_core::LengthUnit::name),
         }),
     }
 }

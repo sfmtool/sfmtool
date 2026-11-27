@@ -107,16 +107,18 @@ distance. The step's entry in the saved `tool_options` `transforms` list is
 
 The step prints, after the pipeline's `[i/n] Scale to median measurement
 (mm)` line, as here on the demo scene with its cube's edge stated three times,
-once 20% long, and a fourth measurement on a pixel no observation holds:
+once 20% long, a fourth measurement on a pixel no observation holds, and a
+fifth that states no distance:
 
 ```
 Scale to median measurement (unit: mm):
-  Used 3 of 4 distance measurements:
+  Used 3 of 5 distance measurements:
     Distance #0 "cube edge": stated 1000 mm, scene 1 su, factor 1000, deviation +0.00%
-    Distance #1: stated 1000 mm, scene 1 su, factor 1000, deviation +0.00%
+    Distance #1 "cube edge again": stated 1000 mm, scene 1 su, factor 1000, deviation +0.00%
     Distance #2 "too long": stated 1200 mm, scene 1 su, factor 1200, deviation +20.00%
   Left out:
     Distance #3 "corner": endpoint A has no position: no observation's square in image 2 holds pixel (0.5, 0.5); use Create Track Here at the endpoint's pixel to build a track observed there
+    Distance #4 "ruler": it states no distance, so it reads a length but gives no scale
   median: 1000, mean: 1067, std: 115.5 (11.55% of the median), median absolute deviation: 0.00% of the median
   min: 1000, max: 1200, largest deviation: 20.00%
 
@@ -127,14 +129,18 @@ Scaling reconstruction by 1000
 
 - **Each used measurement**, in stored order: its title, `Distance #` and its
   stored index, as the viewer's Scene tree and dialog title it; its label in
-  quotes where it has one; its stated length converted to `UNIT`; its scene
+  quotes; its stated length converted to `UNIT`; its scene
   distance (`su`, scene units: the file's own coordinates); its factor; and its
   signed deviation from the median, as a percentage of the median.
 - **Left out**, where any measurement gives no factor: its title and core's
-  reason as a sentence. A measurement with an endpoint the resolver refuses,
-  an endpoint on a point at infinity (a direction, with no distance to it), or
-  endpoints whose distance is zero or not finite is left out with its reason,
-  not an error; the step goes on with the rest, as the viewer's dialog does.
+  reason as a sentence, one reason per measurement in core's order
+  ([core/reconstruction/measurement-scale.md](../../../core/reconstruction/measurement-scale.md)).
+  A measurement that states no distance (a ruler: it reads a length but gives
+  no scale), one with an endpoint not placed, an endpoint the resolver
+  refuses, an endpoint on a point at infinity (a direction, with no distance
+  to it), or endpoints whose distance is zero or not finite is left out with
+  its reason, not an error; the step goes on with the rest, as the viewer's
+  dialog does.
 - **The statistics**: the median, which is the factor applied; the mean; the
   sample standard deviation and its percentage **of the median**, or *none for
   a single measurement*; the median absolute deviation as a percentage of the
@@ -199,6 +205,8 @@ measurements:
 - A measurement whose endpoints no observation holds is printed under *Left
   out* with its label and the resolver's reason, and the other one sets the
   scale.
+- A measurement that states no distance is printed under *Left out* with its
+  label and core's sentence for it.
 - Three statements of the edge, one 20% long, print its +20.00% deviation, a
   standard deviation of 11.55% of the median and the warning naming it, and
   scale by the other two's factor.

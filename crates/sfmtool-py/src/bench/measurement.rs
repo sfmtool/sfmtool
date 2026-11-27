@@ -18,6 +18,7 @@ use pyo3::types::{PyDict, PyDictMethods};
 
 use sfmtool_core::bench::{
     commit_measurement as core_commit_measurement,
+    default_measurement_label as core_default_measurement_label,
     parse_stated_distance as core_parse_stated_distance, put_measurement as core_put_measurement,
     set_measurement_endpoint as core_set_measurement_endpoint,
     set_measurement_label as core_set_measurement_label,
@@ -61,8 +62,9 @@ impl PyEditableMeasurement {
         self.inner.kind().name()
     }
 
-    /// The measurement's own label, written into the file on commit. It may be
-    /// empty, and it is not the item's label on the bench.
+    /// The measurement's own label, written into the file on commit. A commit
+    /// needs it not empty and not only white space, and it is not the item's
+    /// label on the bench.
     #[getter]
     fn label(&self) -> String {
         self.inner.label.clone()
@@ -97,12 +99,20 @@ impl PyEditableMeasurement {
             .collect()
     }
 
-    /// The stated distance and its unit name, ``(12.0, "cm")``, or ``None``
-    /// when none is given.
+    /// The stated distance in :attr:`unit`, ``12.0``, or ``None`` when none
+    /// is given.
     #[getter]
-    fn distance(&self) -> Option<(f64, &'static str)> {
+    fn distance(&self) -> Option<f64> {
         let EditableMeasurementBody::Distance(distance) = &self.inner.body;
-        distance.distance.map(|(d, unit)| (d, unit.name()))
+        distance.distance
+    }
+
+    /// The name of the unit the stated distance is in, or is given in once
+    /// there is one, ``"cm"``: present whether or not a distance is given.
+    #[getter]
+    fn unit(&self) -> &'static str {
+        let EditableMeasurementBody::Distance(distance) = &self.inner.body;
+        distance.unit.name()
     }
 
     /// This measurement with its origin set to row `index` at `version`, and
@@ -155,8 +165,10 @@ fn put_measurement(
 /// of image `image`, and nothing else.
 ///
 /// The measurement has no origin, so its commit appends a row, and no
-/// endpoint B, stated distance or label of its own until the other steps give
-/// them. Its label on the bench is minted from where it starts,
+/// endpoint B or stated distance until the other steps give them. Its own
+/// label is :func:`default_measurement_label`'s, ``"measurement 1"``, and its
+/// unit the reconstruction's ``world_space_unit``, or metres where it names
+/// none. Its label on the bench is minted from where it starts,
 /// ``"distance from IMG_0042@142,198"`` (the image stem and the rounded
 /// pixel), with a collision suffix where another item holds it. An image past
 /// `edited`'s images, and a pixel outside ``[0, width) x [0, height)`` of its
@@ -182,6 +194,15 @@ fn start_measurement(
     Ok((PyBench { inner: next }, measurement))
 }
 
+/// The label a new measurement on `bench` over `edited` starts with,
+/// ``"measurement N"``: the smallest ``N`` from 1 that no stored distance
+/// measurement of `edited` and no measurement on `bench` holds as its own
+/// label.
+#[pyfunction]
+fn default_measurement_label(bench: &PyBench, edited: &PyEditedReconstruction) -> String {
+    core_default_measurement_label(&bench.inner, &edited.inner)
+}
+
 /// Write `measurement` into `edited`: replace row `origin_row` of its kind, or
 /// append a row where `origin_row` is ``None``.
 ///
@@ -191,10 +212,10 @@ fn start_measurement(
 /// row that already holds exactly what the measurement holds, as the file
 /// stores it, is not written.
 ///
-/// Refused with a ``ValueError`` naming what is missing or wrong: an endpoint
-/// not placed, no stated distance, a distance that is not finite and
-/// positive, an image past the image set, a pixel outside its image, or a row
-/// past the rows.
+/// An endpoint not placed and no stated distance are written as absent.
+/// Refused with a ``ValueError`` naming what is wrong: a label that is empty
+/// or only white space, a distance that is not finite and positive, an image
+/// past the image set, a pixel outside its image, or a row past the rows.
 ///
 /// Returns ``(EditedReconstruction, report)``. The report carries ``index``,
 /// the row written (or the row that already holds it); ``replaced``, whether
@@ -236,16 +257,18 @@ fn unit_named(name: &str) -> PyResult<LengthUnit> {
 
 /// `measurement` with its own label set to `label`, and nothing else changed.
 ///
-/// Any text is a label, the empty one included. Returns the new
+/// Any text is a label, kept as given, except one that is empty or only white
+/// space, which is a ``ValueError``. Returns the new
 /// :class:`EditableMeasurement` and leaves `measurement` as it was.
 #[pyfunction]
 fn set_measurement_label(
     measurement: &PyEditableMeasurement,
     label: &str,
-) -> PyEditableMeasurement {
-    PyEditableMeasurement {
-        inner: Arc::new(core_set_measurement_label(&measurement.inner, label)),
-    }
+) -> PyResult<PyEditableMeasurement> {
+    let next = core_set_measurement_label(&measurement.inner, label).map_err(refused)?;
+    Ok(PyEditableMeasurement {
+        inner: Arc::new(next),
+    })
 }
 
 /// `measurement` with its stated distance set to `distance` in `unit` (a unit
@@ -317,6 +340,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEditableMeasurement>()?;
     m.add_function(wrap_pyfunction!(put_measurement, m)?)?;
     m.add_function(wrap_pyfunction!(start_measurement, m)?)?;
+    m.add_function(wrap_pyfunction!(default_measurement_label, m)?)?;
     m.add_function(wrap_pyfunction!(commit_measurement, m)?)?;
     m.add_function(wrap_pyfunction!(set_measurement_label, m)?)?;
     m.add_function(wrap_pyfunction!(set_stated_distance, m)?)?;

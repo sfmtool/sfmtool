@@ -90,6 +90,7 @@ impl EndpointResolution {
 }
 
 pub enum EndpointRefusal {                  // Display: a sentence naming the remedy
+    NotPlaced,                              // only from the two distance calls
     NoSuchImage { image: u32, image_count: usize },
     NoPose { image: u32 },
     PixelOutsideImage { image: u32, pixel: [f64; 2] },
@@ -121,11 +122,12 @@ pub fn resolve_distance_measurements(
     edited: &EditedReconstruction,
     options: &MeasurementEndpointOptions,
 ) -> Vec<ResolvedDistanceMeasurement>;
-/// One distance's two endpoints, each an image and a pixel, resolved as
-/// `resolve_distance_measurements` resolves each stored row.
+/// One distance's two endpoints, each an image and a pixel or `None` for one
+/// not placed, resolved as `resolve_distance_measurements` resolves each
+/// stored row.
 pub fn resolve_distance_endpoints(
     edited: &EditedReconstruction,
-    endpoints: [(u32, [f64; 2]); 2],
+    endpoints: [Option<(u32, [f64; 2])>; 2],
     options: &MeasurementEndpointOptions,
 ) -> ResolvedDistanceMeasurement;
 
@@ -167,6 +169,17 @@ them. `resolve_distance_endpoints` is the same reading of a distance that is not
 stored, such as a measurement item on the bench
 ([../bench/editable-measurement.md](../bench/editable-measurement.md)), so an
 item and the row it came from read alike until one of them changes.
+
+**An endpoint not placed reads as `NotPlaced`.** A stored row may leave an
+endpoint absent, and a bench item may have one that is not placed yet
+([formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#distance-measurements-measurementsdistance)).
+Both distance calls give such an endpoint `Err(EndpointRefusal::NotPlaced)`,
+whose sentence says it is not placed rather than naming an image or a pixel,
+and the measurement no `scene_distance`; the other endpoint is resolved as
+usual. It is a refusal because it answers the same question the others do, why
+the endpoint has no position, so a caller that reports refusals reports it with
+them. `resolve_measurement_endpoint` is always given an image and a pixel, and
+never gives it.
 
 **Why the whole-file call names the distance kind.** A file's measurements
 come in kinds ([`MeasurementsData`](../../formats/sfmr-file-format.md#10-measurements-optional-version-17)),
@@ -472,7 +485,8 @@ on synthetic reconstructions of two posed cameras and a few patches:
   though its cost is the lower, and wins once the layer reaches it.
 - A patch whose point has no observation in the image is no candidate; a
   deleted point is no candidate.
-- Each refusal, with its sentence.
+- Each refusal, with its sentence, and a stored endpoint that is absent read
+  as `NotPlaced` beside the other one resolved, with no `scene_distance`.
 - A pixel in the square of a point at infinity resolves to `AtInfinity`, and a
   measurement with such an endpoint has no `scene_distance`.
 - A similarity transform keeps every texel, moves every position with it, and

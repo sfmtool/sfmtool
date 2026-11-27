@@ -18,7 +18,9 @@ use crate::*;
 
 /// Build `n` valid physical distance measurements for `make_test_data`'s three
 /// `1920x1080` images, cycling through all five units, both same-image and
-/// cross-image endpoint pairs, and empty + non-empty UTF-8 labels.
+/// cross-image endpoint pairs and UTF-8 labels. From row 3 on it also holds
+/// the absent parts a row may have: row 3 states no distance (`NaN`) and has
+/// no endpoint `0`, and row 4 has no endpoint `1`.
 pub(super) fn sample_measurements(n: usize) -> DistanceMeasurementsData {
     let distances = Array1::from_iter((0..n).map(|i| 0.25 + (i as f32) * 12.5));
     let units =
@@ -41,17 +43,28 @@ pub(super) fn sample_measurements(n: usize) -> DistanceMeasurementsData {
     let labels = (0..n)
         .map(|i| match i % 3 {
             0 => "ruler edge — front".to_string(),
-            1 => String::new(),
+            1 => "door — height".to_string(),
             _ => format!("span #{i}"),
         })
         .collect();
-    DistanceMeasurementsData {
+    let mut m = DistanceMeasurementsData {
         distances,
         units,
         image_indexes,
         endpoints_xy,
         labels,
+    };
+    for (i, k) in [(3, 0), (4, 1)] {
+        if i < n {
+            m.image_indexes[[i, k]] = ABSENT_ENDPOINT_IMAGE;
+            m.endpoints_xy[[i, k, 0]] = f32::NAN;
+            m.endpoints_xy[[i, k, 1]] = f32::NAN;
+        }
     }
+    if n > 3 {
+        m.distances[3] = f32::NAN;
+    }
+    m
 }
 
 /// XXH128 over the decompressed `measurements/` entries of a written file, in
@@ -165,6 +178,16 @@ fn round_trip_with_measurements_in_both_feature_sources() {
         assert_eq!(loaded.metadata.version, SFMR_FORMAT_VERSION);
         assert_eq!(loaded.metadata.distance_measurement_count, Some(5));
         assert_eq!(loaded.measurements.distance.as_ref(), Some(&expected));
+        // The absent parts come back as absent, and the rows write the same
+        // columns back.
+        let rows = loaded.measurements.distance.as_ref().unwrap().rows();
+        assert_eq!(rows[3].distance, None);
+        assert_eq!(rows[3].endpoints[0], None);
+        assert!(rows[3].endpoints[1].is_some());
+        assert_eq!(rows[4].distance, Some(expected.distances[4]));
+        assert!(rows[4].endpoints[0].is_some());
+        assert_eq!(rows[4].endpoints[1], None);
+        assert_eq!(DistanceMeasurementsData::from_rows(&rows), expected);
 
         // Canonical legend and count in measurements/distance/metadata.json.
         let meta = read_json_entry_of(&path, "measurements/distance/metadata.json.zst");
@@ -191,6 +214,29 @@ fn round_trip_with_measurements_in_both_feature_sources() {
         let (valid, errors) = verify_sfmr(&path).unwrap();
         assert!(valid, "{name}: {errors:?}");
     }
+}
+
+#[test]
+fn a_row_with_only_a_label_and_a_unit_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bare.sfmr");
+    let row = DistanceMeasurementRow {
+        endpoints: [None, None],
+        distance: None,
+        unit: LengthUnit::Inch,
+        label: "measurement 1".into(),
+    };
+    let columns = DistanceMeasurementsData::from_rows(std::slice::from_ref(&row));
+    assert_eq!(columns.image_indexes.as_slice().unwrap(), &[u32::MAX; 2]);
+    assert!(columns.endpoints_xy.iter().all(|v| v.is_nan()));
+    assert!(columns.distances[0].is_nan());
+    let mut data = make_test_data();
+    data.measurements.distance = Some(columns);
+    write_sfmr(&path, &mut data).unwrap();
+    let loaded = read_sfmr(&path).unwrap();
+    assert_eq!(loaded.measurements.distance.unwrap().rows(), vec![row]);
+    let (valid, errors) = verify_sfmr(&path).unwrap();
+    assert!(valid, "{errors:?}");
 }
 
 impl SfmrData {
@@ -517,9 +563,47 @@ fn invalid_measurements_are_rejected_on_write() {
             "finite and strictly positive",
         ),
         (
-            "NaN distance",
-            Box::new(|d| d.measurements.distance.as_mut().unwrap().distances[0] = f32::NAN),
+            "negative infinite distance",
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().distances[0] = f32::NEG_INFINITY
+            }),
             "finite and strictly positive",
+        ),
+        (
+            "empty label",
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().labels[1] = String::new()),
+            "labels row 1 is \"\", and a label must not be empty or only white space",
+        ),
+        (
+            "white-space label",
+            Box::new(|d| d.measurements.distance.as_mut().unwrap().labels[2] = " \t".into()),
+            "labels row 2 is \" \\t\", and a label must not be empty",
+        ),
+        (
+            "absent image index with finite coordinates",
+            Box::new(|d| {
+                d.measurements.distance.as_mut().unwrap().image_indexes[[1, 0]] =
+                    ABSENT_ENDPOINT_IMAGE
+            }),
+            "an absent endpoint, whose coordinates must both be NaN",
+        ),
+        (
+            "absent image index with one NaN coordinate",
+            Box::new(|d| {
+                let m = d.measurements.distance.as_mut().unwrap();
+                m.image_indexes[[1, 1]] = ABSENT_ENDPOINT_IMAGE;
+                m.endpoints_xy[[1, 1, 0]] = f32::NAN;
+            }),
+            "an absent endpoint, whose coordinates must both be NaN",
+        ),
+        (
+            "NaN coordinates with a present image index",
+            Box::new(|d| {
+                let m = d.measurements.distance.as_mut().unwrap();
+                m.endpoints_xy[[2, 0, 0]] = f32::NAN;
+                m.endpoints_xy[[2, 0, 1]] = f32::NAN;
+            }),
+            "an absent endpoint, but image_indexes[2, 0] is",
         ),
         (
             "infinite distance",
@@ -655,15 +739,46 @@ fn invalid_measurements_in_archive_are_rejected_on_read_and_verify() {
             "finite and strictly positive",
         ),
         (
-            "NaN distance",
+            "infinite distance",
             Box::new(|name, raw| {
                 (name == "measurements/distance/distances.2.float32.zst").then(|| {
                     let mut out = raw.to_vec();
-                    out[4..8].copy_from_slice(&f32::NAN.to_le_bytes());
+                    out[4..8].copy_from_slice(&f32::INFINITY.to_le_bytes());
                     out
                 })
             }),
             "finite and strictly positive",
+        ),
+        (
+            "empty label",
+            Box::new(|name, _| {
+                (name == "measurements/distance/labels.json.zst")
+                    .then(|| serde_json::to_vec(&vec!["ruler", ""]).unwrap())
+            }),
+            "labels row 1 is \"\", and a label must not be empty",
+        ),
+        (
+            "absent image index with finite coordinates",
+            Box::new(|name, raw| {
+                (name == "measurements/distance/image_indexes.2.2.uint32.zst").then(|| {
+                    let mut out = raw.to_vec();
+                    out[4..8].copy_from_slice(&ABSENT_ENDPOINT_IMAGE.to_le_bytes());
+                    out
+                })
+            }),
+            "an absent endpoint, whose coordinates must both be NaN",
+        ),
+        (
+            "NaN coordinates with a present image index",
+            Box::new(|name, raw| {
+                (name == "measurements/distance/endpoints_xy.2.2.2.float32.zst").then(|| {
+                    let mut out = raw.to_vec();
+                    out[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
+                    out[12..16].copy_from_slice(&f32::NAN.to_le_bytes());
+                    out
+                })
+            }),
+            "an absent endpoint, but image_indexes[0, 1] is",
         ),
         (
             "image index out of range",

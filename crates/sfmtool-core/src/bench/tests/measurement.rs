@@ -35,7 +35,7 @@ fn measured() -> EditedReconstruction {
                 ],
             )
             .unwrap(),
-            labels: vec!["ear to ear".into(), String::new(), "paw".into()],
+            labels: vec!["ear to ear".into(), "nose to tail".into(), "paw".into()],
         }),
     };
     EditedReconstruction::new(Arc::new(recon))
@@ -93,7 +93,29 @@ fn a_stored_measurement_goes_on_as_its_row_says() {
             }),
         ]
     );
-    assert_eq!(d.distance, Some((12.0, LengthUnit::Centimetre)));
+    assert_eq!(d.distance, Some(12.0));
+    assert_eq!(d.unit, LengthUnit::Centimetre);
+}
+
+#[test]
+fn a_stored_row_with_absent_parts_goes_on_with_them_absent() {
+    let value = measured();
+    let mut recon = (*value.base).clone();
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    m.distances[1] = f32::NAN;
+    m.image_indexes[[1, 0]] = u32::MAX;
+    m.endpoints_xy[[1, 0, 0]] = f32::NAN;
+    m.endpoints_xy[[1, 0, 1]] = f32::NAN;
+    let value = EditedReconstruction::new(Arc::new(recon));
+    let item = item_of(&value, 1);
+    let d = distance(&item);
+    assert_eq!(d.endpoints[0], None);
+    assert_eq!(d.endpoints[1].unwrap().image, 3);
+    assert_eq!(d.distance, None);
+    // The unit is kept, so a commit of the item unchanged writes the same row.
+    assert_eq!(d.unit, LengthUnit::Centimetre);
+    let commit = commit_measurement(&value, &item, Some(1)).unwrap();
+    assert!(!commit.wrote);
 }
 
 #[test]
@@ -230,7 +252,8 @@ fn a_commit_replaces_the_row_and_shares_the_base() {
             image: 2,
             pixel: [11.0, 22.5],
         });
-        d.distance = Some((30.0, LengthUnit::Centimetre));
+        d.distance = Some(30.0);
+        d.unit = LengthUnit::Centimetre;
     });
     let commit = commit_measurement(&value, &item, Some(1)).unwrap();
     assert!(commit.wrote);
@@ -243,7 +266,7 @@ fn a_commit_replaces_the_row_and_shares_the_base() {
             LengthUnit::Centimetre.code(),
             [2, 3],
             [11.0, 22.5, 30.0, 40.0],
-            String::new()
+            "nose to tail".to_string()
         )
     );
     // The other rows as they were.
@@ -322,21 +345,19 @@ fn each_refusal_says_what_is_wrong() {
         );
         refusal
     };
-    let unplaced = with_distance(&item, |d| d.endpoints[1] = None);
+    for empty in ["", "  \t"] {
+        let mut unlabelled = item.clone();
+        unlabelled.label = empty.to_string();
+        assert_eq!(
+            refused(&unlabelled, Some(0)),
+            MeasurementCommitRefusal::EmptyLabel
+        );
+    }
     assert_eq!(
-        refused(&unplaced, Some(0)),
-        MeasurementCommitRefusal::EndpointNotPlaced { side: 1 }
+        MeasurementCommitRefusal::EmptyLabel.to_string(),
+        "a measurement needs a label, and this one is empty or only white space"
     );
-    assert_eq!(
-        refused(&unplaced, Some(0)).to_string(),
-        "endpoint B is not placed, and a distance needs both endpoints"
-    );
-    let unstated = with_distance(&item, |d| d.distance = None);
-    assert_eq!(
-        refused(&unstated, Some(0)),
-        MeasurementCommitRefusal::NoStatedDistance
-    );
-    let negative = with_distance(&item, |d| d.distance = Some((-1.0, LengthUnit::Metre)));
+    let negative = with_distance(&item, |d| d.distance = Some(-1.0));
     assert_eq!(
         refused(&negative, Some(0)),
         MeasurementCommitRefusal::DistanceNotPositive { distance: -1.0 }
@@ -396,11 +417,44 @@ fn each_refusal_says_what_is_wrong() {
 }
 
 #[test]
+fn a_measurement_with_no_endpoints_and_no_distance_is_committed() {
+    let value = measured();
+    let bare = with_distance(&item_of(&value, 0), |d| {
+        d.endpoints = [None, None];
+        d.distance = None;
+        d.unit = LengthUnit::Foot;
+    });
+    let commit = commit_measurement(&value, &bare, Some(0)).unwrap();
+    assert!(commit.wrote);
+    let m = commit.value.measurements().distance.as_ref().unwrap();
+    assert_eq!(
+        m.row(0),
+        crate::DistanceMeasurementRow {
+            endpoints: [None, None],
+            distance: None,
+            unit: LengthUnit::Foot,
+            label: "ear to ear".into(),
+        }
+    );
+    // One endpoint absent, and the other checked as before.
+    let half = with_distance(&item_of(&value, 0), |d| d.endpoints[0] = None);
+    assert!(commit_measurement(&value, &half, Some(0)).unwrap().wrote);
+    let half_outside = with_distance(&half, |d| {
+        d.endpoints[1] = Some(MeasurementEndpoint {
+            image: 1,
+            pixel: [1920.0, 5.0],
+        })
+    });
+    assert!(matches!(
+        commit_measurement(&value, &half_outside, Some(0)).unwrap_err(),
+        MeasurementCommitRefusal::PixelOutsideImage { side: 1, .. }
+    ));
+}
+
+#[test]
 fn a_committed_item_reseated_on_its_row_commits_to_no_effect() {
     let value = measured();
-    let item = with_distance(&item_of(&value, 2), |d| {
-        d.distance = Some((5.0, LengthUnit::Inch))
-    });
+    let item = with_distance(&item_of(&value, 2), |d| d.distance = Some(5.0));
     let commit = commit_measurement(&value, &item, Some(2)).unwrap();
     let seated = item.with_origin(9, commit.index);
     assert_eq!(seated.origin.unwrap().version, 9);
@@ -467,9 +521,8 @@ fn a_value_with_its_own_measurements_materializes_them() {
 }
 
 /// A value built by hand whose columns disagree in length is read without a
-/// panic: the row the short columns lack reads as an image past the set and
-/// pixels that are not numbers, which the commit refuses, and a delete still
-/// renumbers the rows.
+/// panic: the row the short columns lack reads as endpoints not placed and no
+/// label, which the commit refuses, and a delete still renumbers the rows.
 #[test]
 fn columns_of_different_lengths_are_read_without_a_panic() {
     let mut recon = SfmrReconstruction::demo(10);
@@ -485,13 +538,14 @@ fn columns_of_different_lengths_are_read_without_a_panic() {
     let value = EditedReconstruction::new(Arc::new(recon));
     let short = item_of(&value, 1);
     let d = distance(&short);
-    assert_eq!(d.endpoints[0].unwrap().image, u32::MAX);
-    assert!(d.endpoints[1].unwrap().pixel[0].is_nan());
-    assert_eq!(d.distance, Some((2.0, LengthUnit::Metre)));
-    assert!(matches!(
+    assert_eq!(d.endpoints, [None, None]);
+    assert_eq!(d.distance, Some(2.0));
+    assert_eq!(d.unit, LengthUnit::Metre);
+    assert_eq!(short.label, "");
+    assert_eq!(
         commit_measurement(&value, &short, Some(1)).unwrap_err(),
-        MeasurementCommitRefusal::NoSuchImage { side: 0, .. }
-    ));
+        MeasurementCommitRefusal::EmptyLabel
+    );
     let (next, map) = delete_measurement(&value, MeasurementKind::Distance, 1).unwrap();
     assert_eq!(map, vec![Some(0), None]);
     assert_eq!(row(&next, 0).4, "only");
@@ -503,13 +557,26 @@ fn columns_of_different_lengths_are_read_without_a_panic() {
 fn setting_the_label_changes_the_label_and_nothing_else() {
     let value = measured();
     let item = item_of(&value, 0);
-    let next = set_measurement_label(&item, "paw width");
+    let next = set_measurement_label(&item, "paw width").unwrap();
     assert_eq!(next.label, "paw width");
     assert_eq!(item.label, "ear to ear", "the step changed its input");
     assert_eq!(next.origin, item.origin);
     assert_eq!(next.body, item.body);
-    // The empty label is a label: the file allows an unlabelled measurement.
-    assert_eq!(set_measurement_label(&item, "").label, "");
+    // A label is kept as given, spaces and all.
+    assert_eq!(
+        set_measurement_label(&item, " paw ").unwrap().label,
+        " paw "
+    );
+    // An empty label, or one of only white space, is refused in the commit's
+    // sentence.
+    for empty in ["", " ", "\t\n"] {
+        let refused = set_measurement_label(&item, empty).unwrap_err();
+        assert_eq!(refused, MeasurementLabelRefusal::Empty);
+        assert_eq!(
+            refused.to_string(),
+            MeasurementCommitRefusal::EmptyLabel.to_string()
+        );
+    }
     // A commit writes the new label into the row and nothing else.
     let commit = commit_measurement(&value, &next, Some(0)).unwrap();
     assert!(commit.wrote);
@@ -526,20 +593,22 @@ fn setting_the_stated_distance_changes_the_distance_and_nothing_else() {
     let value = measured();
     let item = item_of(&value, 0);
     let next = set_stated_distance(&item, 4.2, LengthUnit::Inch).unwrap();
-    assert_eq!(distance(&next).distance, Some((4.2, LengthUnit::Inch)));
+    assert_eq!(distance(&next).distance, Some(4.2));
+    assert_eq!(distance(&next).unit, LengthUnit::Inch);
     assert_eq!(distance(&next).endpoints, distance(&item).endpoints);
     assert_eq!(next.label, item.label);
     assert_eq!(next.origin, item.origin);
     assert_eq!(
-        distance(&item).distance,
-        Some((12.0, LengthUnit::Centimetre)),
+        (distance(&item).distance, distance(&item).unit),
+        (Some(12.0), LengthUnit::Centimetre),
         "the step changed its input"
     );
     // An item with no stated distance takes one.
     let unstated = with_distance(&item, |d| d.distance = None);
+    let given = set_stated_distance(&unstated, 3.0, LengthUnit::Metre).unwrap();
     assert_eq!(
-        distance(&set_stated_distance(&unstated, 3.0, LengthUnit::Metre).unwrap()).distance,
-        Some((3.0, LengthUnit::Metre))
+        (distance(&given).distance, distance(&given).unit),
+        (Some(3.0), LengthUnit::Metre)
     );
 }
 
@@ -780,9 +849,11 @@ fn a_measurement_started_from_a_pixel_holds_endpoint_a_alone() {
     let item = bench.measurement(&label).expect("put on");
     assert_eq!(item.kind(), MeasurementKind::Distance);
     assert_eq!(item.origin, None);
-    assert_eq!(item.label, "");
+    assert_eq!(item.label, "measurement 1");
     assert_eq!(distance(item).endpoints, [Some(at), None]);
     assert_eq!(distance(item).distance, None);
+    // The demo declares no world_space_unit, so the unit is metres.
+    assert_eq!(distance(item).unit, LengthUnit::Metre);
     assert_eq!(item.placed_endpoints(), 1);
 
     // A second start at the same rounded pixel takes the collision suffix,
@@ -793,29 +864,27 @@ fn a_measurement_started_from_a_pixel_holds_endpoint_a_alone() {
     };
     let (both, second) = start_measurement(&bench, &value, near).unwrap();
     assert_eq!(second, "distance from image_003@142,198 (2)");
+    // The first item holds `measurement 1`, so the second takes the next.
+    assert_eq!(both.measurement(&second).unwrap().label, "measurement 2");
     assert_eq!(both.labels().collect::<Vec<_>>(), [&*label, &*second]);
     assert_eq!(
         distance(both.measurement(&label).unwrap()).endpoints[0],
         Some(at)
     );
 
-    // Its commit is refused until endpoint B and the distance are given, then
-    // appends a row, since it has no origin.
-    assert_eq!(
-        commit_measurement_preconditions(&value, item, None)
-            .unwrap_err()
-            .to_string(),
-        "endpoint B is not placed, and a distance needs both endpoints"
-    );
+    // Its commit is taken as it stands, with endpoint B and the distance
+    // absent, and appends a row, since it has no origin.
+    assert_eq!(commit_measurement_preconditions(&value, item, None), Ok(()));
+    let bare = commit_measurement(&value, item, None).unwrap();
+    let m = bare.value.measurements().distance.as_ref().unwrap();
+    assert_eq!(m.row(3).endpoints[1], None);
+    assert_eq!(m.row(3).distance, None);
+    assert_eq!(m.row(3).label, "measurement 1");
     let b = MeasurementEndpoint {
         image: 5,
         pixel: [10.0, 20.0],
     };
     let placed = set_measurement_endpoint(&value, item, 1, b).unwrap();
-    assert_eq!(
-        commit_measurement_preconditions(&value, &placed, None),
-        Err(MeasurementCommitRefusal::NoStatedDistance)
-    );
     let stated = set_stated_distance(&placed, 30.0, LengthUnit::Centimetre).unwrap();
     let commit = commit_measurement(&value, &stated, None).unwrap();
     assert_eq!(
@@ -823,8 +892,45 @@ fn a_measurement_started_from_a_pixel_holds_endpoint_a_alone() {
         (3, false, true)
     );
     let (d, _, images, pixels, text) = row(&commit.value, 3);
-    assert_eq!((d, images, text), (30.0, [3, 5], String::new()));
+    assert_eq!((d, images, text.as_str()), (30.0, [3, 5], "measurement 1"));
     assert_eq!(pixels, [141.6, 198.4, 10.0, 20.0]);
+}
+
+#[test]
+fn a_new_measurement_takes_the_first_label_nothing_holds() {
+    let value = measured();
+    let at = MeasurementEndpoint {
+        image: 3,
+        pixel: [10.0, 10.0],
+    };
+    // A stored row holding `measurement 1` and an item holding `measurement 2`
+    // leave `measurement 3` the first free one; `measurement 4` held further
+    // on does not matter.
+    let mut recon = (*value.base).clone();
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    m.labels[0] = "measurement 1".into();
+    m.labels[2] = "measurement 4".into();
+    let value = EditedReconstruction::new(Arc::new(recon));
+    let (bench, label) = start_measurement(&Bench::new(), &value, at).unwrap();
+    let held = set_measurement_label(bench.measurement(&label).unwrap(), "measurement 2").unwrap();
+    let bench = bench
+        .replace(&label, BenchItem::Measurement(Arc::new(held)))
+        .unwrap();
+    assert_eq!(default_measurement_label(&bench, &value), "measurement 3");
+    // An item's bench label is not its own label, so it takes nothing.
+    assert_eq!(
+        default_measurement_label(&Bench::new(), &value),
+        "measurement 2"
+    );
+    // The world_space_unit names the unit a new measurement starts in.
+    let mut cm = (*value.base).clone();
+    cm.metadata.world_space_unit = Some("cm".into());
+    let cm = EditedReconstruction::new(Arc::new(cm));
+    let (bench, label) = start_measurement(&Bench::new(), &cm, at).unwrap();
+    assert_eq!(
+        distance(bench.measurement(&label).unwrap()).unit,
+        LengthUnit::Centimetre
+    );
 }
 
 #[test]

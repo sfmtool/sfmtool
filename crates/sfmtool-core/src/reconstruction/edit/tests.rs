@@ -615,9 +615,9 @@ fn an_image_subset_without_inline_keypoints_keeps_the_stored_errors() {
 }
 
 /// An image subset of a value built by hand whose measurement columns
-/// disagree in length does not panic: a row with no image index survives no
-/// subset, and a kept row's missing columns read as not a number, metres and
-/// an empty label.
+/// disagree in length does not panic: a row with no image index reads as one
+/// whose endpoints are absent, which every subset keeps, and a kept row's
+/// missing columns read as not a number, metres and an empty label.
 #[test]
 fn a_subset_of_measurement_columns_of_different_lengths_does_not_panic() {
     use ndarray::{Array1, Array2, Array3};
@@ -642,18 +642,60 @@ fn a_subset_of_measurement_columns_of_different_lengths_does_not_panic() {
         .measurements
         .distance
         .as_ref()
-        .expect("two rows survive");
-    // Row 2 has no image index and is dropped; rows 0 and 1 are kept.
-    assert_eq!(m.len(), 2);
+        .expect("every row survives");
+    // Row 2 has no image index, so its endpoints are absent and it is kept.
+    assert_eq!(m.len(), 3);
     assert_eq!(m.image_indexes.row(0).to_vec(), vec![0, 1]);
     assert_eq!(m.image_indexes.row(1).to_vec(), vec![2, 3]);
+    assert_eq!(m.row(2).endpoints, [None, None]);
     assert_eq!(
         m.units.to_vec(),
         vec![
             crate::LengthUnit::Inch.code(),
+            crate::LengthUnit::Metre.code(),
             crate::LengthUnit::Metre.code()
         ]
     );
     assert!(m.endpoints_xy[[1, 0, 0]].is_nan());
-    assert_eq!(m.labels, vec!["only".to_string(), String::new()]);
+    assert_eq!(
+        m.labels,
+        vec!["only".to_string(), String::new(), String::new()]
+    );
+}
+
+/// An absent endpoint lies in no image, so no image subset drops its row: the
+/// present endpoint is remapped and the absent one stays absent. A present
+/// endpoint in a dropped image still drops the row.
+#[test]
+fn a_subset_keeps_an_absent_endpoint_absent() {
+    use crate::{DistanceMeasurementEndpoint, DistanceMeasurementRow, DistanceMeasurementsData};
+    let mut recon = SfmrReconstruction::demo(10);
+    let row = |endpoints, label: &str| DistanceMeasurementRow {
+        endpoints,
+        distance: None,
+        unit: crate::LengthUnit::Metre,
+        label: label.into(),
+    };
+    let at = |image| {
+        Some(DistanceMeasurementEndpoint {
+            image,
+            xy: [5.0, 6.0],
+        })
+    };
+    recon.image_set.measurements = crate::MeasurementsData {
+        distance: Some(DistanceMeasurementsData::from_rows(&[
+            row([None, at(3)], "half"),
+            row([None, None], "bare"),
+            row([at(1), None], "in the dropped image"),
+        ])),
+    };
+    let keep: Vec<u32> = (0..recon.image_count() as u32)
+        .filter(|&i| i != 1)
+        .collect();
+    let subset = recon.subset_by_image_indices(&keep, true).unwrap();
+    let m = subset.image_set.measurements.distance.as_ref().unwrap();
+    assert_eq!(
+        m.rows(),
+        vec![row([None, at(2)], "half"), row([None, None], "bare")]
+    );
 }

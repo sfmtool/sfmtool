@@ -15,8 +15,8 @@ use nalgebra::Point3;
 use ndarray::Array4;
 
 use sfmtool_sfmr_format::{
-    DepthStatistics, DistanceMeasurementsData, FramesMetadata, ImageDepthStats, MeasurementsData,
-    RigFrameData,
+    DepthStatistics, DistanceMeasurementRow, DistanceMeasurementsData, FramesMetadata,
+    ImageDepthStats, MeasurementsData, RigFrameData,
 };
 
 use super::data::{compute_observation_offsets, count_points_at_infinity};
@@ -878,69 +878,32 @@ fn subset_rig_frame_data(rf: &RigFrameData, image_indices: &[u32]) -> RigFrameDa
 
 /// Filter and remap a `DistanceMeasurementsData` onto a subset of images.
 ///
-/// Keeps every measurement whose two endpoints both lie in surviving images
-/// (`old_to_new[img]` is `Some(new_idx)`), remaps both image indexes, and
-/// returns `None` when no measurement survives.
+/// Keeps every measurement whose present endpoints all lie in surviving images
+/// (`old_to_new[img]` is `Some(new_idx)`), remaps their image indexes, and
+/// returns `None` when no measurement survives. An absent endpoint lies in no
+/// image, so it never drops its row and stays absent.
 ///
-/// Every column is read through `.get`, so a value built by hand whose
-/// columns disagree in length does not panic: a row with no image index
-/// names no surviving image and is dropped, and a kept row's missing distance
-/// or pixel reads as not a number, its missing unit as metres and its missing
-/// label as empty. A load refuses such a value, so a row read from a file is
-/// carried exactly.
+/// The rows are read through `DistanceMeasurementsData::row`, so a value built
+/// by hand whose columns disagree in length does not panic: a missing image
+/// index reads as an absent endpoint, a missing distance as none, a missing
+/// pixel as not a number, a missing unit as metres and a missing label as
+/// empty. A load refuses such a value, so a row read from a file is carried
+/// exactly.
 fn subset_distance_measurements(
     m: &DistanceMeasurementsData,
     old_to_new: &[Option<u32>],
 ) -> Option<DistanceMeasurementsData> {
-    let mut kept_rows: Vec<(usize, u32, u32)> = Vec::new();
-    for i in 0..m.len() {
-        let image = |k: usize| m.image_indexes.get((i, k)).map(|&img| img as usize);
-        let (Some(img0), Some(img1)) = (image(0), image(1)) else {
-            continue;
-        };
-        if let (Some(new0), Some(new1)) = (
-            old_to_new.get(img0).copied().flatten(),
-            old_to_new.get(img1).copied().flatten(),
-        ) {
-            kept_rows.push((i, new0, new1));
-        }
-    }
-    if kept_rows.is_empty() {
-        return None;
-    }
-    let n = kept_rows.len();
-    let mut distances = ndarray::Array1::<f32>::zeros(n);
-    let mut units = ndarray::Array1::<u8>::zeros(n);
-    let mut image_indexes = ndarray::Array2::<u32>::zeros((n, 2));
-    let mut endpoints_xy = ndarray::Array3::<f32>::zeros((n, 2, 2));
-    let mut labels = Vec::with_capacity(n);
-    for (new_i, (old_i, new0, new1)) in kept_rows.into_iter().enumerate() {
-        distances[new_i] = m.distances.get(old_i).copied().unwrap_or(f32::NAN);
-        units[new_i] = m
-            .units
-            .get(old_i)
-            .copied()
-            .unwrap_or(crate::LengthUnit::Metre.code());
-        image_indexes[[new_i, 0]] = new0;
-        image_indexes[[new_i, 1]] = new1;
-        for k in 0..2 {
-            for c in 0..2 {
-                endpoints_xy[[new_i, k, c]] = m
-                    .endpoints_xy
-                    .get((old_i, k, c))
-                    .copied()
-                    .unwrap_or(f32::NAN);
+    let kept: Vec<DistanceMeasurementRow> = m
+        .rows()
+        .into_iter()
+        .filter_map(|mut row| {
+            for endpoint in row.endpoints.iter_mut().flatten() {
+                endpoint.image = old_to_new.get(endpoint.image as usize).copied().flatten()?;
             }
-        }
-        labels.push(m.labels.get(old_i).cloned().unwrap_or_default());
-    }
-    Some(DistanceMeasurementsData {
-        distances,
-        units,
-        image_indexes,
-        endpoints_xy,
-        labels,
-    })
+            Some(row)
+        })
+        .collect();
+    (!kept.is_empty()).then(|| DistanceMeasurementsData::from_rows(&kept))
 }
 
 #[cfg(test)]

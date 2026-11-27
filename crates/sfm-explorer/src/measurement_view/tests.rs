@@ -180,6 +180,64 @@ fn the_result_block_reads_scene_units_infinity_and_a_refusal() {
     );
 }
 
+/// A stored measurement that states no distance says so in its header and
+/// reads the reconstructed distance alone, in the file's unit or in scene
+/// units; one with endpoint B not placed says so in B's block, with how to
+/// place it, and in its result.
+#[test]
+fn a_stored_ruler_and_an_unplaced_endpoint_read_as_such() {
+    let state_with = |unit: Option<&str>| {
+        let mut recon = crate::measurements::fixture::measured_reconstruction(unit);
+        let m = recon.image_set.measurements.distance.as_mut().unwrap();
+        m.distances[0] = f32::NAN;
+        m.image_indexes[[1, 1]] = u32::MAX;
+        m.endpoints_xy[[1, 1, 0]] = f32::NAN;
+        m.endpoints_xy[[1, 1, 1]] = f32::NAN;
+        let mut state = AppState::new();
+        let id = state.append_node(crate::scene::SceneNode::from_path(
+            std::path::Path::new("measured.sfmr"),
+            recon,
+        ));
+        (state, id)
+    };
+    for (unit, reading) in [
+        (Some("cm"), "Reconstructed: 1.500 cm"),
+        (None, "Reconstructed: 1.500 su"),
+    ] {
+        let (mut state, id) = state_with(unit);
+        state.select_measurement(MeasurementRef::distance(id, 0));
+        let (mut panel, ctx) = settled(&state);
+        let texts = painted(&mut panel, &ctx, &state);
+        for expected in ["No stated distance", reading] {
+            assert!(
+                texts.iter().any(|t| t == expected),
+                "{expected:?} not in {texts:?}"
+            );
+        }
+        assert!(
+            !texts
+                .iter()
+                .any(|t| t.starts_with("Error:") || t.starts_with("Implied scale")),
+            "{texts:?}"
+        );
+    }
+    let (mut state, id) = state_with(Some("m"));
+    state.select_measurement(MeasurementRef::distance(id, 1));
+    let (mut panel, ctx) = settled(&state);
+    let texts = painted(&mut panel, &ctx, &state);
+    for expected in [
+        "Endpoint B is not placed.",
+        PLACE_ON_BENCH,
+        "No distance: endpoint B is not placed.",
+        "Stated distance: 3.06 m",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == expected),
+            "{expected:?} not in {texts:?}"
+        );
+    }
+}
+
 /// A refused endpoint's block gives the refusal's sentence, which names the
 /// remedy.
 #[test]
@@ -337,7 +395,7 @@ fn the_edited_mode_shows_the_item_s_live_readings() {
     }
     let stored = crate::measurements::readings(state.node(id).unwrap());
     let reading = panel.item_reading().expect("read").clone();
-    assert_eq!(reading.resolved.as_ref(), stored.distance.first());
+    assert_eq!(Some(&reading.resolved), stored.distance.first());
 
     // Move endpoint B onto point 2, as a later step will: the item's reading
     // changes and the stored row's does not.
@@ -346,10 +404,7 @@ fn the_edited_mode_shows_the_item_s_live_readings() {
     let sfmtool_core::bench::EditableMeasurementBody::Distance(d) = &mut moved.body;
     let row4 =
         &crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())[4];
-    d.endpoints[1] = Some(sfmtool_core::bench::MeasurementEndpoint {
-        image: row4.images[1],
-        pixel: row4.pixels[1],
-    });
+    d.endpoints[1] = row4.endpoints[1];
     let bench = state.scene[index]
         .history
         .current_bench()
@@ -381,7 +436,7 @@ fn the_edited_mode_shows_the_item_s_live_readings() {
 /// An endpoint the item lacks is a block saying so, the result says why
 /// there is no distance, and Commit is greyed with the refusal.
 #[test]
-fn an_unplaced_endpoint_greys_commit_and_says_so() {
+fn an_unplaced_endpoint_says_so_and_leaves_commit_enabled() {
     let (mut state, id) = measured_state(Some("m"));
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 1))
@@ -400,13 +455,54 @@ fn an_unplaced_endpoint_greys_commit_and_says_so() {
             "{expected:?} not in {texts:?}"
         );
     }
+    // The row stores an endpoint not placed as absent, so Commit is enabled.
     let commit = &panel.toolbar()[0];
     assert_eq!(commit.0, "Commit");
+    assert_eq!(commit.1, None);
+}
+
+/// An item with both endpoints and no stated distance shows the
+/// reconstructed distance alone, and an empty label greys Commit with core's
+/// sentence.
+#[test]
+fn an_item_with_no_stated_distance_reads_as_a_ruler() {
+    let (mut state, id) = measured_state(Some("cm"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let index = state.node_index(id).unwrap();
+    let mut ruler = (**state.bench_measurement(id, "distance #0").unwrap()).clone();
+    let sfmtool_core::bench::EditableMeasurementBody::Distance(d) = &mut ruler.body;
+    d.distance = None;
+    ruler.label = String::new();
+    let bench = state.scene[index]
+        .history
+        .current_bench()
+        .replace(
+            "distance #0",
+            sfmtool_core::bench::BenchItem::Measurement(std::sync::Arc::new(ruler)),
+        )
+        .unwrap();
+    state.scene[index]
+        .history
+        .push_bench(std::sync::Arc::new(bench), "made it a ruler");
+    let (mut panel, ctx) = settled(&state);
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(
+        texts.iter().any(|t| t == "Reconstructed: 1.500 cm"),
+        "{texts:?}"
+    );
+    assert!(!texts.iter().any(|t| t.starts_with("Error:")), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.starts_with("Implied scale")),
+        "{texts:?}"
+    );
+    let commit = &panel.toolbar()[0];
     assert_eq!(
         commit.1.as_deref(),
         Some(
-            "Cannot commit distance #1: endpoint B is not placed, and a distance needs both \
-             endpoints."
+            "Cannot commit distance #0: a measurement needs a label, and this one is empty or \
+             only white space."
         )
     );
 }
@@ -1182,9 +1278,10 @@ fn the_endpoint_fields_are_greyed_while_a_step_would_be_refused() {
 // ── A new measurement ───────────────────────────────────────────────────
 
 /// A measurement started from a pixel shows endpoint B's block with the
-/// instructions that place it, both header fields empty with their grey
-/// text, the result saying B is missing, and *Commit* greyed with the
-/// refusal, until B and the distance are given.
+/// instructions that place it, its default label in the label field, the
+/// stated distance field empty with its grey text, and the result saying B is
+/// missing; *Commit* is enabled throughout, and once B is placed the result
+/// is the reconstructed distance alone.
 #[test]
 fn a_new_measurement_says_how_to_finish_it() {
     let (mut state, id) = measured_state(Some("m"));
@@ -1202,7 +1299,7 @@ fn a_new_measurement_says_how_to_finish_it() {
     for expected in [
         "Endpoint B is not placed.",
         instruction.as_str(),
-        "No label",
+        "measurement 1",
         "No stated distance",
         "No distance: endpoint B is not placed.",
         "From no stored row: Commit adds it as a new row",
@@ -1212,21 +1309,12 @@ fn a_new_measurement_says_how_to_finish_it() {
             "{expected:?} not in {texts:?}"
         );
     }
+    assert!(!texts.iter().any(|t| t == "No label"), "{texts:?}");
     assert!(panel.field_rect(HeaderField::Distance).is_some());
-    let commit = &panel.toolbar()[0];
-    assert_eq!(
-        commit.1.as_deref(),
-        Some(
-            format!(
-                "Cannot commit {label}: endpoint B is not placed, and a distance needs both \
-                 endpoints."
-            )
-            .as_str()
-        )
-    );
+    assert_eq!(panel.toolbar()[0].1, None);
 
-    // B placed: its block has fields and no instructions, and Commit asks for
-    // the distance.
+    // B placed: its block has fields and no instructions, and the result no
+    // longer says it is missing.
     state.set_endpoint(&crate::bench::measurement::EndpointSet {
         node: id,
         item: label.clone(),
@@ -1240,10 +1328,13 @@ fn a_new_measurement_says_how_to_finish_it() {
     assert!(panel
         .pixel_field_rect(EndpointSide::B, PixelAxis::X)
         .is_some());
-    assert_eq!(
-        panel.toolbar()[0].1.as_deref(),
-        Some(format!("Cannot commit {label}: no stated distance is given.").as_str())
+    assert!(
+        !texts
+            .iter()
+            .any(|t| t == "No distance: endpoint B is not placed."),
+        "{texts:?}"
     );
+    assert_eq!(panel.toolbar()[0].1, None);
     state
         .set_bench_measurement_distance(id, &label, "42 cm")
         .unwrap();
@@ -1300,7 +1391,8 @@ fn a_pixel_field_fits_its_coordinate() {
 /// A field takes typing, and commits it on Enter, while the window does not
 /// have the operating system's focus, as when an agent types into a viewer
 /// behind another window; and an empty field, as a new measurement's stated
-/// distance and label are, takes it as one holding text does.
+/// distance is, takes it as one holding text does. The label field holds the
+/// default label, so its text is selected first and the typing replaces it.
 #[test]
 fn a_field_takes_typing_while_the_window_lacks_focus() {
     let (mut state, id) = measured_state(Some("m"));
@@ -1339,7 +1431,13 @@ fn a_field_takes_typing_while_the_window_lacks_focus() {
                 &mut panel,
                 vec![button(at, egui::PointerButton::Primary, false)],
             ),
-            unfocused(&mut panel, vec![egui::Event::Text(text.to_string())]),
+            unfocused(
+                &mut panel,
+                vec![
+                    key(egui::Key::A, egui::Modifiers::COMMAND),
+                    egui::Event::Text(text.to_string()),
+                ],
+            ),
         ];
         assert_eq!(any_distance(&responses), None, "typing alone committed");
         responses.push(unfocused(

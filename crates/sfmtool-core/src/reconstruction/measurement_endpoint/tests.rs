@@ -564,13 +564,31 @@ fn an_endpoint_at_infinity_has_a_direction_and_no_distance() {
         ],
         labels: vec!["to the sky".into(), "across".into()],
     });
-    let resolved =
-        resolve_distance_measurements(&edited(recon), &MeasurementEndpointOptions::default());
+    let resolved = resolve_distance_measurements(
+        &edited(recon.clone()),
+        &MeasurementEndpointOptions::default(),
+    );
     assert_eq!(resolved.len(), 2);
     assert!(resolved[0].endpoints[0].is_ok() && resolved[0].endpoints[1].is_ok());
     assert_eq!(resolved[0].scene_distance, None);
     // The two finite endpoints are 3 apart, to within the f32 pixels.
     assert_close(resolved[1].scene_distance.unwrap(), 3.0, 1e-3, "distance");
+
+    // An absent endpoint reads as not placed, beside the other one resolved,
+    // and the measurement has no distance.
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    m.image_indexes[[1, 1]] = u32::MAX;
+    m.endpoints_xy[[1, 1, 0]] = f32::NAN;
+    m.endpoints_xy[[1, 1, 1]] = f32::NAN;
+    let resolved =
+        resolve_distance_measurements(&edited(recon), &MeasurementEndpointOptions::default());
+    assert!(resolved[1].endpoints[0].is_ok());
+    assert_eq!(resolved[1].endpoints[1], Err(EndpointRefusal::NotPlaced));
+    assert_eq!(resolved[1].scene_distance, None);
+    assert_eq!(
+        EndpointRefusal::NotPlaced.to_string(),
+        "the endpoint is not placed; place it at a pixel of one of the images"
+    );
 }
 
 // ─── a similarity transform ───────────────────────────────────────────────

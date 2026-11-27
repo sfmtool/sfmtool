@@ -21,10 +21,11 @@
 
 use std::sync::Arc;
 
-use ndarray::{Array1, Array2, Array3};
-
 use crate::reconstruction::edited::EditedReconstruction;
-use crate::{DistanceMeasurementsData, LengthUnit, MeasurementsData};
+use crate::{
+    is_valid_measurement_label, DistanceMeasurementEndpoint, DistanceMeasurementRow,
+    DistanceMeasurementsData, LengthUnit, MeasurementsData,
+};
 
 use super::steps::ClusterSeed;
 use super::{image_stem, Bench, BenchItem};
@@ -99,8 +100,11 @@ pub struct EditableDistance {
     /// endpoint that is not placed: deleting the image an endpoint was in
     /// clears it.
     pub endpoints: [Option<MeasurementEndpoint>; 2],
-    /// The stated length and its unit, once given.
-    pub distance: Option<(f64, LengthUnit)>,
+    /// The stated length in [`Self::unit`], once given.
+    pub distance: Option<f64>,
+    /// The unit the stated length is in, or is given in once there is one:
+    /// the file stores a unit on every row.
+    pub unit: LengthUnit,
 }
 
 /// What an editable measurement measures, one variant per kind.
@@ -138,8 +142,9 @@ pub struct EditableMeasurement {
     /// to replace. A commit replaces the row the origin resolves to, and
     /// appends a row where it resolves to none.
     pub origin: Option<MeasurementOrigin>,
-    /// The measurement's own label, written into the file on commit. It may be
-    /// empty and need not be unique, so it is not the item's bench label.
+    /// The measurement's own label, written into the file on commit. A commit
+    /// needs it not empty and not only white space, but it need not be unique,
+    /// so it is not the item's bench label.
     pub label: String,
     /// What it measures.
     pub body: EditableMeasurementBody,
@@ -209,17 +214,16 @@ impl EditableMeasurement {
                 if row >= m.len() {
                     return Err(missing());
                 }
-                let stored = DistanceRow::read(m, row);
-                let endpoint = |k: usize| MeasurementEndpoint {
-                    image: stored.images[k],
-                    pixel: stored.pixels[k].map(f64::from),
-                };
-                // A load refuses a unit code past the legend, so the fallback
-                // is for a value built by hand.
-                let unit = LengthUnit::from_code(stored.unit).unwrap_or(LengthUnit::Metre);
+                let stored = m.row(row);
                 EditableMeasurementBody::Distance(EditableDistance {
-                    endpoints: [Some(endpoint(0)), Some(endpoint(1))],
-                    distance: Some((f64::from(stored.distance), unit)),
+                    endpoints: stored.endpoints.map(|e| {
+                        e.map(|e| MeasurementEndpoint {
+                            image: e.image,
+                            pixel: e.xy.map(f64::from),
+                        })
+                    }),
+                    distance: stored.distance.map(f64::from),
+                    unit: stored.unit,
                 })
             }
         };
@@ -301,7 +305,7 @@ impl EditableMeasurement {
         let next = Self {
             body: EditableMeasurementBody::Distance(EditableDistance {
                 endpoints,
-                distance: distance.distance,
+                ..*distance
             }),
             ..self.clone()
         };
@@ -344,12 +348,14 @@ pub fn put_measurement(
 /// and nothing else, under a label minted from where it starts, and give back
 /// the bench and the label it took.
 ///
-/// The item has no origin, so its commit appends a row; it has no endpoint B,
-/// no stated distance and an empty label of its own, which the other steps
-/// give it. The label is `distance from ` and the form a cluster seeded at
-/// the pixel is labelled with, the image stem and the rounded pixel
-/// (`distance from IMG_0042@142,198`), with the bench's collision suffix
-/// where another item holds that.
+/// The item has no origin, so its commit appends a row; it has no endpoint B
+/// and no stated distance, which the other steps give it, and its unit is the
+/// one a bare stated distance is read in, the reconstruction's
+/// `world_space_unit`, or metres where it names none. Its own label is
+/// [`default_measurement_label`]. Its bench label is `distance from ` and the
+/// form a cluster seeded at the pixel is labelled with, the image stem and the
+/// rounded pixel (`distance from IMG_0042@142,198`), with the bench's
+/// collision suffix where another item holds that.
 ///
 /// # Errors
 ///
@@ -371,6 +377,7 @@ pub fn put_measurement(
 /// let item = bench.measurement(&label).unwrap();
 /// assert_eq!(item.as_distance().unwrap().endpoints, [Some(at), None]);
 /// assert_eq!(item.origin, None);
+/// assert_eq!(item.label, "measurement 1");
 /// ```
 pub fn start_measurement(
     bench: &Bench,
@@ -385,12 +392,20 @@ pub fn start_measurement(
         endpoint.pixel,
         1.0,
     );
+    let unit = edited
+        .base
+        .metadata
+        .world_space_unit
+        .as_deref()
+        .and_then(LengthUnit::from_name)
+        .unwrap_or(LengthUnit::Metre);
     let item = EditableMeasurement {
         origin: None,
-        label: String::new(),
+        label: default_measurement_label(bench, edited),
         body: EditableMeasurementBody::Distance(EditableDistance {
             endpoints: [Some(endpoint), None],
             distance: None,
+            unit,
         }),
     };
     Ok(bench.put(
@@ -399,16 +414,74 @@ pub fn start_measurement(
     ))
 }
 
+/// `measurement N`, the label a new measurement starts with: `N` the smallest
+/// integer from 1 that no stored distance measurement of `edited` and no
+/// measurement item on `bench` has as its own label.
+pub fn default_measurement_label(bench: &Bench, edited: &EditedReconstruction) -> String {
+    let stored = edited
+        .measurements()
+        .distance
+        .as_ref()
+        .map_or(&[][..], |m| m.labels.as_slice());
+    let taken = |label: &str| {
+        stored.iter().any(|l| l == label)
+            || bench
+                .labels()
+                .any(|item| bench.measurement(item).is_some_and(|m| m.label == label))
+    };
+    (1..)
+        .map(|n: u64| format!("measurement {n}"))
+        .find(|label| !taken(label))
+        .expect("an unbounded range always has a free label")
+}
+
 /// The item with its own label set to `label`, and nothing else changed: the
 /// step that sets the label the file stores for the measurement.
 ///
-/// Any text is a label, the empty one included, since the file allows an
-/// unlabelled measurement and labels need not be unique.
-pub fn set_measurement_label(item: &EditableMeasurement, label: &str) -> EditableMeasurement {
-    EditableMeasurement {
+/// Labels need not be unique, and the text is kept as given, untrimmed.
+///
+/// # Errors
+///
+/// [`MeasurementLabelRefusal::Empty`] for a label that is empty or only white
+/// space, which the file refuses, in the commit's sentence.
+pub fn set_measurement_label(
+    item: &EditableMeasurement,
+    label: &str,
+) -> Result<EditableMeasurement, MeasurementLabelRefusal> {
+    if !is_valid_measurement_label(label) {
+        return Err(MeasurementLabelRefusal::Empty);
+    }
+    Ok(EditableMeasurement {
         label: label.to_string(),
         ..item.clone()
+    })
+}
+
+/// Why a label cannot be given to a measurement ([`set_measurement_label`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeasurementLabelRefusal {
+    /// The label is empty or only white space.
+    Empty,
+}
+
+impl std::fmt::Display for MeasurementLabelRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MeasurementLabelRefusal::Empty => empty_label_sentence(f),
+        }
     }
+}
+
+impl std::error::Error for MeasurementLabelRefusal {}
+
+/// The sentence for a label that is empty or only white space, shared by
+/// [`MeasurementLabelRefusal::Empty`] and
+/// [`MeasurementCommitRefusal::EmptyLabel`].
+fn empty_label_sentence(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(
+        f,
+        "a measurement needs a label, and this one is empty or only white space"
+    )
 }
 
 /// The item with its stated distance set to `distance` in `unit`, and nothing
@@ -431,7 +504,8 @@ pub fn set_stated_distance(
     Ok(EditableMeasurement {
         body: EditableMeasurementBody::Distance(EditableDistance {
             endpoints: held.endpoints,
-            distance: Some((distance, unit)),
+            distance: Some(distance),
+            unit,
         }),
         ..item.clone()
     })
@@ -468,10 +542,11 @@ pub fn set_stated_distance(
 /// let edited = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
 /// let item = EditableMeasurement {
 ///     origin: None,
-///     label: String::new(),
+///     label: "ear to ear".to_string(),
 ///     body: EditableMeasurementBody::Distance(EditableDistance {
 ///         endpoints: [Some(MeasurementEndpoint { image: 0, pixel: [10.0, 12.5] }), None],
-///         distance: Some((12.0, LengthUnit::Centimetre)),
+///         distance: Some(12.0),
+///         unit: LengthUnit::Centimetre,
 ///     }),
 /// };
 /// let moved = MeasurementEndpoint { image: 1, pixel: [40.0, 30.5] };
@@ -494,10 +569,7 @@ pub fn set_measurement_endpoint(
     let mut endpoints = held.endpoints;
     endpoints[side] = Some(endpoint);
     Ok(EditableMeasurement {
-        body: EditableMeasurementBody::Distance(EditableDistance {
-            endpoints,
-            distance: held.distance,
-        }),
+        body: EditableMeasurementBody::Distance(EditableDistance { endpoints, ..*held }),
         ..item.clone()
     })
 }
@@ -743,13 +815,8 @@ impl std::error::Error for StatedDistanceRefusal {}
 /// naming the endpoint as the panel does, `A` or `B`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MeasurementCommitRefusal {
-    /// The endpoint on this side (0 for A, 1 for B) is not placed.
-    EndpointNotPlaced {
-        /// 0 for endpoint A, 1 for B.
-        side: usize,
-    },
-    /// No stated distance is given.
-    NoStatedDistance,
+    /// The label is empty or only white space.
+    EmptyLabel,
     /// The stated distance is not finite and positive.
     DistanceNotPositive {
         /// The distance given.
@@ -794,14 +861,7 @@ fn letter(side: usize) -> &'static str {
 impl std::fmt::Display for MeasurementCommitRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MeasurementCommitRefusal::EndpointNotPlaced { side } => write!(
-                f,
-                "endpoint {} is not placed, and a distance needs both endpoints",
-                letter(*side)
-            ),
-            MeasurementCommitRefusal::NoStatedDistance => {
-                write!(f, "no stated distance is given")
-            }
+            MeasurementCommitRefusal::EmptyLabel => empty_label_sentence(f),
             MeasurementCommitRefusal::DistanceNotPositive { distance } => {
                 not_positive_sentence(f, *distance)
             }
@@ -887,28 +947,26 @@ pub fn commit_measurement_preconditions(
     checked_distance(base, item, origin_row).map(|_| ())
 }
 
-/// The endpoints and the stated distance of `item`, once every refusal of
+/// The row `item` writes, as the file stores it, once every refusal of
 /// [`commit_measurement_preconditions`] has been asked.
 fn checked_distance(
     base: &EditedReconstruction,
     item: &EditableMeasurement,
     origin_row: Option<u32>,
-) -> Result<([MeasurementEndpoint; 2], f64, LengthUnit), MeasurementCommitRefusal> {
+) -> Result<DistanceMeasurementRow, MeasurementCommitRefusal> {
     let EditableMeasurementBody::Distance(distance) = &item.body;
-    let mut placed = [MeasurementEndpoint {
-        image: 0,
-        pixel: [0.0; 2],
-    }; 2];
-    for (side, endpoint) in distance.endpoints.iter().enumerate() {
-        let endpoint = endpoint.ok_or(MeasurementCommitRefusal::EndpointNotPlaced { side })?;
-        placed[side] = endpoint;
-        check_endpoint(base, side, endpoint)?;
+    if !is_valid_measurement_label(&item.label) {
+        return Err(MeasurementCommitRefusal::EmptyLabel);
     }
-    let (stated, unit) = distance
-        .distance
-        .ok_or(MeasurementCommitRefusal::NoStatedDistance)?;
-    if !stated_distance_is_positive(stated) {
-        return Err(MeasurementCommitRefusal::DistanceNotPositive { distance: stated });
+    for (side, endpoint) in distance.endpoints.iter().enumerate() {
+        if let Some(endpoint) = endpoint {
+            check_endpoint(base, side, *endpoint)?;
+        }
+    }
+    if let Some(stated) = distance.distance {
+        if !stated_distance_is_positive(stated) {
+            return Err(MeasurementCommitRefusal::DistanceNotPositive { distance: stated });
+        }
     }
     if let Some(row) = origin_row {
         let count = item.kind().count(base.measurements());
@@ -920,7 +978,17 @@ fn checked_distance(
             }));
         }
     }
-    Ok((placed, stated, unit))
+    Ok(DistanceMeasurementRow {
+        endpoints: distance.endpoints.map(|e| {
+            e.map(|e| DistanceMeasurementEndpoint {
+                image: e.image,
+                xy: e.pixel.map(|v| v as f32),
+            })
+        }),
+        distance: distance.distance.map(|d| d as f32),
+        unit: distance.unit,
+        label: item.label.clone(),
+    })
 }
 
 /// Write `item` into `base`: replace row `origin_row` of its kind, or append a
@@ -954,31 +1022,26 @@ fn checked_distance(
 /// let base = EditedReconstruction::new(Arc::new(SfmrReconstruction::demo(10)));
 /// let item = EditableMeasurement {
 ///     origin: None,
-///     label: "ear to ear".to_string(),
+///     label: " ".to_string(),
 ///     body: EditableMeasurementBody::Distance(EditableDistance {
 ///         endpoints: [Some(MeasurementEndpoint { image: 0, pixel: [10.0, 12.5] }), None],
-///         distance: Some((12.0, LengthUnit::Centimetre)),
+///         distance: None,
+///         unit: LengthUnit::Centimetre,
 ///     }),
 /// };
 /// let refused = commit_measurement(&base, &item, None).unwrap_err();
-/// assert_eq!(refused, MeasurementCommitRefusal::EndpointNotPlaced { side: 1 });
+/// assert_eq!(refused, MeasurementCommitRefusal::EmptyLabel);
 /// ```
 pub fn commit_measurement(
     base: &EditedReconstruction,
     item: &EditableMeasurement,
     origin_row: Option<u32>,
 ) -> Result<MeasurementCommit, MeasurementCommitRefusal> {
-    let ([a, b], stated, unit) = checked_distance(base, item, origin_row)?;
+    let row = checked_distance(base, item, origin_row)?;
     let kind = item.kind();
-    let row = DistanceRow {
-        distance: stated as f32,
-        unit: unit.code(),
-        images: [a.image, b.image],
-        pixels: [a.pixel, b.pixel].map(|p| [p[0] as f32, p[1] as f32]),
-        label: item.label.clone(),
-    };
     let held = base.measurements().distance.as_ref();
-    let mut rows: Vec<DistanceRow> = held.map(distance_rows_of).unwrap_or_default();
+    let mut rows: Vec<DistanceMeasurementRow> =
+        held.map(DistanceMeasurementsData::rows).unwrap_or_default();
     let index = match origin_row {
         Some(at) => {
             if rows[at as usize] == row {
@@ -999,7 +1062,7 @@ pub fn commit_measurement(
         }
     };
     let measurements = MeasurementsData {
-        distance: Some(distance_data(&rows)),
+        distance: Some(DistanceMeasurementsData::from_rows(&rows)),
     };
     Ok(MeasurementCommit {
         value: base.with_measurements(measurements),
@@ -1035,7 +1098,7 @@ pub fn delete_measurement(
                 .distance
                 .as_ref()
                 .expect("a count above zero means the kind is present");
-            let mut rows = distance_rows_of(held);
+            let mut rows = held.rows();
             rows.remove(index as usize);
             let map = (0..count as u32)
                 .map(|i| match i.cmp(&index) {
@@ -1045,56 +1108,9 @@ pub fn delete_measurement(
                 })
                 .collect();
             let measurements = MeasurementsData {
-                distance: (!rows.is_empty()).then(|| distance_data(&rows)),
+                distance: (!rows.is_empty()).then(|| DistanceMeasurementsData::from_rows(&rows)),
             };
             Ok((base.with_measurements(measurements), map))
         }
-    }
-}
-
-/// One distance row as the file stores it.
-#[derive(Debug, Clone, PartialEq)]
-struct DistanceRow {
-    distance: f32,
-    unit: u8,
-    images: [u32; 2],
-    pixels: [[f32; 2]; 2],
-    label: String,
-}
-
-/// The rows of `m`, in stored order.
-fn distance_rows_of(m: &DistanceMeasurementsData) -> Vec<DistanceRow> {
-    (0..m.len()).map(|i| DistanceRow::read(m, i)).collect()
-}
-
-impl DistanceRow {
-    /// Row `i` of `m`, read with `.get` so a value built by hand whose columns
-    /// disagree in length reads as a row a commit refuses, never as a panic,
-    /// as `resolve_distance_measurements` reads it: a missing image is past
-    /// the image set, a missing pixel or distance is not a number, a missing
-    /// unit is metres and a missing label is empty. A load refuses such a
-    /// value, so a row read from a file is read exactly.
-    fn read(m: &DistanceMeasurementsData, i: usize) -> Self {
-        DistanceRow {
-            distance: m.distances.get(i).copied().unwrap_or(f32::NAN),
-            unit: m.units.get(i).copied().unwrap_or(LengthUnit::Metre.code()),
-            images: [0, 1].map(|k| m.image_indexes.get((i, k)).copied().unwrap_or(u32::MAX)),
-            pixels: [0, 1].map(|k| {
-                [0, 1].map(|c| m.endpoints_xy.get((i, k, c)).copied().unwrap_or(f32::NAN))
-            }),
-            label: m.labels.get(i).cloned().unwrap_or_default(),
-        }
-    }
-}
-
-/// The columns that hold `rows`, which must not be empty.
-fn distance_data(rows: &[DistanceRow]) -> DistanceMeasurementsData {
-    let n = rows.len();
-    DistanceMeasurementsData {
-        distances: Array1::from_iter(rows.iter().map(|r| r.distance)),
-        units: Array1::from_iter(rows.iter().map(|r| r.unit)),
-        image_indexes: Array2::from_shape_fn((n, 2), |(i, k)| rows[i].images[k]),
-        endpoints_xy: Array3::from_shape_fn((n, 2, 2), |(i, k, c)| rows[i].pixels[k][c]),
-        labels: rows.iter().map(|r| r.label.clone()).collect(),
     }
 }

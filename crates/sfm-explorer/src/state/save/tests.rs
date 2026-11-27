@@ -757,7 +757,13 @@ fn a_save_writes_the_value_s_own_measurements() {
     // Rows 1..5 moved down, and row 0 came back last.
     assert_eq!(
         m.labels,
-        ["nose to tail", "", "to the sky", "paw width", "ear to ear"]
+        [
+            "nose to tail",
+            "bare pixel",
+            "to the sky",
+            "paw width",
+            "ear to ear"
+        ]
     );
     assert_eq!(written.metadata.distance_measurement_count, Some(5));
     let node = &state.scene[0];

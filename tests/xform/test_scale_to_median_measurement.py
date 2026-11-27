@@ -87,7 +87,9 @@ def test_stated_lengths_in_other_units_convert_to_the_target(demo_workspace):
     demo = SfmrReconstruction.load(demo_workspace)
     path = _write(
         demo_workspace,
-        _restated(demo, [(100.0, "cm", "", True), (1.0 / 0.3048, "ft", "", True)]),
+        _restated(
+            demo, [(100.0, "cm", "in cm", True), (1.0 / 0.3048, "ft", "in ft", True)]
+        ),
     )
 
     result, output = _xform(path, "--scale-to-median-measurement", "mm")
@@ -118,6 +120,25 @@ def test_a_measurement_that_gives_no_factor_is_left_out_with_its_reason(demo_wor
     assert SfmrReconstruction.load(output).world_space_unit == "cm"
 
 
+def test_a_ruler_is_left_out_for_stating_no_distance(demo_workspace):
+    """A measurement with no stated distance reads a length but gives no
+    scale, and is listed under Left out with that reason."""
+    demo = SfmrReconstruction.load(demo_workspace)
+    path = _write(
+        demo_workspace,
+        _restated(demo, [(1.0, "m", "edge", True), (float("nan"), "m", "ruler", True)]),
+    )
+
+    result, _ = _xform(path, "--scale-to-median-measurement", "cm")
+
+    assert result.exit_code == 0, result.output
+    assert "Used 1 of 2 distance measurements:" in result.output
+    assert (
+        '  Left out:\n    Distance #1 "ruler": it states no distance, so it reads a '
+        "length but gives no scale\n"
+    ) in result.output
+
+
 def test_measurements_that_disagree_are_warned_about(demo_workspace):
     """The edge stated three times, once 20% long: the factor is the other
     two's, and the warning names the long one."""
@@ -126,7 +147,11 @@ def test_measurements_that_disagree_are_warned_about(demo_workspace):
         demo_workspace,
         _restated(
             demo,
-            [(1.0, "m", "", True), (1.0, "m", "", True), (1.2, "m", "long", True)],
+            [
+                (1.0, "m", "edge", True),
+                (1.0, "m", "edge again", True),
+                (1.2, "m", "long", True),
+            ],
         ),
     )
 
@@ -147,7 +172,7 @@ def test_measurements_that_disagree_are_warned_about(demo_workspace):
 
 def test_no_usable_measurement_fails_and_writes_nothing(demo_workspace):
     demo = SfmrReconstruction.load(demo_workspace)
-    path = _write(demo_workspace, _restated(demo, [(1.0, "m", "", False)]))
+    path = _write(demo_workspace, _restated(demo, [(1.0, "m", "off", False)]))
 
     result, output = _xform(path, "--scale-to-median-measurement", "mm")
 

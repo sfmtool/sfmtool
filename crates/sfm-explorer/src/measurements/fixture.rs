@@ -193,7 +193,12 @@ pub(crate) fn measured_reconstruction(world_space_unit: Option<&str>) -> SfmrRec
             LENGTH_UNIT_M,
             "nose to tail",
         ),
-        ([(0, kp(2, 0)), (0, BARE_PIXEL)], 1.0, LENGTH_UNIT_M, ""),
+        (
+            [(0, kp(2, 0)), (0, BARE_PIXEL)],
+            1.0,
+            LENGTH_UNIT_M,
+            "bare pixel",
+        ),
         (
             [(0, kp(0, 0)), (0, kp(3, 0))],
             1.0,

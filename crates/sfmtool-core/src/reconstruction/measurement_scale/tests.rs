@@ -311,6 +311,96 @@ fn each_exclusion_names_its_reason() {
     );
 }
 
+/// A measurement that states no distance and one with an endpoint not placed
+/// are each excluded with their own reason: no stated distance before any
+/// endpoint, and an endpoint not placed before one refused, `A` before `B`.
+#[test]
+fn no_stated_distance_and_an_endpoint_not_placed_are_their_own_reasons() {
+    let unplaced_b = ResolvedDistanceMeasurement {
+        endpoints: [finite(0.0), Err(EndpointRefusal::NotPlaced)],
+        scene_distance: None,
+    };
+    let refused_a_unplaced_b = ResolvedDistanceMeasurement {
+        endpoints: [
+            Err(EndpointRefusal::NoPatchFrames),
+            Err(EndpointRefusal::NotPlaced),
+        ],
+        scene_distance: None,
+    };
+    let unplaced_both = ResolvedDistanceMeasurement {
+        endpoints: [
+            Err(EndpointRefusal::NotPlaced),
+            Err(EndpointRefusal::NotPlaced),
+        ],
+        scene_distance: None,
+    };
+    let mut measurements = stored(&[(1.0, LENGTH_UNIT_M); 6]);
+    let d = measurements.distance.as_mut().unwrap();
+    // A ruler with both endpoints read, and one with an endpoint not placed:
+    // each is left out for stating no distance.
+    d.distances[1] = f32::NAN;
+    d.distances[5] = f32::NAN;
+    let readings = [
+        apart(0.5),
+        apart(0.5),
+        unplaced_b,
+        refused_a_unplaced_b,
+        unplaced_both,
+        ResolvedDistanceMeasurement {
+            endpoints: [finite(0.0), Err(EndpointRefusal::NotPlaced)],
+            scene_distance: None,
+        },
+    ];
+    let scale = distance_measurement_scale(&measurements, &readings, LengthUnit::Metre).unwrap();
+    assert_eq!(
+        scale.factors.iter().map(|f| f.index).collect::<Vec<_>>(),
+        [0]
+    );
+    let reasons: Vec<_> = scale
+        .excluded
+        .iter()
+        .map(|e| (e.index, e.reason.clone()))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            (1, MeasurementScaleExclusion::NoStatedDistance),
+            (
+                2,
+                MeasurementScaleExclusion::EndpointNotPlaced { endpoint: 1 }
+            ),
+            (
+                3,
+                MeasurementScaleExclusion::EndpointNotPlaced { endpoint: 1 }
+            ),
+            (
+                4,
+                MeasurementScaleExclusion::EndpointNotPlaced { endpoint: 0 }
+            ),
+            (5, MeasurementScaleExclusion::NoStatedDistance),
+        ]
+    );
+    assert_eq!(
+        scale.excluded[0].reason.to_string(),
+        "it states no distance, so it reads a length but gives no scale"
+    );
+    assert_eq!(
+        scale.excluded[1].reason.to_string(),
+        "endpoint B is not placed"
+    );
+    // None usable is the error, still with every reason.
+    let only_rulers = stored(&[(f32::NAN, LENGTH_UNIT_M)]);
+    assert_eq!(
+        distance_measurement_scale(&only_rulers, &[apart(1.0)], LengthUnit::Metre).unwrap_err(),
+        DistanceMeasurementScaleError::NoUsableMeasurement {
+            excluded: vec![ExcludedMeasurement {
+                index: 0,
+                reason: MeasurementScaleExclusion::NoStatedDistance,
+            }]
+        }
+    );
+}
+
 /// A ratio that overflows to infinity or underflows to zero is excluded,
 /// though its stated and scene distances are each usable, and the rest give a
 /// finite factor and finite statistics; a mean of factors near `f64::MAX` does

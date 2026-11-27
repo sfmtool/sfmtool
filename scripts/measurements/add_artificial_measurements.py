@@ -276,7 +276,12 @@ def build(
             UNIT_M,
         ),
         Measurement(
-            "one image again", "", a2, b2, stated(a2, b2, factor, UNIT_M), UNIT_M
+            "one image again",
+            "one image again",
+            a2,
+            b2,
+            stated(a2, b2, factor, UNIT_M),
+            UNIT_M,
         ),
         Measurement(
             "bad",

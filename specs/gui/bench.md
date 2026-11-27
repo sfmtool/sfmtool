@@ -1549,9 +1549,11 @@ item stays on the bench and focused, its origin re-seated on the row written,
 which is selected. A commit of what the row already holds pushes no version
 and writes the no-effect row. It is refused while a background task or a
 camera model proposal holds the node, on a view-only bench, and with core's
-refusals (an endpoint not placed, no stated distance, an image past the image
-set, a pixel outside its image), each in one sentence
-(`measurement_commit_refusal`, which greys Measurement View's *Commit*).
+refusals (an empty label, a placed endpoint's image past the image set or its
+pixel outside its image), each in one sentence
+(`measurement_commit_refusal`, which greys Measurement View's *Commit*). An
+endpoint not placed and no stated distance are written as absent, not
+refused.
 
 **Deleting a stored measurement** (`AppState::delete_measurement`) is a direct
 edit of the reconstruction, not a bench step: one version (`Deleted distance #2
@@ -1568,8 +1570,9 @@ replaces the item's `Arc` under the same `ItemId` in one version through
 stated distance of distance #2 to 4.2 cm`), with one `Bench` row, and leaves
 the reconstruction alone. A value the item holds already pushes no version and
 writes the no-effect row. Both are refused while a background task holds the
-node and on a view-only bench ([`measurement-view.md`](measurement-view.md) §
-"The label and the stated distance").
+node and on a view-only bench, and the label where it is empty or only white
+space ([`measurement-view.md`](measurement-view.md) § "The label and the
+stated distance").
 
 **Moving an endpoint** (`AppState::set_bench_measurement_endpoint`) is a bench
 step of the same shape, made by core's `set_measurement_endpoint`: it sets one

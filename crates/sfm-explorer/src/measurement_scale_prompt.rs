@@ -602,7 +602,8 @@ fn factor_table(
                         let stated = view
                             .rows
                             .get(f.index)
-                            .map_or_else(String::new, DistanceRow::stated_text);
+                            .and_then(DistanceRow::stated_text)
+                            .unwrap_or_default();
                         ui.label(cell(view.title(recon, f.index)));
                         ui.label(cell(stated));
                         ui.label(cell(format!(

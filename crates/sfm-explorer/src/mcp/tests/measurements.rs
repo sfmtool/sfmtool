@@ -56,6 +56,57 @@ fn list_measurements_gives_each_row_and_reading() {
     );
 }
 
+/// A stored measurement with no stated distance lists a null
+/// `stated_distance` and the reconstructed distance alone, and one with an
+/// endpoint not placed lists that endpoint as null and its result as
+/// `not_placed`, in `list_measurements` and in `get_measurement`.
+#[test]
+fn a_ruler_and_an_unplaced_endpoint_read_as_null_and_their_states() {
+    let mut recon = crate::measurements::fixture::measured_reconstruction(Some("m"));
+    let m = recon.image_set.measurements.distance.as_mut().unwrap();
+    m.distances[0] = f32::NAN;
+    m.image_indexes[[1, 1]] = u32::MAX;
+    m.endpoints_xy[[1, 1, 0]] = f32::NAN;
+    m.endpoints_xy[[1, 1, 1]] = f32::NAN;
+    let mut state = AppState::new();
+    state.append_node(crate::scene::SceneNode::from_path(
+        std::path::Path::new("measured.sfmr"),
+        recon,
+    ));
+    let mut viewer = Viewer3D::new();
+    let listed = call(&mut state, &mut viewer, "list_measurements", json!({}));
+    let rows = listed["measurements"].as_array().expect("an array");
+    assert_eq!(rows[0]["stated_distance"], Value::Null);
+    assert_eq!(rows[0]["unit"], "cm");
+    assert_eq!(rows[0]["result"]["state"], "no_stated_distance");
+    assert_eq!(rows[0]["result"]["unit"], "m");
+    let reconstructed = rows[0]["result"]["reconstructed_distance"]
+        .as_f64()
+        .unwrap();
+    assert!((reconstructed - 1.5).abs() < 1e-4, "{reconstructed}");
+    assert_eq!(
+        rows[0]["row_text"],
+        "Distance #0  ear to ear  \u{2192} 1.500 m"
+    );
+    assert_eq!(
+        rows[1]["result"],
+        json!({ "state": "not_placed", "endpoint": "b" })
+    );
+    assert_eq!(rows[1]["endpoints"][1], Value::Null);
+    assert_eq!(rows[1]["endpoints"][0]["endpoint"], "a");
+    let one = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement",
+        json!({ "measurement_index": 1 }),
+    );
+    assert_eq!(one["endpoints"][1], Value::Null, "{one}");
+    assert_eq!(one["endpoints"][0]["endpoint"], "a");
+    // Of the five, only measurement 4 states a distance and has a reading, so
+    // there is no median line.
+    assert_eq!(one["median"], Value::Null);
+}
+
 /// `get_measurement` gives each endpoint's resolution with its candidates, a
 /// refusal's sentence, and the median line.
 #[test]
@@ -428,9 +479,9 @@ fn set_bench_measurement_distance_reads_text_and_numbers() {
             .bench_measurement(id, "distance #2")
             .unwrap()
             .as_distance()
-            .unwrap()
-            .distance,
-        Some((0.5, sfmtool_core::LengthUnit::Metre))
+            .map(|d| (d.distance, d.unit))
+            .unwrap(),
+        (Some(0.5), sfmtool_core::LengthUnit::Metre)
     );
     let error = refused_call(
         &mut state,
@@ -520,8 +571,9 @@ fn an_endpoint_switched_over_the_wire_lands_on_the_same_point() {
     assert_eq!(resolution["candidates"][chosen]["point"], 1);
     assert_eq!(
         crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())[1]
-            .images,
-        [0, 1],
+            .endpoints
+            .map(|e| e.map(|e| e.image)),
+        [Some(0), Some(1)],
         "the stored row changed"
     );
 }
@@ -692,18 +744,29 @@ fn create_bench_measurement_starts_an_item_the_other_tools_finish() {
         json!({ "reconstruction_label": "measured", "item": label }),
     );
     assert_eq!(item["origin"], Value::Null, "{item}");
+    // The new item has its default label, no stated distance and no endpoint
+    // B, and reads as not placed.
+    assert_eq!(item["label"], "measurement 1");
+    assert_eq!(item["stated_distance"], Value::Null);
+    assert_eq!(item["unit"], "m");
+    assert_eq!(item["endpoints"][1], Value::Null);
+    assert_eq!(
+        item["result"],
+        json!({ "state": "not_placed", "endpoint": "b" })
+    );
+    // An empty label is refused in core's words.
     let refused = refused_call(
         &mut state,
         &mut viewer,
-        "commit_bench_measurement",
-        json!({ "reconstruction_label": "measured" }),
+        "set_bench_measurement_label",
+        json!({ "reconstruction_label": "measured", "label": "" }),
     );
-    assert_eq!(
-        refused.0,
-        format!(
-            "Cannot commit {label}: endpoint B is not placed, and a distance needs both \
-             endpoints."
-        )
+    assert!(
+        refused
+            .0
+            .ends_with("a measurement needs a label, and this one is empty or only white space."),
+        "{}",
+        refused.0
     );
     call(
         &mut state,

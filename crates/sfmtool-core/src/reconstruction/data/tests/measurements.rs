@@ -26,7 +26,7 @@ fn sample_measurements() -> DistanceMeasurementsData {
             [[300.0_f32, 400.0_f32], [500.5_f32, 600.25_f32]],
             [[50.0_f32, 60.0_f32], [70.0_f32, 80.0_f32]]
         ],
-        labels: vec!["ruler edge".into(), "".into(), "door — height".into()],
+        labels: vec!["ruler edge".into(), "shelf".into(), "door — height".into()],
     }
 }
 
@@ -172,7 +172,7 @@ fn subset_by_image_indices_filters_and_remaps_measurements() {
             [[300.0_f32, 400.0_f32], [500.5_f32, 600.25_f32]]
         ]
     );
-    assert_eq!(m.labels, vec!["ruler edge".to_string(), "".to_string()]);
+    assert_eq!(m.labels, vec!["ruler edge".to_string(), "shelf".to_string()]);
 
     // Keep only image [1]: no measurement references image 1 -> None.
     let empty_m = recon.subset_by_image_indices(&[1], false).unwrap();

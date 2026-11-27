@@ -1165,25 +1165,26 @@ class TestPerImageLensCorrections:
 
 def _sample_measurements_dict() -> dict:
     """The columns of five valid distance measurements exercising all five
-    length units, a same-image pair, cross-image pairs, an empty label, and
-    UTF-8 labels: the value of `measurements["distance"]`."""
+    length units, a same-image pair, cross-image pairs, UTF-8 labels, and a row
+    with no stated distance (NaN) and no endpoint A (0xFFFFFFFF with NaN
+    coordinates): the value of `measurements["distance"]`."""
     return {
-        "distances": np.array([150.0, 42.5, 1.25, 12.0, 6.5], dtype=np.float32),
+        "distances": np.array([150.0, np.nan, 1.25, 12.0, 6.5], dtype=np.float32),
         "units": np.array([0, 1, 2, 3, 4], dtype=np.uint8),
         "image_indexes": np.array(
-            [[0, 0], [0, 1], [2, 5], [3, 4], [1, 6]], dtype=np.uint32
+            [[0, 0], [0xFFFFFFFF, 1], [2, 5], [3, 4], [1, 6]], dtype=np.uint32
         ),
         "endpoints_xy": np.array(
             [
                 [[10.5, 20.25], [100.0, 200.5]],
-                [[15.0, 30.0], [120.25, 250.75]],
+                [[np.nan, np.nan], [120.25, 250.75]],
                 [[50.0, 60.0], [70.0, 80.0]],
                 [[1.0, 2.0], [260.5, 470.25]],
                 [[135.0, 240.0], [200.0, 300.0]],
             ],
             dtype=np.float32,
         ),
-        "labels": ["ruler — 150 mm", "", "αβγ", "bench width", "door height"],
+        "labels": ["ruler — 150 mm", "shelf", "αβγ", "bench width", "door height"],
     }
 
 
@@ -1379,8 +1380,8 @@ class TestMeasurementsIo:
         with pytest.raises(ValueError, match="at least one"):
             write_sfmr(out, dict(base, measurements={"distance": empty_m}))
 
-        # Non-positive or NaN distance.
-        for bad_dist in (0.0, -1.0, np.nan, np.inf):
+        # A non-positive or infinite distance; NaN is no stated distance.
+        for bad_dist in (0.0, -1.0, np.inf):
             m = _sample_measurements_dict()
             m["distances"] = m["distances"].copy()
             m["distances"][0] = bad_dist
@@ -1407,6 +1408,25 @@ class TestMeasurementsIo:
         m["endpoints_xy"][0, 0, 0] = float(cam.width)
         with pytest.raises(ValueError, match="endpoints_xy"):
             write_sfmr(out, dict(base, measurements={"distance": m}))
+
+        # An absent endpoint's index and coordinates that disagree.
+        m = _sample_measurements_dict()
+        m["endpoints_xy"] = m["endpoints_xy"].copy()
+        m["endpoints_xy"][1, 0, 1] = 5.0
+        with pytest.raises(ValueError, match="must both be NaN"):
+            write_sfmr(out, dict(base, measurements={"distance": m}))
+        m = _sample_measurements_dict()
+        m["endpoints_xy"] = m["endpoints_xy"].copy()
+        m["endpoints_xy"][2, 0] = np.nan
+        with pytest.raises(ValueError, match="an absent endpoint, but image_indexes"):
+            write_sfmr(out, dict(base, measurements={"distance": m}))
+
+        # An empty or white-space label.
+        for empty in ("", " \t"):
+            m = _sample_measurements_dict()
+            m["labels"] = [empty] + m["labels"][1:]
+            with pytest.raises(ValueError, match="a label must not be empty"):
+                write_sfmr(out, dict(base, measurements={"distance": m}))
 
         # Mismatched labels length.
         m = _sample_measurements_dict()
