@@ -43,7 +43,7 @@ from ._refine_keypoints import RefineKeypointsTransform
 from ._refine_normals import RefineNormalsTransform
 from ._rotate import RotateTransform
 from ._scale import ScaleTransform
-from ._scale_by_measurements import ScaleByMeasurementsTransform
+from ._scale_to_median_measurement import ScaleToMedianMeasurementTransform
 from ._select_by_distribution import SelectByDistributionFilter
 from ._similarity import SimilarityTransform
 from ._switch_camera_model import SwitchCameraModelTransform
@@ -56,7 +56,7 @@ __all__ = [
     "RotateTransform",
     "TranslateTransform",
     "ScaleTransform",
-    "ScaleByMeasurementsTransform",
+    "ScaleToMedianMeasurementTransform",
     "RemoveShortTracksFilter",
     "RemoveNarrowTracksFilter",
     "RemoveIsolatedPointsFilter",

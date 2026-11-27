@@ -1021,7 +1021,7 @@ The Python tests that could use the binding are those that want a known
 answer on a small workspace with photographs, rather than a solve of
 seoul_bull or kerry_park:
 [test_measurement_endpoint_rust_bindings.py](../../tests/rust_bindings/reconstruction/test_measurement_endpoint_rust_bindings.py)
-and [test_scale_by_measurements.py](../../tests/xform/test_scale_by_measurements.py),
+and [test_scale_to_median_measurement.py](../../tests/xform/test_scale_to_median_measurement.py),
 which would have a measurement of exactly 1 m to resolve and scale by;
 [test_sfmr_image_readings.py](../../tests/test_sfmr_image_readings.py), whose
 readings can be checked against the photographs the workspace holds; and
@@ -1287,10 +1287,10 @@ Each step is one change on its own branch, with its tests.
      resolves to its corner within `10⁻⁶` m and the scene distance is 1 m,
      where on seoul_bull it could only check the distance against its own
      endpoints;
-   - in [test_scale_by_measurements.py](../../tests/xform/test_scale_by_measurements.py),
-     the two embedded-patches tests, which converted a copy of the seoul_bull
-     workspace: two unmoved top points stand 0.875 m apart, so 875 mm gives a
-     scale of exactly 1000;
+   - in [test_scale_to_median_measurement.py](../../tests/xform/test_scale_to_median_measurement.py),
+     every test of `sfm xform --scale-to-median-measurement`, on a copy of
+     the demo workspace: the cube edge's stored 1 m measurement, restated
+     where a test needs others, gives a factor of 1000 to millimetres;
    - in [test_sfmr_image_readings.py](../../tests/test_sfmr_image_readings.py),
      the four tests of a value without readings, which copied the seoul_bull
      ground truth and its 17 images: the readings a save gathers from the
@@ -1305,8 +1305,7 @@ Each step is one change on its own branch, with its tests.
      the face each outer camera sees from behind.
 
    Kept: the other measurement endpoint tests, on seoul_bull's points at
-   infinity and real keypoints, which the scene does not hold; the scale
-   tests that resolve Point IDs through feature indexes and the readings
+   infinity and real keypoints, which the scene does not hold; the readings
    tests of `.sift` files and `read_sfmr` dicts, which need a `sift_files`
    value; the render-patches tests of a value with no patch cloud or a
    `sift_files` one; and all of

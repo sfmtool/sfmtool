@@ -390,7 +390,7 @@ fn move_unit(state: &AppState, movement: &Movement) -> Result<(f64, String), Too
                  scene units: {reason}, so there is nothing to convert {unit} to. Select a \
                  reconstruction that declares a unit, send the distances without unit (in \
                  scene units), or give {which} a physical unit with sfm xform \
-                 --scale-by-measurements."
+                 --scale-to-median-measurement."
             )))
         }
     }

@@ -262,7 +262,7 @@ naming each such image, the `.sift` path tried and the image path tried.
 | `--localize-keypoints` | [localize-keypoints-command.md](reconstruction/xform/localize-keypoints-command.md) |
 | `--include-by-distribution` | [select-by-distribution-command.md](reconstruction/xform/select-by-distribution-command.md) |
 | `--find-points-at-infinity` | [find-points-at-infinity.md](reconstruction/xform/find-points-at-infinity.md) |
-| `--scale-by-measurements` | [scale-by-measurements-command.md](reconstruction/xform/scale-by-measurements-command.md) |
+| `--scale-to-median-measurement` | [scale-to-median-measurement-command.md](reconstruction/xform/scale-to-median-measurement-command.md) |
 
 ## Visualization
 

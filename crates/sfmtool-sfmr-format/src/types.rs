@@ -883,8 +883,8 @@ pub const NO_REFERENCE_OBSERVATION: i32 = -1;
 /// The one table of them in the Rust workspace, so a consumer that converts a
 /// length between two of them (the viewer's `set_view` `move.unit`, Track
 /// View's length display) reads the factors from where the format declares the
-/// list. The Python side keeps its own copy in
-/// `sfmtool.xform._scale_by_measurements`.
+/// list. Python converts no length itself: it reads the names as
+/// `sfmtool.fileio.LENGTH_UNIT_NAMES`, and core converts.
 pub const WORLD_SPACE_UNITS: [(&str, f64); 5] = [
     ("mm", 0.001),
     ("cm", 0.01),

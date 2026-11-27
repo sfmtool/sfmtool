@@ -292,11 +292,9 @@ optional unit suffix, `12in`, `30.48cm` or `30.48 cm`: an optional sign, digits
 with an optional decimal point, and an optional exponent, then optionally a
 space and one of the format's unit names (`mm`, `cm`, `m`, `in`, `ft`).
 Surrounding space is ignored. A bare number is in `bare_unit`, which the caller
-chooses: Measurement View passes the reconstruction's `world_space_unit`, or
-metres where it has none, and `sfm xform --scale-by-measurements` passes the
-unit its YAML file names
-([`../../cli/reconstruction/xform/scale-by-measurements-command.md`](../../cli/reconstruction/xform/scale-by-measurements-command.md)),
-so the panel and the command read a distance the same way. Text that is not
+chooses: Measurement View's stated distance field, and the wire's
+`set_bench_measurement_distance` with it, pass the reconstruction's
+`world_space_unit`, or metres where it has none. Text that is not
 such a number (`inf` and `nan` among it), a suffix that names no unit, and a
 value that is not finite and strictly positive are each refused with a
 sentence saying which.

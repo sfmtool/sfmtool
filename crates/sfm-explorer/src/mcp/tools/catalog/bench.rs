@@ -981,8 +981,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           stated distance field does: one bench version labelled like \"Set the \
                           stated distance of distance #2 to 4.2 cm\", which leaves the \
                           reconstruction alone until the item is committed. The distance is a \
-                          number with an optional unit suffix, read as sfm xform \
-                          --scale-by-measurements reads one (\"12in\", \"30.48 cm\"); a bare \
+                          number with an optional unit suffix, read as the field reads one \
+                          (\"12in\", \"30.48 cm\"); a bare \
                           number, or a JSON number, is in the reconstruction's \
                           world_space_unit, or in metres where it has none. Refused, in the \
                           panel's words, for text that does not read, a unit other than mm, \

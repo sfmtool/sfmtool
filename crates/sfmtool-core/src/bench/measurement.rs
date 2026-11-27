@@ -603,9 +603,8 @@ fn not_positive_sentence(f: &mut std::fmt::Formatter<'_>, distance: f64) -> std:
 /// (`mm`, `cm`, `m`, `in`, `ft`), with or without a space before them. The
 /// number is an optional sign, digits with an optional decimal point (`12`,
 /// `12.`, `0.3048`, `.5`), and an optional exponent (`1e-3`). Surrounding
-/// space is ignored. This is how `sfm xform --scale-by-measurements` reads a
-/// measurement's `distance`, and how Measurement View's stated distance field
-/// reads what is typed in it.
+/// space is ignored. This is how Measurement View's stated distance field, and
+/// the wire's `set_bench_measurement_distance`, read what is typed in it.
 ///
 /// # Errors
 ///

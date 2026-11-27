@@ -1900,8 +1900,8 @@ pub(crate) fn result_lines(
                     "Implied scale: 1 su = {} {unit}",
                     measurements::significant(unit_per_scene_unit, 4)
                 ),
-                "What sfm xform --scale-by-measurements would apply from this measurement \
-                 alone"
+                "What Scale to Median Measurement and sfm xform \
+                 --scale-to-median-measurement would apply were this the only measurement"
                     .to_string(),
             ),
         ],

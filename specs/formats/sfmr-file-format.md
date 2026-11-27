@@ -3420,7 +3420,7 @@ describes. Other parts of this spec are implemented by:
   other finite point the mean-viewing normal.
 - World orientation: `sfm xform --rotate` and `--align-to` refine it after a
   solve.
-- `world_space_unit`: `sfm xform --scale-by-measurements` scales a
+- `world_space_unit`: `sfm xform --scale-to-median-measurement` scales a
   reconstruction and sets the field. The five units and their lengths in
   metres are `sfmtool_sfmr_format::WORLD_SPACE_UNITS`, re-exported by
   `sfmtool-core`, with `world_space_unit_in_metres` to look one up.

@@ -584,8 +584,8 @@ impl AppState {
     /// mode, and the wire's `set_bench_measurement_distance`.
     ///
     /// `text` is a number with an optional unit suffix, read by core's
-    /// `parse_stated_distance` as `sfm xform --scale-by-measurements` reads a
-    /// distance; a bare number is in the reconstruction's `world_space_unit`,
+    /// `parse_stated_distance`; a bare number is in the reconstruction's
+    /// `world_space_unit`,
     /// or in metres where it has none. One bench step (`Set the stated
     /// distance of distance #2 to 4.2 cm`). A distance the item states
     /// already, as the file would store it, pushes no version and writes the

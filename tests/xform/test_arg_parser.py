@@ -32,7 +32,7 @@ from sfmtool.xform._arg_parser import (
         "--filter-by-patch-size",
         "--include-range",
         "--exclude-range",
-        "--scale-by-measurements",
+        "--scale-to-median-measurement",
         "--include-glob",
         "--exclude-glob",
         "--include-by-distribution",
@@ -73,6 +73,11 @@ def test_interleaved_options_keep_order_and_repeated_values():
         (
             ["--minimal=unknown"],
             "Invalid --minimal token 'unknown': expected key=value",
+        ),
+        (
+            ["--scale-to-median-measurement", "furlong"],
+            "Invalid --scale-to-median-measurement parameter 'furlong': "
+            "expected a unit, one of mm, cm, m, in or ft",
         ),
     ],
 )

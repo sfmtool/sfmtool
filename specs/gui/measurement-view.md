@@ -338,8 +338,9 @@ A distance measurement's result (`DistanceResult`) is exactly one of:
   implies, `stated / reconstructed`.
 - **Both endpoints finite, no unit.** The reconstructed distance in scene units
   (`su`), and the length one scene unit stands for in the measurement's unit,
-  `stated / reconstructed`, which is what `sfm xform --scale-by-measurements`
-  would apply from this measurement alone.
+  `stated / reconstructed`, which is the factor `Scale to Median Measurement`
+  and `sfm xform --scale-to-median-measurement` would apply were this the only
+  measurement.
 - **An endpoint refused.** The first refused side, `A` before `B`.
 - **An endpoint at infinity.** The first side at infinity, where neither is
   refused.
@@ -669,9 +670,8 @@ item is committed.
 
 - **The label** is any text, the empty one included; it is not the item's name
   on the bench, which *Rename* sets.
-- **The stated distance** is read by core's `parse_stated_distance`, the parser
-  `sfm xform --scale-by-measurements` reads a YAML distance with: a number with
-  an optional unit suffix, `12in`, `30.48cm` or `30.48 cm`. A bare number is in
+- **The stated distance** is read by core's `parse_stated_distance`: a number
+  with an optional unit suffix, `12in`, `30.48cm` or `30.48 cm`. A bare number is in
   the reconstruction's `world_space_unit`, or in metres where it has none, and
   the field's hover text names that unit. Text that does not read, a suffix
   other than `mm`, `cm`, `m`, `in` and `ft`, and a value that is not finite and
