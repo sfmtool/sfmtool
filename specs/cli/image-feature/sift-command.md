@@ -120,7 +120,10 @@ written, `image_files_to_sift_files` calls `PhotographCache.build_mipmaps`
 over those images on one cache of budget 0: a mipmap already current is read,
 not made again, an in-core photograph is not decoded, and each out-of-core one
 whose mipmap is missing or stale is decoded again for its build, whichever the
-feature tool. The builds start after the extraction's decodes are freed, and
+feature tool. The build decodes the photograph itself rather than taking the
+array the extraction decoded, which keeps the two apart and cannot hand the
+build the wrong pixels, at the cost of a second decode, 0.8 to 1.7 s for a
+200-megapixel photograph. The builds start after the extraction's decodes are freed, and
 the cache's default build budget (a quarter of physical memory, between 1 and
 16 GiB) bounds them, where the `sfmtool` tool's extraction runs as many images
 as fit in half of physical memory, so they do not raise the command's peak memory: over two 24-megapixel

@@ -87,11 +87,16 @@ with a cache budget of 7.8 GiB, one run each):
 | `embed_patches`, in core | 37.7, 38.5 s; 8.4 GB | 31.4, 31.6 s; 10.5 GB | 56.0 s; 9.2 GB | 36.9 s; 10.9 GB |
 | `embed_patches`, from mipmaps | 59.4, 46.2 s; 3.8 GB | 30.5, 30.5 s; 4.3 GB | 82.2 s; 3.9 GB | 35.6 s; 4.6 GB |
 | `embed_patches`, from mipmaps, 0.8 GiB cache | 80.6, 106.7 s; 4.2 GB | 62.7, 63.4 s; 5.5 GB | 70.7 s; 5.2 GB | 69.2 s; 4.5 GB |
+| `sfm cluster-patches`, in core | 6.7, 6.6 s; 8.8 GB | 5.5, 5.6 s; 10.5 GB | 17.3 s; 9.2 GB | 16.7 s; 10.2 GB |
+| `sfm cluster-patches`, from mipmaps | 4.4, 4.5 s; 2.3 GB | 4.0, 4.1 s; 2.8 GB | 15.0 s; 2.3 GB | 14.2 s; 2.8 GB |
 
-The full tables, with `sfm cluster-patches` and the kernel-mode times, are
-in [drafts/out-of-core-photograph-pyramid.md](drafts/out-of-core-photograph-pyramid.md)
-open question 22. Every output was the same file with either allocator, byte
-for byte but the write record.
+On Windows the `xform` steps from mipmaps spent 85 and 86 s of kernel-mode
+time with the system allocator and 9 and 8 s with `mimalloc`. Under WSL 2
+`sfm cluster-patches` spent about 45 s of kernel-mode time with either
+allocator, which these runs did not look into. Every output was the same file
+with either allocator, byte for byte but the write record. macOS was not
+measured; the CI's macOS jobs build the extension and the viewer with
+`mimalloc` and run the full suites.
 
 `mimalloc` keeps the pages it frees for its purge delay, 1 s by default,
 before returning them to the system, which is where most of the extra
@@ -527,6 +532,20 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [photographs.rs](../crates/sfmtool-py/src/photographs.rs) | `PhotographCache`: the photograph cache, made with its byte and build budgets (`None` the core defaults, a negative one `ValueError`); `layout(path)`, a frozen `PhotographLayout` (`width`, `height`, `out_of_core`, `levels`, `level_sizes`, `stored_levels`, `region_readable`, `None` in core, and `tile_size`) through `PhotographCache::read_layout`, making no mipmap; `read_level(path, level)`, `read_tile(path, level, col, row)` and `read_region(path, level, x0, y0, x1, y1)`, each with `progress=None`, the pixels every kernel samples as read-only C-contiguous `(H, W, 3)` `uint8` arrays, through `PhotographCache::read_level`, `read_tile` and `read_region`, making a missing or stale mipmap first, a `ProgressCounter` set to the mipmaps made and Ctrl+C raising `KeyboardInterrupt`; a level, tile or rectangle the photograph does not have, an empty rectangle and a negative index raising `ValueError`, a missing file `FileNotFoundError`, an unreadable or too large one `OSError`, and an invalid `mipmap_options` or a file changed during a read `RuntimeError`, each naming the file; `build_mipmaps(paths, *, progress=None)`, which makes the mipmaps of the out-of-core photographs among `paths` through `PhotographCache::build_mipmaps`, decoding no photograph in core, and returns a dict of the paths `made`, `current` and `in_core` and the `(path, message)` pairs `failed`, a `ProgressCounter` set to the mipmaps made, and Ctrl+C stopping the builds as `KeyboardInterrupt`; and `stats()`, a dict of `entries`, `bytes`, `budget_bytes`, `hits`, `misses`, `decodes`, `build_budget_bytes`, `build_reserved_bytes` and `mipmaps_made`. `sfm sift --extract` calls `build_mipmaps` once its `.sift` files are written ([sift-command.md § Mipmaps](cli/image-feature/sift-command.md#mipmaps)). `check_mipmaps(paths, *, progress=None)`: `sfmtool_core::camera::mipmap::check_mipmaps`, a dict of the paths `current`, `missing` and `in_core` and the `(path, message)` pairs `stale` and `failed`, writing nothing; `prune_mipmaps(paths, *, dry_run=False, progress=None)`: `prune_mipmaps`, which deletes the orphan files of the mipmap directories under `paths` (none in a dry run) and returns a dict of `orphans` and `failed` (`(path, why)` pairs), `kept`, `other_files`, `links` and `outside_workspaces`; each with a `ProgressCounter` set to the photographs checked or files judged, and Ctrl+C raising `KeyboardInterrupt`. `sfm ws mipmaps` calls the three | [photograph-cache.md](core/camera/photograph-cache.md), [mipmaps.md](core/camera/mipmaps.md), [ws-mipmaps-command.md](cli/workspace/ws-mipmaps-command.md#interface) |
+
+Python gets the machinery the viewer has: the tiers, the mipmaps, the slots,
+the build budget, the tiles and the view-region pyramids are core, and only
+drawing tiles as textures and the viewer's *Build mipmaps* task are the
+viewer's own. Core keeps no global state, so every count, slot and tile
+belongs to one `PhotographCache`, and there is no implicit process-wide
+cache: a binding that reads photographs by path (`ImagePyramidSet.read`,
+`write_web_export`) takes `cache=`, and without it makes a cache of the
+default budgets for that call or set, so a script that wants reuse across
+calls holds one cache and passes it. The submodule is its own rather than
+part of `fileio`, whose names are the I/O of sfmtool's file formats, which
+mip level files are not
+([mipmaps.md § "What is written in one"](core/camera/mipmaps.md#what-is-written-in-one)),
+or of `patches`, whose names are the patch kernels'.
 
 ## Keeping the index current
 

@@ -36,8 +36,7 @@
 //! the panels' reads, with its file's stamp, as a decode that failed is, so
 //! a cache that remembers no failure (a budget of 0) is not asked to make it
 //! again on every frame. See `specs/gui/background-tasks.md` § "Quiet tasks"
-//! and `specs/drafts/out-of-core-photograph-pyramid.md` § "Who makes the
-//! mipmaps, and when".
+//! and `specs/core/camera/photograph-cache.md` § "In the viewer".
 //!
 //! [`PeekedLayout::Building`]: sfmtool_core::camera::PeekedLayout::Building
 

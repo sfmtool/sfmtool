@@ -42,6 +42,16 @@ about 0.8% more, so all 368 would be 12 GB. That is why the cache has a byte
 budget, and why the callers that ask for many photographs first
 leave out the ones they will not read.
 
+Photographs of 200 megapixels are why it keeps tiles rather than whole
+pyramids. One of 16320×12240 is 571 MiB as RGB and 762 MiB as a pyramid of
+six levels, so a Track View of a 17-image track of them asked for 13.6 GB of
+pyramids on every frame, and under a smaller budget each decode evicted a
+photograph the next frame asked for again. Read as tiles, a kernel holds the
+regions its renders read and a panel the tiles it draws, so neither the size
+nor the number of the photographs sets what a reader holds; the mipmaps of
+[mipmaps.md](mipmaps.md) then let an out-of-core photograph be read a tile at
+a time without decoding it whole.
+
 ## Rust API
 
 The cache lives in
@@ -458,9 +468,14 @@ rest of that decode, which would otherwise go before the used tiles of the
 photographs it has finished with and cost a decode for each further tile.
 Under a budget of about one photograph or less, keeping one view's decode
 whole would push out the few tiles the other views of the same point need,
-which decodes several times as often; half is the line between the two
-([view-region-pyramid.md](../../drafts/view-region-pyramid.md) open question
-12). A photograph that lost a tile
+which decodes several times as often; half is the line between the two.
+Measured on `dino_dog_toy` (85 photographs of 2040×1536, about 12.6 MB of
+tiles each) under a 50 MB budget, about four photographs, sparing a read's
+decode halves the display bitmaps' decodes (259 to 288 against 539 to 556 on
+32 threads); on six 128×128 photographs under a budget of one, keeping every
+such decode whole made *Refit all points*' renders decode 554 times rather
+than 133, and keeping it whole first decodes less at a budget of about two
+photographs. A photograph that lost a tile
 keeps its layout and the tiles left, which `peek_tile` still answers and a
 `get` answers it from, but `peek` no longer answers it, and a read of a tile
 it lost decodes it again. The cache drops only its own `Arc`, so a render
@@ -497,10 +512,12 @@ decode 259 to 288 times rather than 85 and take 0.78 to 0.89 s rather than
 the same bitmaps; on one thread they decode 160 times, once in the read phase
 and at most once more in the renders for each photograph. The 32 workers are
 in as many reference images at once, which a budget of four photographs
-cannot hold. The measurements, with those of *Refine all normals* and
-*Refit all points*, are in
-[out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
-step 13e5. After the cull, a geometry search on the test reconstruction reads 143
+cannot hold. On 32 threads, *Refine all normals* over every tenth point of
+that reconstruction decodes 559 times in 1.9 s under 600 MB, 1,734 times in
+4.5 s under 300 MB and 4,656 times in 10.5 s under 50 MB, and *Refit all
+points* 1,704 times in 5.1 s under 600 MB and 41,691 times in 88 s under
+100 MB, with the positions and normals of a budget that holds every tile.
+After the cull, a geometry search on the test reconstruction reads 143
 to 335 photographs, 5 to 11 GB, so the budget has to hold a few hundred
 photographs' tiles for a repeated search to reuse them. The first run's cost
 is dominated by how fast the misses decode, which is why `get_many` decodes
@@ -593,7 +610,10 @@ once:
 - **A tile evicted.** Otherwise the read stats the file. A file whose length
   or modification time is not the slot's fails the read with
   `PhotographReadError::Changed`, naming it, so a kernel never goes on with
-  pixels of two versions of one photograph. Otherwise the read is a
+  pixels of two versions of one photograph, which would give results no
+  single version gives. The photograph does not pin its tiles or its files'
+  bytes for the kernel's run instead, since for hundreds of photographs that
+  would be the memory the tiles are there to save. Otherwise the read is a
   `get_tile` of the keys: it decodes the photograph, reserving with
   `reserve_builds`, keeps the tiles asked for as used and the rest as unused,
   and, unlike `get_tile`, drops none of them before the next decode when the
@@ -1631,9 +1651,7 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 - **No cache on disk.** Tiles are cut from the JPEGs in each session. A
   large photograph's reduced levels are stored as
   [mip level files](mipmaps.md), which the cache reads and makes
-  (§ "Out-of-core photographs"), but it keeps no tile on disk. The rest of
-  the out-of-core tier is proposed in
-  [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md).
+  (§ "Out-of-core photographs"), but it keeps no tile on disk.
 - **The budget and the build budget are set only by their environment
   variables** (or a caller's `PhotographCacheOptions`), not in the viewer's
   UI.
@@ -1642,4 +1660,6 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 - Whether the budget should be a setting in the viewer's UI.
 - Whether the MCP surface should report the cache's `stats`, for example in
-  `get_scene`, beyond the phase notes.
+  `get_scene`, beyond the phase notes, and whether the Background Tasks
+  panel should show them, for example in a tooltip, so the budgets can be
+  tuned on real captures.

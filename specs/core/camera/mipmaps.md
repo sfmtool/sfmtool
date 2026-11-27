@@ -36,8 +36,7 @@ through `prune_mipmaps`
 before it has no object until its owner adds one with `sfm ws mipmaps
 --enable`
 ([ws-mipmaps-command.md § Turning the tier on](../../cli/workspace/ws-mipmaps-command.md#turning-the-tier-on)).
-[out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
-has the measurements behind the choices below.
+§ "Measurements" has the measurements behind the choices below.
 
 ## Rust API
 
@@ -218,8 +217,11 @@ Level `l` is `floor(width / 2^l)` by `floor(height / 2^l)`, as repeated
 height)` levels. An out-of-core photograph's mipmap stores levels 1 to `K`,
 where `K` is the first level whose longer side is at most one photograph tile
 (512 px), or the last level whose sides are both at least 1 px if that comes
-first; the levels below `K` are to be box-filtered from it in memory. It also
-stores level 0, `-mip0`, exactly when its original is not region-readable.
+first; the photograph cache box-filters the levels below `K` from it in
+memory
+([photograph-cache.md § "Out-of-core photographs"](photograph-cache.md#out-of-core-photographs)).
+It also stores level 0, `-mip0`, exactly when its original is not
+region-readable.
 
 | Photograph | Levels | `K` | Coarsest mip level |
 |------------|--------|-----|--------------------|
@@ -261,6 +263,31 @@ when all of these hold, checked in order; the first that fails is the
 The test is part of the definition of a photograph's pixels: changing it moves
 originals between being read directly and being read from `-mip0`, so it
 changes only with a test showing why.
+
+## Readers that decode the original whole
+
+Every reader of a photograph's pyramid, the viewer's panels and every kernel,
+in the viewer, on the command line and in Python, reads it through the
+photograph cache, so all of them read the same levels: an in-core
+photograph's exact levels, and an out-of-core one's levels 1 to `K` from its
+mip level files and level 0 from the original when it is region-readable and
+from `-mip0` otherwise. No reader of level 0 of an out-of-core photograph
+holds a whole decode of it; each holds the tiles it read.
+
+A few readers are not pyramid readers and decode the original whole, in both
+tiers: making a mipmap; SIFT extraction (the Rust `.sift` build, the Python
+extractors and COLMAP); the image readings at save; `read_image_rgb`,
+`read_image_rgba` and the commands that read whole arrays through them, such
+as `sfm undistort`, `sfm to-nerfstudio`, optical flow's grey decode, the
+drawing commands and `sfm xform --add-thumbnails`; and the display thumbnail
+of an in-core photograph. They run before the mip level files exist, or store
+what they compute from the exact pixels, and a lossy copy would change the
+features and readings every reconstruction is built from. So for an original
+that is not region-readable SIFT reads the original's pixels while the kernels
+read `-mip0`'s, which differ by 0.07 to 0.09 grey levels on average for a JPEG
+original (§ "Measurements"). A Python binding handed arrays instead of paths
+reads the arrays' exact levels, whatever the tier; that is the caller's choice
+of input.
 
 ## Names
 
@@ -441,7 +468,11 @@ all of these hold, in order, and stale naming the first that fails:
 
 The quality is not compared with the workspace's setting: only names of the
 current setting are opened. Nor is the threshold: a mipmap whose photograph is
-still out of core stays current whatever threshold its record names. A file
+still out of core stays current whatever threshold its record names. Nor are
+`encoder` and `sfmtool_version`, which are in the record for diagnosis: a
+newer `jpeg-encoder` never rewrites a current file, so a workspace's files can
+differ from what a newer build would hold in memory for a read-only copy of
+the workspace by the encoders' differences. A file
 that is missing, damaged or stale is never an error to the caller beyond
 `Stale`, and never a panic; the remedy is a new build.
 
@@ -588,6 +619,88 @@ decodes.
 - **The marker walk** finds markers as `jpeg-decoder` does (bytes up to the
   next `FF` skipped, fill bytes skipped, `FF 00` not a marker), so the region
   test and the reader agree on which segments a file has.
+
+## Measurements
+
+The figures behind the choices above were measured on a 200-megapixel phone
+photograph (16320 x 12240, a baseline JPEG with 4:2:0 chroma and a restart
+interval of 4 MCUs, 30.0 MB) with `jpeg-decoder` 0.3.2 and `jpeg-encoder`
+0.7.1 (with its `simd` feature, as the workspace builds it), in optimized
+builds on a 32-thread machine shared with other work; each range is over two
+to five runs, and its low end is the unloaded figure. A whole decode of the
+original takes 0.79 to 1.7 s and is 571.5 MiB as RGB.
+
+**The reduced levels.** Level 1 at quality 95 has a mean absolute error of
+0.49 grey levels against the exact level and is 10.8 MB; at quality 90, 0.73
+and 7.3 MB. 4:2:0 would save 14% (9.2 MB against 10.8 MB), but a tile could
+then not equal the whole decode (§ "A tile of a mip level file"), and restart
+markers every 16 MCUs cost 2.4% (10.77 MB against 10.52 MB). The five reduced
+mip level files at quality 95 are 15.2 MB together (10.77, 3.21, 0.90, 0.25
+and 0.07 MB), half the original; at quality 90, 10.2 MB.
+
+**Level 0, `-mip0`.** The whole decode of two such photographs encoded at
+several qualities, 4:4:4 with an interval of 16 MCUs, and decoded again: the
+size, the mean absolute error over every value against the decode, and the
+share of values off by 3 or more. The third column crops the decode by one
+pixel first, so the blocks no longer line up with the original's:
+
+| Quality | 30.0 MB original | 39.8 MB original | the first, shifted by one pixel |
+|---------|------------------|------------------|---------------------------------|
+| 90 | 24.2 MB, 0.42, 1.4% | 31.9 MB, 0.61, 2.9% | 22.7 MB, 0.47, 1.7% |
+| 95 | 33.0 MB, 0.067, 0.06% | 43.4 MB, 0.094, 0.07% | 33.8 MB, 0.32, 0.66% |
+| 97 | 40.0 MB, 0.088, 0.08% | 53.0 MB, 0.13, 0.11% | 42.9 MB, 0.23, 0.30% |
+| 98 | 42.3 MB, 0.074, 0.04% | 56.1 MB, 0.099, 0.05% | 47.7 MB, 0.19, 0.17% |
+| 100 | 61.6 MB, 0.053, 0.01% | 81.7 MB, 0.067, 0.01% | 72.9 MB, 0.085, 0.02% |
+
+Encoding took 1.4 to 2.1 s and decoding 0.5 to 1.1 s. The first two columns
+are the common case, a JPEG original that is not region-readable: the
+re-encode uses the original's 8 x 8 block grid, whose pixels are already the
+result of a quantised DCT on that grid, so quality 95 comes within 0.07 to
+0.09 grey levels, closer than 97 (the error is not monotonic in quality, since
+95's tables fall near the original's). The shifted column stands for an
+original that has never been a JPEG, a PNG or a TIFF, where `-mip0` is the
+first loss; there 98 halves the error of 95 (0.19 against 0.32) for 41% more
+bytes, which is why such a workspace may set `full_resolution_jpeg_quality`
+higher. The reduced levels keep a key of their own because they are
+box-filtered, never on the original's grid, and small.
+
+**Disk per 200-megapixel photograph** at the qualities `sfm ws init` writes:
+
+| Original | Files | Size |
+|----------|-------|------|
+| region-readable JPEG | `-mip1` to `-mip5` | 15.2 MB, half the original (measured) |
+| JPEG that is not region-readable | `-mip0` to `-mip5` | 48 to 58 MB, about 1.5 times the original |
+| PNG or TIFF | `-mip0` to `-mip5` | about 49 MB at quality 95, 63 MB at 98 (from the shifted column) |
+
+A capture of 500 photographs of 6000 x 4000 that are not region-readable
+would need about 3 GB (scaled by pixel count).
+
+**A build.** Making the mipmap of the region-readable photograph at quality
+95 (the read, the decode, the reduction, the region test, and the encodes and
+writes of levels 1 to 5) took 1.77 and 1.78 s, and the process peaked at 919
+and 922 MiB, against the estimate of about 1 GB from the buffers: 571 MiB of
+decode, the decoder's own component planes while it decodes, 190 MiB of
+reduced levels, the 30 MB original held for its hash and region test, and
+15 MB of encoded files. A photograph that needs a `-mip0` adds its encode,
+1.4 to 2.1 s, and 33 to 43 MB of encoded bytes held until written.
+
+**Reading a rectangle.** Nine 514 px tiles (512 px with their border) of
+level 1, among them all four corners and the right and bottom edges, decode in
+2.9 to 4.3 ms each at quality 90 and 3.1 to 4.7 ms at quality 95, each equal
+to the same pixels of `decode`; opening and indexing the level's file takes
+2.2 to 3.7 ms. Seven 513 to 514 px regions of the original, among them all
+four corners and the centre, decode in 0.9 to 2.6 ms each as one frame (before
+regions were decoded in strips; § "A region of a region-readable original"
+gives the strips' cost), every pixel equal to `read_rgb`, and
+`OriginalRegions::from_bytes`, the region test and the index of the
+original's 195,075 intervals, takes 10 to 12 ms. The region test alone takes
+9 to 12 ms a photograph once its bytes are in memory. Seventeen such
+photographs from one phone were all region-readable, each 4:2:0 with an
+interval of 4 MCUs; a camera JPEG without a `DRI` segment, a progressive JPEG
+and every PNG or TIFF are not. An original whose intervals are wider than
+1024 px gets a `-mip0`, one encode and 33 to 43 MB once at this size, after
+which every tile reads in about 3 ms, rather than every full-resolution read
+decoding a strip many tiles wide.
 
 ## Testing
 

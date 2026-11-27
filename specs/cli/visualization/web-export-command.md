@@ -74,12 +74,11 @@ than decoded from its mip level file again. On 8 photographs of 16320 x
 12240 with current mipmaps that takes about 1.2 s, where a cache that keeps
 nothing took 41 to 64 s; in core the cache holds the photographs' tiles
 while the thumbnails decode them whole again, which raised the peak from
-10.0 to 14.9 GB on the same 8
-([out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
-open question 23). The cache keeps at most its budget, a quarter of
+10.0 to 14.9 GB on the same 8. The cache keeps at most its budget, a quarter of
 physical memory clamped to between 1 and 16 GiB unless
 `SFM_EXPLORER_PHOTOGRAPH_CACHE_MB` sets it, so the peak rises by at most
-that.
+that, and by much less in a workspace with `mipmap_options`, where an
+in-core photograph's sides are at most its `out_of_core_long_side`.
 A point with no
 frame (an all-zero `u` row) or an all-zero bitmap row is drawn as a splat
 either way, by the rule SfM Explorer's surfels follow
