@@ -1085,7 +1085,7 @@ fn a_physical_unit_on_a_view_in_scene_units_is_refused() {
          the selected reconstruction, metric, declares no world_space_unit, so there is \
          nothing to convert m to. Select a reconstruction that declares a unit, send the \
          distances without unit (in scene units), or give metric a physical unit with sfm \
-         xform --scale-by-measurements."
+         xform --scale-to-median-measurement."
     );
     let after = ok(&mut state, &mut viewer, Command::GetScene)["view"].clone();
     assert_eq!(after["position"], before["position"]);
@@ -1124,6 +1124,6 @@ fn a_physical_unit_with_no_selection_is_refused() {
          no reconstruction is selected, so there is nothing to convert m to. Select a \
          reconstruction that declares a unit, send the distances without unit (in scene \
          units), or give the reconstruction a physical unit with sfm xform \
-         --scale-by-measurements."
+         --scale-to-median-measurement."
     );
 }

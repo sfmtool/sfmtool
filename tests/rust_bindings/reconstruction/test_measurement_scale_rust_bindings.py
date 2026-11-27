@@ -70,6 +70,7 @@ def test_a_measurement_that_disagrees_is_reported(demo):
     scale = three.distance_measurement_scale("m")
 
     assert scale["factor"] == pytest.approx(one, rel=1e-9)
+    assert [f["label"] for f in scale["factors"]] == ["", "", "too long"]
     deviations = [f["deviation_percent"] for f in scale["factors"]]
     assert deviations == pytest.approx([0.0, 0.0, 20.0], abs=1e-4)
     assert scale["statistics"]["mean"] == pytest.approx(one * 3.2 / 3, rel=1e-6)

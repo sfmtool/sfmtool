@@ -38,6 +38,17 @@ from ..xform._arg_parser import (
     help="Scale by factor: S (e.g., '2.0')",
 )
 @click.option(
+    "--scale-to-median-measurement",
+    multiple=True,
+    metavar="UNIT",
+    help=(
+        "Scale to a physical unit (mm, cm, m, in or ft) by the median of the "
+        "factors the stored distance measurements give, and declare that unit "
+        "as the world-space unit. Prints each measurement's factor, the ones "
+        "left out and why, and the spread (e.g. 'mm')."
+    ),
+)
+@click.option(
     "--remove-short-tracks",
     multiple=True,
     help="Remove points with track length <= size (e.g., '2')",
@@ -259,11 +270,6 @@ from ..xform._arg_parser import (
     ),
 )
 @click.option(
-    "--scale-by-measurements",
-    multiple=True,
-    help="Scale to physical units using a YAML measurements file with known point-pair distances",
-)
-@click.option(
     "--include-range",
     multiple=True,
     help="Keep only images with file numbers in range (e.g., '1-10', '1,3,5-7')",
@@ -357,7 +363,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --rotate axisX,axisY,axisZ,angle    Rotate around axis
       --translate X,Y,Z                   Translate by vector
       --scale S                           Scale by factor
-      --scale-by-measurements FILE        Scale to physical units using measurements YAML
+      --scale-to-median-measurement UNIT  Scale to UNIT by the median stored distance measurement
 
     \b
     Filters:
@@ -422,6 +428,10 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Filter short tracks, then scale
         sfm xform in.sfmr out.sfmr --remove-short-tracks 2 --scale 0.5
+
+    \b
+        # Give the reconstruction millimetres from its stored distance measurements
+        sfm xform in.sfmr out.sfmr --scale-to-median-measurement mm
 
     \b
         # Multiple operations in sequence
@@ -528,7 +538,7 @@ def xform(ctx, input_path, output_path, **kwargs):
     if not transforms:
         raise click.UsageError(
             "At least one transformation must be specified. "
-            "Options: --rotate, --translate, --scale, --scale-by-measurements, "
+            "Options: --rotate, --translate, --scale, --scale-to-median-measurement, "
             "--include-range, --exclude-range, "
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "

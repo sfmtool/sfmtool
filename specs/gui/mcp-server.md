@@ -2583,7 +2583,7 @@ converted to the view's unit through `sfmtool_core::WORLD_SPACE_UNITS`, so
 view in scene units has nothing to convert to and is refused, with the reason
 the view has no unit:
 
-> `move.unit "m" needs the view to be in a physical unit, and it is in scene units: the selected reconstruction, bull, declares no world_space_unit, so there is nothing to convert m to. Select a reconstruction that declares a unit, send the distances without unit (in scene units), or give bull a physical unit with sfm xform --scale-by-measurements.`
+> `move.unit "m" needs the view to be in a physical unit, and it is in scene units: the selected reconstruction, bull, declares no world_space_unit, so there is nothing to convert m to. Select a reconstruction that declares a unit, send the distances without unit (in scene units), or give bull a physical unit with sfm xform --scale-to-median-measurement.`
 
 The reason in the middle is one of three: `no reconstruction is selected` (and
 the fix then says "the reconstruction"), the selected reconstruction declares

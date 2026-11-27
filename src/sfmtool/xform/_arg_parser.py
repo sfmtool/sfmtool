@@ -55,7 +55,7 @@ from . import (
     RemoveNarrowTracksFilter,
     RemoveShortTracksFilter,
     RotateTransform,
-    ScaleByMeasurementsTransform,
+    ScaleToMedianMeasurementTransform,
     ScaleTransform,
     SelectByDistributionFilter,
     SwitchCameraModelTransform,
@@ -537,13 +537,6 @@ def _parse_remove_isolated(param: str, _max_features: int | None):
     return RemoveIsolatedPointsFilter(factor, parts[1])
 
 
-def _parse_scale_by_measurements(param: str, _max_features: int | None):
-    measurements_path = Path(param)
-    if not measurements_path.exists():
-        raise click.UsageError(f"Measurements file not found: {measurements_path}")
-    return ScaleByMeasurementsTransform(measurements_path)
-
-
 def _parse_include_by_distribution(param: str, _max_features: int | None):
     parts = param.split(",")
     try:
@@ -622,6 +615,16 @@ _TRANSFORM_OPTIONS: dict[str, tuple[str, Callable[[str, int | None], object]]] =
     "--scale": (
         "required",
         lambda p, _: _parse_scalar(p, "--scale", float, ScaleTransform),
+    ),
+    "--scale-to-median-measurement": (
+        "required",
+        lambda p, _: _parse_scalar(
+            p,
+            "--scale-to-median-measurement",
+            str,
+            ScaleToMedianMeasurementTransform,
+            catch_constructor=True,
+        ),
     ),
     "--remove-short-tracks": (
         "required",
@@ -722,7 +725,6 @@ _TRANSFORM_OPTIONS: dict[str, tuple[str, Callable[[str, int | None], object]]] =
         "required",
         lambda p, _: _parse_scalar(p, "--exclude-range", RangeExpr, ExcludeRangeFilter),
     ),
-    "--scale-by-measurements": ("required", _parse_scale_by_measurements),
     "--include-glob": ("required", lambda p, _: IncludeGlobFilter(p)),
     "--exclude-glob": ("required", lambda p, _: ExcludeGlobFilter(p)),
     "--include-by-distribution": ("required", _parse_include_by_distribution),

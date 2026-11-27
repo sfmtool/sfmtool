@@ -44,12 +44,13 @@ impl PySfmrReconstruction {
     ///
     /// Returns:
     ///     A dict with ``unit``; ``factor``, the median; ``factors``, one dict
-    ///     per usable measurement in stored order with ``index``, ``stated``
-    ///     (in ``unit``), ``scene_distance``, ``factor`` and
-    ///     ``deviation_percent`` (signed, of the median); ``excluded``, one
-    ///     dict per measurement that gives no factor with ``index`` and
-    ///     ``reason``, a sentence; and ``statistics``, a dict with ``count``,
-    ///     ``median``, ``mean``, ``sample_std`` and ``sample_std_percent``
+    ///     per usable measurement in stored order with ``index``, ``label``
+    ///     (the stored label, ``""`` for none), ``stated`` (in ``unit``),
+    ///     ``scene_distance``, ``factor`` and ``deviation_percent`` (signed,
+    ///     of the median); ``excluded``, one dict per measurement that gives
+    ///     no factor with ``index``, ``label`` and ``reason``, a sentence; and
+    ///     ``statistics``, a dict with ``count``, ``median``, ``mean``,
+    ///     ``sample_std`` and ``sample_std_percent``
     ///     (``None`` for one measurement), ``median_absolute_deviation``,
     ///     ``min``, ``max``, ``max_abs_deviation_percent``, ``disagrees`` and
     ///     ``disagreement_percent``, the bar ``disagrees`` is measured against.
@@ -78,6 +79,14 @@ impl PySfmrReconstruction {
                 distance_measurement_scale(value.measurements(), &readings, length_unit)
             })
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        // The call succeeded, so the distance kind is present and each index
+        // is one of its rows.
+        let labels: &[String] = value
+            .measurements()
+            .distance
+            .as_ref()
+            .map_or(&[], |distance| &distance.labels);
+        let label = |index: usize| labels.get(index).map_or("", String::as_str);
 
         let d = PyDict::new(py);
         d.set_item("unit", length_unit.name())?;
@@ -86,6 +95,7 @@ impl PySfmrReconstruction {
         for f in &scale.factors {
             let item = PyDict::new(py);
             item.set_item("index", f.index)?;
+            item.set_item("label", label(f.index))?;
             item.set_item("stated", f.stated)?;
             item.set_item("scene_distance", f.scene_distance)?;
             item.set_item("factor", f.factor)?;
@@ -97,6 +107,7 @@ impl PySfmrReconstruction {
         for e in &scale.excluded {
             let item = PyDict::new(py);
             item.set_item("index", e.index)?;
+            item.set_item("label", label(e.index))?;
             item.set_item("reason", e.reason.to_string())?;
             excluded.append(item)?;
         }

@@ -83,7 +83,7 @@ positions, camera poses, rig sensor translations, per-point normals, the patch
 `u` and `v` half-vectors, points at infinity (rotation only, renormalised), the
 point constraints' distances and the per-image depth statistics. It is what
 `sfm xform --scale`, `--rotate`, `--translate`, `--align-to` and
-`--scale-by-measurements` reach through `Se3Transform @ recon`, so the viewer
+`--scale-to-median-measurement` reach through `Se3Transform @ recon`, so the viewer
 and the command line are one implementation.
 
 **The bench's patch frames go through the same transform**, because the bench is
@@ -203,6 +203,6 @@ Python side (`tests/xform/test_transforms.py`).
   `sfm xform --scale` has first: clearing it loses information a caller may have
   meant to keep, leaving it keeps a claim that is false, and taking a unit
   beside the transform hands the decision to callers who mostly do not know
-  either. Only `--scale-by-measurements` and the viewer's Scale to Median
+  either. Only `--scale-to-median-measurement` and the viewer's Scale to Median
   Measurement set it, because each knows the unit it scaled to
   ([scale-to-median-measurement.md](scale-to-median-measurement.md)).

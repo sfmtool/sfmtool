@@ -20,10 +20,11 @@ is read as a 3D position. The factor is what a person applies to give the
 reconstruction a unit from what it stores; the statistics are what they check
 first, since two measurements of the same rigid object that disagree point at
 a misplaced endpoint or a distorted reconstruction.
-`sfm xform --scale-by-measurements`
-([cli/reconstruction/xform/scale-by-measurements-command.md](../../cli/reconstruction/xform/scale-by-measurements-command.md))
-computes the same factor from a YAML file of Point IDs in its own Python code;
-it does not call this operation. SfM Explorer calls it for `Scale to Median
+`sfm xform --scale-to-median-measurement`
+([cli/reconstruction/xform/scale-to-median-measurement-command.md](../../cli/reconstruction/xform/scale-to-median-measurement-command.md))
+calls it through the Python binding, prints the factor, the statistics, each
+measurement's factor and the exclusions, and applies the factor as a pipeline
+step. SfM Explorer calls it for `Scale to Median
 Measurement...` on a reconstruction's Scene tree row, whose dialog shows the
 factor, the statistics, each measurement's factor and the exclusions, and whose
 edit applies the factor
@@ -38,7 +39,7 @@ Python reaches it as `SfmrReconstruction.distance_measurement_scale`
 (§ "Python binding").
 
 ```rust
-/// The bar `sfm xform --scale-by-measurements` warns at.
+/// The bar `sfm xform --scale-to-median-measurement` warns at.
 pub const SCALE_DISAGREEMENT_PERCENT: f64 = 5.0;
 
 pub fn distance_measurement_scale(
@@ -131,11 +132,11 @@ act on. Only when nothing is usable is the call an error, and that error still
 carries every exclusion.
 
 **Why no histogram.** The factors are in the result, and the bins a histogram
-draws are a choice of the drawing: the CLI's text histogram uses five equal
-bins from the smallest factor to the largest, and a plot sized to a panel
-would choose its own count, as SfM Explorer's dialog does over each
-measurement's deviation. Binning is a few lines over `factors`, `min` and
-`max`, so it stays with whoever draws it.
+draws are a choice of the drawing: a plot sized to a panel chooses its own
+count, as SfM Explorer's dialog does over each measurement's deviation, and
+the CLI prints each measurement's deviation on its own line and draws no
+histogram. Binning is a few lines over `factors`, `min` and `max`, so it stays
+with whoever draws it.
 
 Example:
 
@@ -169,9 +170,9 @@ scaled.metadata.world_space_unit = Some(LengthUnit::Millimetre.name().to_string(
 scale = recon.distance_measurement_scale("mm")
 scale["factor"]                  # the median
 scale["statistics"]["disagrees"]  # past disagreement_percent, 5
-for f in scale["factors"]:       # index, stated, scene_distance, factor, deviation_percent
+for f in scale["factors"]:       # index, label, stated, scene_distance, factor, deviation_percent
     ...
-for e in scale["excluded"]:      # index, reason (a sentence)
+for e in scale["excluded"]:      # index, label, reason (a sentence)
     ...
 ```
 
@@ -182,7 +183,9 @@ with the default options, as that method does, and calls this operation on
 them, so a Python caller holds no readings to pair with the measurements and
 cannot meet `ReadingCountMismatch`. It returns a dict of the result's fields:
 `unit`, `factor`, `factors`, `excluded` with each reason as its `Display`
-sentence, and `statistics` with `disagreement_percent`, the
+sentence, each factor and exclusion with the measurement's stored `label`
+(`""` for none) beside its index, so a caller printing them needs nothing
+else, and `statistics` with `disagreement_percent`, the
 `SCALE_DISAGREEMENT_PERCENT` that `disagrees` is measured against. The unit is
 given by name (`"mm"`, `"cm"`, `"m"`, `"in"` or `"ft"`). An unknown unit, no
 stored distance measurement and no usable one raise `ValueError` with the
@@ -190,7 +193,7 @@ error's sentence. Its tests are in
 [`test_measurement_scale_rust_bindings.py`](../../../tests/rust_bindings/reconstruction/test_measurement_scale_rust_bindings.py),
 on the demo scene's measurement of its cube's 1 m edge: its factor in two
 units, the same edge stated three times with one 20% long giving the shorter
-two's factor and a 20% deviation, and the three errors.
+two's factor, a 20% deviation and each one's label, and the three errors.
 
 ## Theory
 
@@ -230,7 +233,7 @@ largest `f64` do not overflow it.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `SCALE_DISAGREEMENT_PERCENT` | `5.0` | The largest deviation from the median, as a percentage of it, at which the measurements still agree; the bar `sfm xform --scale-by-measurements` prints its warning above. |
+| `SCALE_DISAGREEMENT_PERCENT` | `5.0` | The largest deviation from the median, as a percentage of it, at which the measurements still agree; the bar `sfm xform --scale-to-median-measurement` prints its warning above. |
 
 ## Testing
 

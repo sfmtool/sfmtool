@@ -18,7 +18,7 @@ mod tests;
 
 /// The deviation from the median, as a percentage of it, beyond which the
 /// measurements are said to disagree ([`ScaleFactorStatistics::disagrees`]):
-/// the bar `sfm xform --scale-by-measurements` warns at.
+/// the bar `sfm xform --scale-to-median-measurement` warns at.
 pub const SCALE_DISAGREEMENT_PERCENT: f64 = 5.0;
 
 /// The scale factor one usable measurement implies.

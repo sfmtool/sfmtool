@@ -20,8 +20,8 @@ readings and the per-measurement median line), [bake-transform.md](bake-transfor
 (the display transform, which this edit leaves as it is),
 [../document-model.md](../document-model.md) and
 [../edit-history.md](../edit-history.md) (the version it pushes),
-[../../cli/reconstruction/xform/scale-by-measurements-command.md](../../cli/reconstruction/xform/scale-by-measurements-command.md)
-(the same median scale at the command line, from Point IDs in a YAML file),
+[../../cli/reconstruction/xform/scale-to-median-measurement-command.md](../../cli/reconstruction/xform/scale-to-median-measurement-command.md)
+(the same median scale at the command line, as an `sfm xform` step),
 [README.md](README.md) (the other edit families).
 
 ---
@@ -231,7 +231,7 @@ and the wire both call it. A **bulk edit**:
    unchanged.
 
 `apply_se3_transform` is the one whole-reconstruction similarity, what `sfm
-xform --scale-by-measurements` reaches too: point positions, camera centres,
+xform --scale-to-median-measurement` reaches too: point positions, camera centres,
 rig sensor translations, patch half-vectors and the per-image depth statistics
 all scale, and points at infinity, which are directions, do not. The row map is
 the identity, chained after the materialisation's when there was one, for the

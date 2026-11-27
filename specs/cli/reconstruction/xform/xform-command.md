@@ -1107,18 +1107,20 @@ the same `content_xxh128` whatever machine wrote it.
 
 ### Scaling to Physical Units
 
-#### `--scale-by-measurements <measurements.yaml>`
+#### `--scale-to-median-measurement <UNIT>`
 
-Scales the reconstruction to physical units using known real-world distances between pairs
-of 3D points. The measurements are specified in a YAML file with point IDs, distances, and
-a target unit. With multiple measurements, the median scale factor is used.
+Scales the reconstruction to `UNIT` (`mm`, `cm`, `m`, `in` or `ft`) by the median of the
+scale factors its stored distance measurements give, and declares `UNIT` as its
+`world_space_unit`. The measurements are resolved against the reconstruction as it stands at
+this step, so earlier steps that drop points or images can change which endpoints resolve. A
+measurement that gives no factor is left out with its reason; no usable measurement is an
+error, and nothing is written.
 
-See [scale-by-measurements-command.md](scale-by-measurements-command.md) for the full
-specification, including the YAML schema, unit conversion, point ID resolution across
-reconstructions, and diagnostics output.
+See [scale-to-median-measurement-command.md](scale-to-median-measurement-command.md) for the
+full specification, including the printed diagnostics and the errors.
 
 ```bash
---scale-by-measurements measurements.yaml
+--scale-to-median-measurement mm
 ```
 
 ### Alignment
@@ -1195,7 +1197,7 @@ which returns a new reconstruction:
 
 | Primitive | Used by | Semantics |
 |-----------|---------|-----------|
-| `apply_se3_transform` | `--rotate`, `--translate`, `--scale`, `--scale-by-measurements`, `--align-to`, `--align-to-input` (invoked as `Se3Transform @ recon` from Python) | Applies a similarity to points and camera poses. Finite points get the full rotation+translation+scale; points at infinity and per-point normals are directions, so only the rotation acts (renormalized). Rig sensor translations are scaled; per-point patch `(u, v)` half-vectors rotate and scale with their point (rotation-only at infinity); patch bitmaps are pose-invariant and pass through unchanged. Per-image depth statistics scale with the transform's scale (the four observed lengths and the histogram bounds, six multiplications per image), and the histogram counts are carried, which is exact: equal buckets between scaled bounds hold every scaled depth in the bucket it was in. They are not re-derived, because the re-derivation also overwrites every per-point normal. The metadata block, `world_space_unit` included, passes through. The viewer's `Bake Transform` is this same call ([bake-transform.md](../../../gui/edits/bake-transform.md)). |
+| `apply_se3_transform` | `--rotate`, `--translate`, `--scale`, `--scale-to-median-measurement`, `--align-to`, `--align-to-input` (invoked as `Se3Transform @ recon` from Python) | Applies a similarity to points and camera poses. Finite points get the full rotation+translation+scale; points at infinity and per-point normals are directions, so only the rotation acts (renormalized). Rig sensor translations are scaled; per-point patch `(u, v)` half-vectors rotate and scale with their point (rotation-only at infinity); patch bitmaps are pose-invariant and pass through unchanged. Per-image depth statistics scale with the transform's scale (the four observed lengths and the histogram bounds, six multiplications per image), and the histogram counts are carried, which is exact: equal buckets between scaled bounds hold every scaled depth in the bucket it was in. They are not re-derived, because the re-derivation also overwrites every per-point normal. The metadata block, `world_space_unit` included, passes through. The viewer's `Bake Transform` is this same call ([bake-transform.md](../../../gui/edits/bake-transform.md)). |
 | `subset_by_image_indices` | `--include-range`, `--exclude-range`, `--include-glob`, `--exclude-glob`, `--include-by-distribution` (via `xform/_filter_by_image_range.py`); also `sfm to-colmap-bin --range`, `sfm to-nerfstudio --range`, and `sfm panorama` source subsetting | Keeps the listed images (in order), drops observations of removed images, sorts each point's kept observations by their new image index (so a reordered list keeps the tracks sorted by point then image, each per-observation column and reference observation moving with its observation), and prunes rig frames with no surviving image (remapping frame indices). With `drop_orphaned_points=true` (the xform filters' mode), points with zero remaining observations are removed and point IDs remapped contiguously. Works for both `sift_files` and `embedded_patches` reconstructions: the per-observation feature index or inline keypoint is filtered with the tracks. |
 | `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error`, `--filter-by-zncc-self-similarity-radius`, `--filter-by-patch-size` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
 
@@ -1231,7 +1233,7 @@ sfm xform full.sfmr subset.sfmr \
 sfm xform input.sfmr output.sfmr \
   --remove-short-tracks 2 \
   --bundle-adjust \
-  --scale-by-measurements measurements.yaml
+  --scale-to-median-measurement mm
 
 # Keep only the left fisheye of a 360° rig and clean up
 sfm xform rig.sfmr left_only.sfmr \
