@@ -241,10 +241,19 @@ since OpenCV draws a tuple in whatever channel order the array has.
   to encode (1.6 s against 6.0 s).
   The images sfmtool writes as PNG are overlays and montages that are read
   once, so encode time matters more than the last few percent of size.
-- **Reduced copies.** Nothing here stores a reduced copy of a photograph. A
-  JPEG writer and reader for the reduced levels of large photographs, with
-  restart markers so that a file can be read a tile at a time, are proposed in
-  [out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md).
+- **Mip level files.** The reduced levels of an out-of-core photograph, and
+  its full-resolution copy when the original cannot be read by region, are
+  JPEG files with their own writer and reader, not `ImageU8::write` and
+  `read_rgb`: they are written by `jpeg-encoder` at 4:4:4 with restart
+  markers, so a file can be read a tile at a time, and read with
+  `jpeg-decoder`, whose `ColorTransform::None` a tile decode needs and whose
+  chroma upsampling the region decode of an original relies on
+  ([mipmaps.md](mipmaps.md)). When this reader moves to zune-jpeg, the
+  mipmap reader keeps `jpeg-decoder` until zune-jpeg passes the same
+  tile-equality tests, and a layout whose region decode no longer equals
+  `read_rgb` is sent to `-mip0` by the region test, as a stated change of
+  results
+  ([mipmaps.md § "A region of a region-readable original"](mipmaps.md#a-region-of-a-region-readable-original)).
 
 ## Code that reads images
 

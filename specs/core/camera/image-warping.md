@@ -703,9 +703,11 @@ let mut map = WarpMap::from_patch(&anchored, view.camera, view.cam_from_world, 2
 let tile = render_tile(view.pyramid, &mut map, sampler);
 ```
 
-Every sampler reads a whole pyramid. A pyramid that holds only the region of
-each level one render reads is proposed in
-[view-region-pyramid.md](../../drafts/view-region-pyramid.md).
+Every sampler reads the pyramid it is given. A kernel reads a photograph
+through the render entry points, which hand the samplers a view-region
+pyramid holding only the region of each level the render reads, or read its
+taps through the photograph's tiles, with the same values
+([view-region-pyramids.md](view-region-pyramids.md)).
 
 - **Why a choice rather than a sampler.** Every patch kernel's parameters
   (`ViewSelectParams`, `KeypointLocalizeParams`,

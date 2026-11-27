@@ -353,12 +353,13 @@ their Python keyword arguments, and the specs in
 
 ## Photograph tiles
 
-How the viewer draws a photograph of any size, in `sfm-explorer`'s
-`image_detail::photograph_tiles` and the specs.
+How a photograph of any size is read a region at a time and drawn, in
+`sfmtool_core::camera`'s photograph cache and tiled photograph,
+`sfm-explorer`'s `image_detail::photograph_tiles` and the specs.
 
 | Word | Means | Not | Why |
 |------|-------|-----|-----|
-| **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels to assist bilinear interpolation: the unit Image Detail draws as one texture, at most 514 x 514; `PhotographTileKey`, keyed by image, level, column and row. [drafts/out-of-core-photograph-pyramid.md](drafts/out-of-core-photograph-pyramid.md) makes it the unit a level is read in too | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders (§ "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
+| **photograph tile** | a 512 x 512 block of one level of a photograph's pyramid, with a one-pixel border of its neighbours' pixels to assist bilinear interpolation: the unit Image Detail draws as one texture, at most 514 x 514, and the unit a level is read and kept in by the photograph cache ([core/camera/photograph-cache.md](core/camera/photograph-cache.md) § "Layouts and tiles"); `PhotographTile`, keyed by level, column and row (`TileKey`), and in Image Detail by image too (`PhotographTileKey`) | bare `tile`, `block`, `chunk` | bare *tile* is a view's tile, the patch a kernel renders (§ "Rendering a view's tile"), and Track View draws those beside photographs, so the photograph's blocks need a qualified name |
 | **view-region pyramid** | a pyramid that holds, for one read of one view of one patch, only the rectangle of each level the read takes, with each rectangle's origin in the full level; `ImageU8Pyramid::from_regions`, read by every sampler with the whole pyramid's values ([core/camera/view-region-pyramids.md](core/camera/view-region-pyramids.md)). A kernel keeps one for each view of the patch it is working on in that view's `ViewRegions`, so a later read inside it reuses it | `local pyramid`, `per-match pyramid`, `crop pyramid` | *match* means a feature correspondence here, and *crop* is the picture the panels cut; the unit is one view of one patch, so the name says whose region it is |
 | **region pool** | the bytes of copied regions one kernel call may hold at once, across all its threads; the caller of a kernel makes one per call and passes it in, except that a viewer panel, whose reads on the GUI thread are many small kernel calls a frame, owns one that all of them share; a read whose regions it cannot hold reads through photograph tiles instead; `RegionPool` | `region budget`, `tile budget` | *budget* is the photograph cache's word for what it keeps; the pool is lent out and given back by each read |
 

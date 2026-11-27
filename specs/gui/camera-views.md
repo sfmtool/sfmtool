@@ -773,6 +773,11 @@ device's `max_texture_dimension_2d`. The viewer asks for
 `wgpu::Limits::default()`, whose limit is 8192, so a 16320 x 12240 photograph
 is drawn from level 2 (4080 x 3060) in a 3840 px viewport and from level 3
 (2040 x 1530) in a 1920 px one, and never from a texture wider than 8192.
+Once no texture is larger than this level or a photograph tile, nothing needs
+more than the default limits, and they keep the level and the atlases'
+paging the same on every machine; the adapter's own limits (16384 on most
+desktop GPUs) would raise the finest level by one on some machines and change
+nothing else.
 A photograph shorter than the viewport is drawn from level 0. A pyramid with no
 level inside the limit, which only a photograph a pixel or two tall can have,
 draws nothing.

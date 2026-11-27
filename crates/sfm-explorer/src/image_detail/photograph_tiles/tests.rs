@@ -57,8 +57,9 @@ fn the_level_is_the_one_whose_pixels_are_about_one_screen_pixel() {
 
 #[test]
 fn the_zoom_limit_lets_one_pixel_reach_eight_points_and_keeps_32_otherwise() {
-    // The draft's case: a 16320 px photograph in a 400 point panel fits at
-    // 0.0245, and 32 times that is 0.78 points a pixel.
+    // The case `specs/gui/multi-panel-image-browser.md` § "Image Detail: 2D
+    // pan and zoom navigation" gives: a 16320 px photograph in a 400 point
+    // panel fits at 0.0245, and 32 times that is 0.78 points a pixel.
     let fit = 400.0 / 16320.0;
     assert!((zoom_limit(fit) * fit - 8.0).abs() < 1e-4);
     assert!(zoom_limit(fit) > 32.0);

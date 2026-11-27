@@ -156,6 +156,16 @@ consumer reads the cells.
    time, set "out_of_core_long_side" in ws/.sfm-workspace.json to 479 or
    less (it is 1536).`, and in a workspace without the object the line ends
    `run 'sfm ws mipmaps --enable --out-of-core-long-side 479 ws'.` instead.
+   The line points at the tier because the budget alone does not bound the
+   cost: on 8 photographs of 16320 x 12240 with the 24,805 clusters among
+   them, the refinement in core decoded each photograph once in 5.3 s under
+   the default budget of 15.9 GiB, 65 times in 36 s under 3.3 GiB and 408
+   times in 188 s under 0.9 GiB, its peak working set about 9 GB at every
+   budget, since the build budget, not the cache's, bounds the decodes in
+   progress; from current mipmaps it decoded none, in 4.4 s and 2.3 GB under
+   the default budget and 7.0 s and 1.4 GB under 0.9 GiB. Taking the clusters
+   grouped by their lowest member image decoded about as often, since a
+   group's clusters still reach most photographs.
    Present the seed geometry from step 2 in images-section order, and call
    `sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member self-similarity gate,

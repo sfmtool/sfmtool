@@ -149,8 +149,9 @@ mod tests {
 
     #[test]
     fn stored_levels_follow_the_size() {
-        // The rows of the draft's table, and the edge where level 3 of a
-        // 4097 px side is exactly one tile.
+        // The rows of the table in `specs/core/camera/mipmaps.md` § "Levels
+        // by size", and the edge where level 3 of a 4097 px side is exactly
+        // one tile.
         for (w, h, levels, k, coarsest) in [
             (16320, 12240, 14, 5, (510, 382)),
             (6000, 4000, 12, 4, (375, 250)),

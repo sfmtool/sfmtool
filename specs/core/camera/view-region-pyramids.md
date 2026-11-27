@@ -13,10 +13,7 @@ otherwise reads every tap straight out of the photograph's tiles, so the
 memory a read holds grows with the patch it renders rather than with the
 photograph. This spec covers the regions, the two ways a read reaches its
 pixels, the reuse of kept regions across renders, and the entry points,
-`source_clipped_share` among them. The draft
-[out-of-core-photograph-pyramid.md](../../drafts/out-of-core-photograph-pyramid.md)
-and its companion [view-region-pyramid.md](../../drafts/view-region-pyramid.md)
-propose moving the kernels and panels onto them. Today the entry points read
+`source_clipped_share` among them. The entry points read
 photographs made in memory, and the photographs the photograph cache's `get` and
 `get_many` answer, which read their tiles through the cache and decode a
 photograph again for a tile it evicted. Track View, the Track Table's crops and
@@ -345,6 +342,42 @@ general the area is at most `(1.5 + 1.5 / w)(1.5 + 1.5 / h)` times, a bound of
 about 2.3 for square regions of about 60 px and 2.5 for ones of about 20 px.
 For regions of a few pixels it is well above 2.25, since a 1 px side grows to
 3 px and a 2 px side to 4 px.
+
+**Why two paths, and what a kernel call holds.** The bounding box of one
+read is not bounded by the patch resolution `R`. The anisotropic sampler
+takes its level from `σ_minor` and spreads up to `MAX_ANISOTROPY` (16)
+samples over the major axis, so a footprint stretched `a` times along a
+diagonal has a box of about `(R·a)² / 2` pixels at its level, 8.7 MB at
+`a = 100` and `R = 24`, and a grazing view can approach a whole level 0; the
+cluster grids take one level per grid from `s_min`, with the same effect up to
+the members' elongation limit of 16; and `Bilinear` reads level 0 over the
+whole footprint, 12 MB for a 24 x 24 tile of a patch that covers 2000 px. So a
+read copies its regions only when the kernel call's pool can hold them, and
+otherwise reads its taps through the photograph's tiles; both give the same
+values, so no view is refused and no result changes. The pool is per kernel
+call rather than per patch because a kernel's patches do not map one to a
+worker: *Refine all normals* runs a parallel loop over points whose normal
+kernels run parallel loops over views, and a worker waiting in an inner loop
+takes other points from the outer one. The copied regions of one call, all its
+patches together, are bounded by its pool, 3.1 MB per rayon thread, 99 MB on
+32 threads. The pinned tiles are bounded per thread that renders, 16 tiles,
+12.7 MB: a thread runs one read at a time, since a read's rows run serially on
+a rayon worker (`parallelize_rows` in `camera/warp_map.rs` checks
+`current_thread_index`), the tile path keeps its rows serial on every thread,
+and a tile read decodes on the calling thread without rayon. One kernel call
+on the command line, with the 32 rayon threads and the calling thread, holds
+at most 99 MB + 33 x 12.7 MB, about 520 MB, on top of the photograph cache's
+budget; the viewer, with at most two kernel calls at once (one per background
+queue), its other job thread and the GUI thread, and each panel's 3.1 MB pool,
+about 650 MB. The cluster refinement's evaluation tiles add to that, since
+`read_source_rect` copies them past a full pool, each request at most 8.4 MB at
+the default resolution
+([patch/cluster-patch-refinement.md](../patch/cluster-patch-refinement.md)
+§ "Implementation notes"). Footprints that are not stretched, the common case,
+hold a few kilobytes a view. The pool's four tiles a thread and the window of
+16 favour speed over tighter limits, at hundreds of megabytes at worst against
+cache budgets of several gigabytes; they change memory and speed, never a
+result.
 
 **Why the clipped share over tiles equals the whole level's.** The even-odd
 rule finds, for each row of pixel centres, where the row crosses the
