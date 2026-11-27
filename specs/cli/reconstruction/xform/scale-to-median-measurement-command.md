@@ -71,9 +71,14 @@ the reconstruction as it stands at that step
 so an earlier step that drops points, observations or images
 (`--remove-short-tracks`, `--include-range`, `--filter-by-reprojection-error`,
 …) can change which endpoints resolve and where, and so which measurements give
-a factor. An earlier `--scale`, `--rotate` or `--align-to` changes the scene
+a factor. An image filter (`--include-range`, `--exclude-range`,
+`--include-glob`, `--exclude-glob`, `--include-by-distribution`) also removes
+every stored measurement with an endpoint on an image it drops, so that
+measurement is neither used nor listed as left out, and a filter that removes
+them all leaves a reconstruction that stores none (§ "Errors"). An earlier
+`--scale`, or an `--align-to` whose similarity scales, changes the scene
 distances and not the stated lengths, so the factor this step computes absorbs
-it: `--scale 0.5 --scale-to-median-measurement cm` on a file whose 1 m edge is
+it, and a rotation or translation changes neither: `--scale 0.5 --scale-to-median-measurement cm` on a file whose 1 m edge is
 1 scene unit long scales by 200, and the result is in centimetres as it would
 be without the `--scale`.
 
@@ -134,8 +139,10 @@ Scaling reconstruction by 1000
   sample standard deviation and its percentage **of the median**, or *none for
   a single measurement*; the median absolute deviation as a percentage of the
   median; the smallest and largest factor; and the largest deviation from the
-  median. Every one is core's `ScaleFactorStatistics`, the median and the
-  median absolute deviation from `sfmtool_core::numeric`. The percentages are
+  median. Every one is a field of core's `ScaleFactorStatistics`, the median
+  and the median absolute deviation from `sfmtool_core::numeric`; the step
+  only divides the median absolute deviation by the median to print it as a
+  percentage, as the viewer's dialog does. The percentages are
   of the median rather than of the mean, as in core and the viewer, because
   the median is the factor applied and the mean is reported only for the
   spread.
