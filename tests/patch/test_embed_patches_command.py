@@ -124,7 +124,7 @@ def test_embed_patches_through_the_photograph_cache_writes_the_file_the_arrays_g
     )
     assert through_cache.exit_code == 0, through_cache.output
     assert "Photographs: 17 whole decodes, 0 mipmaps made" in through_cache.output
-    assert "mipmap_options" not in through_cache.output
+    assert "The cache decoded" not in through_cache.output
 
     class _Arrays:
         """The photographs as the command read them before: whole arrays."""

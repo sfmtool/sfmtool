@@ -99,7 +99,7 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   the file it wrote when it decoded every photograph whole, byte for byte.
   After the pipeline it prints the cache's whole decodes, mipmaps made and
   budget, and, when it decoded the in-core photographs more times than there
-  are of them, the line recommending `mipmap_options`, both as
+  are of them, the line saying how to read them out of core, both as
   [`sfm cluster-patches`](../image-feature/cluster-patches-command.md#process)
   prints them (`Photographs: 17 whole decodes, 0 mipmaps made, cache budget
   15.9 GiB`).
@@ -319,7 +319,8 @@ which drives the Rust patch kernels through the `sfmtool._sfmtool` bindings.
   through `ImagePyramidSet.read`, write-out); the lines it prints of the
   photograph cache are `photograph_cache_lines` in
   [_photograph_cache_report.py](../../../src/sfmtool/_photograph_cache_report.py),
-  shared with `sfm cluster-patches` and `sfm xform`.
+  shared with `sfm cluster-patches`, `sfm xform` and the strips of
+  `sfm compare` and `sfm inspect`.
 - `src/sfmtool/_embed_patches.py::embed_patches` — the orchestration: a single
   `SfmrReconstruction.to_embedded_patches` bridge (the only `.sift` read) followed
   by each round's normal step (`sfmtool.bench.refine_normals`), the Rust patch

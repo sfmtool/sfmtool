@@ -11,6 +11,7 @@ from pathlib import Path
 
 import click
 
+from .._cli_utils import shown_path
 from .._sfmtool import ProgressCounter
 from .._workspace_init_options import (
     check_workspace_init_options,
@@ -355,22 +356,13 @@ def _enable(path: str, values: dict) -> None:
     except (ValueError, OSError) as e:
         raise click.ClickException(str(e))
     click.echo(
-        f"Added mipmap_options to {_shown(root / '.sfm-workspace.json')}: "
+        f"Added mipmap_options to {shown_path(root / '.sfm-workspace.json')}: "
         f"{describe_mipmap_options(written)}."
     )
     click.echo(
-        f"No mipmap was made. 'sfm ws mipmaps {_shown(root)}' makes them now, "
+        f"No mipmap was made. 'sfm ws mipmaps {shown_path(root)}' makes them now, "
         "and every reader of the photographs makes those it needs."
     )
-
-
-def _shown(path) -> str:
-    """`path` relative to the current directory when it is under it, with `/`."""
-    path = Path(path)
-    try:
-        return path.absolute().relative_to(Path.cwd()).as_posix()
-    except ValueError:
-        return path.as_posix()
 
 
 def _images_line(report: dict) -> str:
@@ -408,15 +400,15 @@ def check_lines(report: dict, orphans: dict) -> tuple[list[str], list[str]]:
     ]
     if report["missing"]:
         lines.append(f"Missing mipmaps: {len(report['missing'])}")
-        lines.extend(f"  {_shown(p)}" for p in report["missing"])
+        lines.extend(f"  {shown_path(p)}" for p in report["missing"])
     if report["stale"]:
         lines.append(f"Stale mipmaps: {len(report['stale'])}")
-        lines.extend(f"  {_shown(p)}: {why}" for p, why in report["stale"])
+        lines.extend(f"  {shown_path(p)}: {why}" for p, why in report["stale"])
     if orphans["orphans"]:
         lines.append(f"Orphan files --prune would delete: {len(orphans['orphans'])}")
-        lines.extend(f"  {_shown(p)}: {why}" for p, why in orphans["orphans"])
+        lines.extend(f"  {shown_path(p)}: {why}" for p, why in orphans["orphans"])
     failed = [f"not checked: {message}" for _, message in report["failed"]]
-    failed.extend(f"{_shown(p)}: {why}" for p, why in orphans["failed"])
+    failed.extend(f"{shown_path(p)}: {why}" for p, why in orphans["failed"])
     return lines, failed
 
 
@@ -426,16 +418,16 @@ def prune_lines(report: dict) -> tuple[list[str], list[str]]:
     lines = []
     if report["orphans"]:
         lines.append(f"Deleted {len(report['orphans'])} orphan file(s):")
-        lines.extend(f"  {_shown(p)}: {why}" for p, why in report["orphans"])
+        lines.extend(f"  {shown_path(p)}: {why}" for p, why in report["orphans"])
     else:
         lines.append("No orphan file: nothing was deleted.")
     lines.append(f"Kept {len(report['kept'])} mip level file(s).")
     if report["links"]:
         lines.append("Links, not entered:")
-        lines.extend(f"  {_shown(p)}" for p in report["links"])
-    failed = [f"{_shown(p)}: {why}" for p, why in report["failed"]]
+        lines.extend(f"  {shown_path(p)}" for p in report["links"])
+    failed = [f"{shown_path(p)}: {why}" for p, why in report["failed"]]
     failed.extend(
-        f"{_shown(p)} is in no workspace, so there is nothing to prune"
+        f"{shown_path(p)} is in no workspace, so there is nothing to prune"
         for p in report["outside_workspaces"]
     )
     return lines, failed
