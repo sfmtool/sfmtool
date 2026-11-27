@@ -907,10 +907,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           from IMG_0042@142,198 on the bench\", the item holding endpoint A at \
                           the pixel of the camera image named and nothing else, and labelled \
                           distance from <image stem>@<rounded pixel> (with a suffix where \
-                          another item holds that). It has no stored row behind it, so its \
-                          commit appends one; place endpoint B with \
-                          set_bench_measurement_endpoint and give the stated distance with \
-                          set_bench_measurement_distance before commit_bench_measurement. To \
+                          another item holds that); its own label is measurement N, the first \
+                          N from 1 that no stored distance measurement and no measurement item \
+                          holds. It has no stored row behind it, so its commit appends one, \
+                          with endpoint B and the stated distance absent until \
+                          set_bench_measurement_endpoint and set_bench_measurement_distance \
+                          give them. To \
                           start from a 3D point, as the 3D view's point menu does on a \
                           right-click off the point's drawn patch, pass the camera_image and \
                           pixel get_point_reference_pixel gives. Refused, in \
@@ -934,10 +936,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           Measurement View's Commit does: the row its origin names at the \
                           cursor is replaced, and where it names none (the item's row was \
                           deleted) a row is appended. Only the measurements change: no point \
-                          index moves. Refused, in the panel's words, for an endpoint not \
-                          placed, no stated distance, an endpoint image past the image set, a \
-                          pixel outside its image, on a sift_files reconstruction (view-only \
-                          bench) and while a background task holds the node. The item stays on \
+                          index moves. An endpoint not placed and no stated distance are \
+                          written as absent. Refused, in the panel's words, for a label that \
+                          is empty or only white space, a placed endpoint's image past the \
+                          image set or its pixel outside its image, on a sift_files \
+                          reconstruction (view-only bench) and while a background task holds \
+                          the node. The item stays on \
                           the bench, seated on the row written, which becomes the selected \
                           measurement; the reply names it with replaced. A commit onto a row \
                           that already holds exactly what the item holds pushes no version \
@@ -954,8 +958,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the measurement, as Measurement View's label field does: one bench \
                           version labelled like \"Set the label of distance #2 to \\\"paw \
                           width\\\"\", which leaves the reconstruction alone until the item is \
-                          committed. Any text is a label, the empty one included; it is not the \
-                          item's name on the bench, which rename_bench_item sets. A label the \
+                          committed. Any text is a label, kept as given, except one that is \
+                          empty or only white space, which is refused; it is not the item's \
+                          name on the bench, which rename_bench_item sets. A label the \
                           item holds already pushes no version (changed: false). Refused on a \
                           sift_files reconstruction (view-only bench) and while a background \
                           task holds the node. Naming no item sets the focused one's. The reply \
@@ -969,7 +974,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "label",
                         json!({
                             "type": "string",
-                            "description": "The measurement's label. May be empty.",
+                            "description": "The measurement's label, not empty or only white space.",
                         }),
                     ),
                 ],

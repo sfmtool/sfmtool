@@ -311,7 +311,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           reconstructed) where the file declares a world_space_unit, \
                           scene_units (scene_distance and unit_per_scene_unit, the length of \
                           one scene unit in the measurement's unit) where it declares none, \
-                          at_infinity or refused (with the endpoint). Readings are in the \
+                          at_infinity, refused or not_placed (with the endpoint), or \
+                          no_stated_distance (reconstructed_distance in the file's \
+                          world_space_unit, named by unit, null for scene units) for a \
+                          measurement that states none, whose stated_distance is null; an \
+                          endpoint not placed is null. Readings are in the \
                           file's own coordinates: a display transform never scales them. \
                           measurement_counts gives the count of each kind.",
             kind: Read,
@@ -356,14 +360,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           or excluded, exclusion, and a ranked candidate's cost factors), or \
                           its refusal (the sentence naming the remedy, and its short form), \
                           and median, the header's line comparing this measurement's implied \
-                          scale with the median of every measurement of its kind with a \
-                          reading (null with fewer than two). Name item instead of \
+                          scale with the median of every measurement of its kind that states \
+                          a distance and has a reading (null with fewer than two). Name item \
+                          instead of \
                           measurement_index for a measurement item on the bench, read live \
                           from the item as Measurement View's edited mode reads it: the same \
                           fields, plus item, focused and origin (the row its commit would \
                           replace, null where it would append one); an endpoint not placed is \
-                          null, and then so is the result; median leaves out the item's \
-                          origin.",
+                          null, and the result's state is then not_placed; median leaves out \
+                          the item's origin.",
             kind: Read,
             schema: object(
                 &[
