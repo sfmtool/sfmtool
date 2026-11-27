@@ -112,6 +112,18 @@ fn measurement_kind_schema() -> Value {
     })
 }
 
+/// The physical unit a reconstruction is scaled to by its measurements.
+fn scale_unit_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": sfmtool_core::LengthUnit::NAMES,
+        "description": "The physical unit to scale to. Omitted, the unit the Scale to Median \
+                        Measurement dialog opens on: the reconstruction's world_space_unit, \
+                        or where it declares none the unit most of its usable measurements \
+                        are stated in, a tie going to the first of mm, cm, m, in, ft.",
+    })
+}
+
 /// A measurement's row within its kind's rows, as list_measurements lists it.
 fn measurement_index_schema() -> Value {
     json!({

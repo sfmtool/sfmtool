@@ -371,7 +371,8 @@ fixed-height for virtualization.
   refusal uses ([saving.md](saving.md)).
 - Context menu (G3): `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
-  `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
+  `Bake Transform`, `Scale to Median Measurement...`, `Tint ▸` (Original /
+  palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Refit All Points`,
   `Refine All Normals ▸` (Grown Plane / Pairwise Flow), `Prune Covered
   Observations`, `Build SIFT Files`,
@@ -379,13 +380,29 @@ fixed-height for virtualization.
   `Convert to Embedded Patches`, `Close`.
   While a camera model proposal is open on the node
   ([edits/switch-camera-model.md](edits/switch-camera-model.md)), the entries
-  that edit it (`Reset Transform`, `Bake Transform`, `Bundle Adjust...`,
-  `Retriangulate All Points`, `Refit All Points`, `Refine All Normals`, `Prune
+  that edit it (`Reset Transform`, `Bake Transform`, `Scale to Median
+  Measurement...`, `Bundle Adjust...`, `Retriangulate All Points`, `Refit All Points`, `Refine All Normals`, `Prune
   Covered Observations`, `Convert to Embedded Patches`) are greyed with *"Apply or cancel the camera
   model proposal first."*, after a busy node's sentence; `Close` applies the
   proposal first.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
+- **`Scale to Median Measurement...`** scales the node to a physical unit by
+  the median of the factors its stored distance measurements imply, as the
+  node's next version, and declares the unit
+  ([edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)).
+  It acts on the node the menu was opened on, not on the selection, and opens a
+  dialog that asks for the unit and shows how well the measurements agree, so
+  the panel reports it as `SceneGraphResponse::scale_to_median_measurement` and
+  `dock.rs` answers with `AppState::open_measurement_scale`. It sits directly
+  under `Bake Transform` because, like the bake, it writes a similarity into
+  the node's own numbers as one version: the four entries of that group set where
+  a reconstruction is and how large. Unlike the bake it leaves the 3D view where
+  it is, so the scene is drawn larger or smaller and `Z` frames it again. It is
+  greyed with the reason on a busy node, under a camera model proposal, on a
+  version that stores no distance measurement, and where no measurement gives
+  a factor in any unit; past the busy and proposal sentences, the gate is
+  `measurement_scale_prompt::refusal`, which the edit and the wire ask too.
 - **`Bundle Adjust...`** refines every pose and point of the node against its
   observations, as the node's next version and on a worker thread
   ([edits/bundle-adjust.md](edits/bundle-adjust.md)). It acts on the node the
@@ -1237,7 +1254,9 @@ The field lives on the history rather than on the node, and the node offers it
 read-only. An assignment that skipped the push would be invisible until someone
 pressed `Ctrl+Z`, so there is none to make: `History::push_transform` is the
 reframe, `History::push_pair` with a transform is the bake, and nothing else
-writes one.
+changes one. Scale to Median Measurement pushes its version through
+`History::push_pair` too, stating the transform the node already has, unchanged
+([edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)).
 
 ### Align to…
 
@@ -1652,6 +1671,14 @@ bundle from `retain_nodes` on the next frame.
   and an unsaved node's build entry is dead under the *Save ‹label› first*
   sentence. What the states themselves mean is tested in the modules of
   [index-files.md](index-files.md) and [sift-index.md](sift-index.md).
+- **The reconstruction row's `Scale to Median Measurement...`**, through the
+  same whole frames: live on the measurement fixture, drawn directly **under**
+  `Bake Transform`, and reporting the node the menu was opened on while another
+  node is selected; drawn and dead, with its reason as hover text, on a node
+  with no measurement, on one none of whose measurements gives a factor, on a
+  busy one and under a camera model proposal
+  ([edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)
+  § "Testing").
 - **The reconstruction row's `Bundle Adjust...`**, through the same whole
   frames: live on an adjustable node, drawn **above**
   `Retriangulate All Points`, and reporting the node the menu was opened on
@@ -1741,7 +1768,8 @@ bundle from `retain_nodes` on the next frame.
   entries (read over MCP). After a synthetic right-click over MCP on all three
   platforms, it checks every entry in order with its enabled state, `Tint` and
   `Refine All Normals` as the entries that open a submenu, `Align to` and `Bake Transform`
-  greyed on the demo, and `Bundle Adjust...` and `Retriangulate All Points`
+  greyed on the demo, `Scale to Median Measurement...` enabled on it, since it
+  stores a distance measurement, and `Bundle Adjust...` and `Retriangulate All Points`
   enabled on it, since its observations carry their inline keypoints. The demo
   is the demo scene, an `embedded_patches` file with patch frames and
   photographs, so `Refit All Points`, `Refine All Normals`, `Prune Covered

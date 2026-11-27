@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
-use sfmtool_core::{RotQuaternion, Se3Transform};
+use sfmtool_core::{LengthUnit, RotQuaternion, Se3Transform};
 
 use super::*;
 use crate::scene::{PointRef, ReconId};
@@ -556,4 +556,184 @@ fn set_to_origin_after_a_bake_is_the_identity_to_rounding() {
     same_transform(&transform_of(&state, id), &Se3Transform::identity(), 1e-12);
     let coordinate_system = drawn(&state, id, &label);
     close(&coordinate_system.centre.coords, &Vector3::zeros(), 1e-12);
+}
+
+// ── Scale to Median Measurement ───────────────────────────────────────────
+
+/// The factor the measurement fixture's good measurements give to
+/// millimetres: 1.02 m per scene unit.
+const TO_MM: f64 = 1000.0 * crate::measurements::fixture::GOOD_SCALE;
+
+/// The measurement fixture, declaring metres, with its point 0 on the bench.
+fn measured() -> (AppState, ReconId, String) {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    let label = state
+        .put_point_on_bench(PointRef::new(id, 0), None)
+        .expect("a live point with a patch frame");
+    (state, id, label)
+}
+
+/// Whether `a` is `b` to `tolerance` relative to `b`, or absolute below `1`.
+fn relative(a: f64, b: f64, tolerance: f64) {
+    assert!(
+        (a - b).abs() <= tolerance * b.abs().max(1.0),
+        "{a} is not {b}"
+    );
+}
+
+#[test]
+fn the_scale_multiplies_the_value_and_declares_the_unit() {
+    let (mut state, id, _) = measured();
+    let before = state.node(id).expect("loaded").recon().clone();
+    state
+        .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
+        .expect("a scale");
+
+    let node = state.node(id).expect("loaded");
+    assert!(node.is_dirty());
+    let after = node.recon();
+    assert_eq!(after.metadata.world_space_unit.as_deref(), Some("mm"));
+    for (a, b) in before.point_set.points.iter().zip(&after.point_set.points) {
+        if a.w != 0.0 {
+            close(
+                &b.position.coords,
+                &(a.position.coords * TO_MM),
+                1e-9 * TO_MM,
+            );
+        }
+    }
+    for (a, b) in before.image_set.images.iter().zip(&after.image_set.images) {
+        close(
+            &b.camera_center().coords,
+            &(a.camera_center().coords * TO_MM),
+            1e-9 * TO_MM,
+        );
+    }
+    // Its own measurements now agree with the unit.
+    let again =
+        crate::measurement_scale_prompt::node_scale(node, LengthUnit::Millimetre).expect("a scale");
+    relative(again.factor(), 1.0, 1e-6);
+}
+
+#[test]
+fn the_scale_puts_the_bench_patch_frames_through_it() {
+    let (mut state, id, label) = measured();
+    let before = patch_frame(&state, id, &label);
+    state
+        .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
+        .expect("a scale");
+    let after = patch_frame(&state, id, &label);
+    close(
+        &after.center.coords,
+        &(before.center.coords * TO_MM),
+        1e-9 * TO_MM,
+    );
+    for k in 0..2 {
+        relative(after.half_extent[k], before.half_extent[k] * TO_MM, 1e-9);
+    }
+    close(&after.u_axis, &before.u_axis, 1e-12);
+}
+
+#[test]
+fn the_scale_keeps_the_display_transform_and_draws_the_node_larger() {
+    let (mut state, id, _) = measured();
+    state.set_node_transform(id, prior()).expect("a reframe");
+    let before = picture(&state, id);
+    state
+        .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
+        .expect("a scale");
+    same_transform(&transform_of(&state, id), &prior(), 0.0);
+    // Drawn under the same transform, every place is its scaled self: the
+    // transform's scale and the factor multiply, about the transform's
+    // translation.
+    let t = prior().translation;
+    let after = picture(&state, id);
+    assert_eq!(before.len(), after.len());
+    for (a, b) in before.iter().zip(&after) {
+        close(
+            &(b.coords - t),
+            &((a.coords - t) * TO_MM),
+            1e-9 * TO_MM * a.coords.norm().max(1.0),
+        );
+    }
+}
+
+#[test]
+fn undo_of_the_scale_puts_the_value_the_unit_and_the_transform_back() {
+    let (mut state, id, label) = measured();
+    state.set_node_transform(id, prior()).expect("a reframe");
+    let base_before = Arc::clone(&state.node(id).expect("loaded").edited().base);
+    let frame_before = patch_frame(&state, id, &label);
+    state
+        .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
+        .expect("a scale");
+    state.undo(id).expect("an undo");
+    let node = state.node(id).expect("loaded");
+    assert!(Arc::ptr_eq(&node.edited().base, &base_before));
+    assert_eq!(node.recon().metadata.world_space_unit.as_deref(), Some("m"));
+    same_transform(node.transform(), &prior(), 0.0);
+    assert_eq!(patch_frame(&state, id, &label), frame_before);
+}
+
+#[test]
+fn the_scale_is_one_edit_row_naming_the_unit_and_the_factor() {
+    let (mut state, id, _) = measured();
+    state
+        .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
+        .expect("a scale");
+    let row = state.action_log.entries().last().expect("a row");
+    assert_eq!(row.kind, Kind::Edit);
+    assert!(
+        row.text
+            .starts_with("Scaled measured to mm by the median of 3 distance measurements: x1020 ("),
+        "{}",
+        row.text
+    );
+    assert!(
+        row.text.ends_with(')') && row.text.contains(" \u{2192} "),
+        "{}",
+        row.text
+    );
+}
+
+#[test]
+fn the_scale_refuses_in_the_menus_words_and_pushes_nothing() {
+    let mut state = AppState::new();
+    let id = state.append_node(crate::scene::SceneNode::demo(
+        sfmtool_core::SfmrReconstruction::demo(10),
+    ));
+    let versions = state.node(id).expect("loaded").history.versions().len();
+    let why = state
+        .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
+        .expect_err("no measurements");
+    assert_eq!(
+        Some(why),
+        crate::measurement_scale_prompt::refusal(state.node(id).expect("loaded"))
+    );
+    assert_eq!(
+        state.node(id).expect("loaded").history.versions().len(),
+        versions
+    );
+}
+
+#[test]
+fn the_scale_refuses_a_busy_node() {
+    let (mut state, id, _) = measured();
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let why = state
+        .scale_node_to_median_measurement(id, LengthUnit::Millimetre)
+        .expect_err("busy");
+    assert!(why.contains("is busy"), "{why}");
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_tasks();
 }

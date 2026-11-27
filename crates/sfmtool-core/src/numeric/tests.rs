@@ -292,6 +292,21 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
         "the borrowing counterpart of the shared median",
     ),
     (
+        "sfm-explorer/src/display_transform.rs",
+        "scale_node_to_median_measurement",
+        "delegates: the edit that applies the median `distance_measurement_scale` takes with the shared median",
+    ),
+    (
+        "sfm-explorer/src/mcp/edit.rs",
+        "scale_reconstruction_to_median_measurement",
+        "delegates: the wire's name for that edit",
+    ),
+    (
+        "sfm-explorer/src/scene_graph/menus.rs",
+        "show_scale_to_median_measurement_entry",
+        "draws the menu entry named for that edit; computes nothing",
+    ),
+    (
         "sfm-explorer/src/state/edits.rs",
         "median_projected_radius",
         "delegates: the shared median of the projected patch radii it gathers",

@@ -2810,3 +2810,63 @@ fn a_camera_varying_nothing_has_no_drop_row() {
     let painted = fisheye_frames(&mut state, 482.0);
     assert!(!says(&texts_of(&painted), super::proposal::DROP_PER_IMAGE));
 }
+
+/// The bins' names and tooltips print their edges with the decimals the edges
+/// themselves need; for the parameter table's edges, which are multiples of
+/// the bin width, that is the count the width alone gives, so every label on
+/// the seoul_bull camera reads as it did when the width chose it. A histogram
+/// of one bin is left out: its edges are half a width either side of the value,
+/// which the width's decimals printed rounded.
+#[test]
+fn the_parameter_tables_edges_print_with_their_widths_decimals() {
+    let node = seoul_bull_v02();
+    let rows = seoul_bull_rows(&node);
+    let mut checked = 0;
+    for row in &rows {
+        let Some(histogram) = &row.histogram else {
+            continue;
+        };
+        if histogram.edges.len() < 3 {
+            continue;
+        }
+        let width = histogram.edges[1] - histogram.edges[0];
+        assert_eq!(
+            super::histogram::edge_decimals(&histogram.edges),
+            super::histogram::decimals_for(width),
+            "{}: {:?}",
+            row.label,
+            histogram.edges
+        );
+        checked += 1;
+    }
+    assert!(checked >= 5, "only {checked} histograms were checked");
+    // And the ladder's own widths, with edges at multiples of them.
+    for width in [
+        0.001, 0.002, 0.005, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0,
+    ] {
+        let edges: Vec<f64> = (-3..=4).map(|k| k as f64 * width).collect();
+        assert_eq!(
+            super::histogram::edge_decimals(&edges),
+            super::histogram::decimals_for(width),
+            "{width}"
+        );
+    }
+}
+
+/// A camera with one image makes a one-bin histogram whose edges are half a
+/// width either side of its value, which no count of decimals prints exactly:
+/// they print with one decimal more than the width gives, and no more.
+#[test]
+fn a_one_bin_histogram_prints_one_decimal_past_its_width() {
+    use super::histogram::{decimals_for, edge_decimals};
+    for (value, width) in [
+        (1234.5678912, 200.0),
+        (std::f64::consts::FRAC_1_SQRT_2, 0.1),
+    ] {
+        let edges = [value - width / 2.0, value + width / 2.0];
+        assert_eq!(edge_decimals(&edges), decimals_for(width) + 1, "{edges:?}");
+    }
+    // A focal of 1234.5678912 in a bin 200 wide reads 1134.6 to 1334.6.
+    let decimals = edge_decimals(&[1134.5678912, 1334.5678912]);
+    assert_eq!(format!("{:.decimals$}", 1134.5678912), "1134.6");
+}

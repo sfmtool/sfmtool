@@ -13,17 +13,56 @@ use crate::dock::Tab;
 pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &mut UiRequests) {
     let UiParts {
         app_state,
+        viewer_3d,
         image_browser,
         image_detail,
         track_view,
         intrinsics_detail,
-        ..
     } = parts;
     let UiRequests {
         close_all_requested,
         quit_requested,
         quit_from_menu,
     } = requests;
+    // The Scale to Median Measurement dialog, and the scale it asks for. The
+    // dialog reads the node as the scene holds it on this frame, so it closes
+    // with the node and follows an undo; the edit runs here, on the GUI
+    // thread, and leaves the 3D view where it is.
+    let pending = app_state.measurement_scale_prompt.pending();
+    let busy = pending.and_then(|p| app_state.edit_refusal(p.recon));
+    let node = pending.and_then(|p| crate::scene::node_by_id(&app_state.scene, p.recon));
+    if let Some(answer) = app_state
+        .measurement_scale_prompt
+        .show(root_ui.ctx(), node, busy)
+    {
+        // A camera held in hand on the node is ended first, as an edit of
+        // the node ends it from any other gesture.
+        let moved = crate::camera_lock::exit_implicitly_for(viewer_3d, app_state, answer.recon);
+        forget_selected(
+            moved,
+            image_browser,
+            image_detail,
+            track_view,
+            intrinsics_detail,
+        );
+        // The refusal is already an Action Log row, written by the edit.
+        if app_state
+            .scale_node_to_median_measurement(answer.recon, answer.unit)
+            .is_ok()
+        {
+            // A bulk edit: the value is a whole new base, so what the panels
+            // cached about its geometry describes a value the node no longer
+            // shows.
+            forget_selected(
+                Some(answer.recon),
+                image_browser,
+                image_detail,
+                track_view,
+                intrinsics_detail,
+            );
+        }
+    }
+
     // The Bundle Adjust dialog, and the adjustment it asks for. The
     // solve starts here and runs on a worker; the version it produces
     // is installed by the poll at the top of a later frame, which is

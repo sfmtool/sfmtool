@@ -110,6 +110,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha" }),
         ),
         (
+            "get_measurement_scale",
+            json!({ "reconstruction_label": "alpha", "unit": "mm" }),
+        ),
+        (
             "get_measurement",
             json!({ "measurement_kind": "distance", "measurement_index": 0 }),
         ),
@@ -148,6 +152,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         (
             "bake_reconstruction_transform",
             json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "scale_reconstruction_to_median_measurement",
+            json!({ "reconstruction_label": "alpha", "unit": "cm" }),
         ),
         (
             "solo_reconstruction",
@@ -1322,6 +1330,7 @@ fn only_the_reads_are_annotated_read_only() {
             "get_point",
             "find_points",
             "list_measurements",
+            "get_measurement_scale",
             "get_measurement",
             "get_measurement_endpoint_views",
             "get_point_reference_pixel",
@@ -1340,16 +1349,16 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Twenty-three JSON reads, the one read that hands back a picture,
-    // eighty-five writes, six input tools, the one that writes a file, and the
+    // Twenty-four JSON reads, the one read that hands back a picture,
+    // eighty-six writes, six input tools, the one that writes a file, and the
     // one that quits.
-    assert_eq!(catalog.len(), 117, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 119, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        85
+        86
     );
     // One tool can overwrite a file by name, six can press what a person can
     // press, File ▸ Save included, and one ends the viewer, losing what is not

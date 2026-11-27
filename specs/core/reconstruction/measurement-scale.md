@@ -23,14 +23,19 @@ a misplaced endpoint or a distorted reconstruction.
 `sfm xform --scale-by-measurements`
 ([cli/reconstruction/xform/scale-by-measurements-command.md](../../cli/reconstruction/xform/scale-by-measurements-command.md))
 computes the same factor from a YAML file of Point IDs in its own Python code;
-it does not call this operation.
+it does not call this operation. SfM Explorer calls it for `Scale to Median
+Measurement...` on a reconstruction's Scene tree row, whose dialog shows the
+factor, the statistics, each measurement's factor and the exclusions, and whose
+edit applies the factor
+([gui/edits/scale-to-median-measurement.md](../../gui/edits/scale-to-median-measurement.md)).
 
 ## Rust API
 
 In [`reconstruction::measurement_scale`](../../../crates/sfmtool-core/src/reconstruction/measurement_scale.rs),
 with its tests in
 [`measurement_scale/tests.rs`](../../../crates/sfmtool-core/src/reconstruction/measurement_scale/tests.rs).
-It has no Python binding.
+Python reaches it as `SfmrReconstruction.distance_measurement_scale`
+(§ "Python binding").
 
 ```rust
 /// The bar `sfm xform --scale-by-measurements` warns at.
@@ -93,7 +98,8 @@ pub enum DistanceMeasurementScaleError {
 reconstruction. Resolving the endpoints is the expensive part, and SfM Explorer
 already resolves every stored measurement once per version and keeps the
 result on the scene node (`SceneNode::measurement_readings`,
-[gui/measurement-view.md](../../gui/measurement-view.md) § "The readings");
+[gui/measurement-view.md](../../gui/measurement-view.md) § "The readings"),
+where its Scale to Median Measurement dialog reads them afresh every frame;
 taking `&[ResolvedDistanceMeasurement]` lets a caller holding them reuse them,
 and one that does not makes them with one call to
 `resolve_distance_measurements`. It takes `MeasurementsData`, the whole
@@ -127,7 +133,8 @@ carries every exclusion.
 **Why no histogram.** The factors are in the result, and the bins a histogram
 draws are a choice of the drawing: the CLI's text histogram uses five equal
 bins from the smallest factor to the largest, and a plot sized to a panel
-would choose its own count. Binning is a few lines over `factors`, `min` and
+would choose its own count, as SfM Explorer's dialog does over each
+measurement's deviation. Binning is a few lines over `factors`, `min` and
 `max`, so it stays with whoever draws it.
 
 Example:
@@ -155,6 +162,35 @@ let mut scaled = recon.apply_se3_transform(&Se3Transform::new(
 ));
 scaled.metadata.world_space_unit = Some(LengthUnit::Millimetre.name().to_string());
 ```
+
+### Python binding
+
+```python
+scale = recon.distance_measurement_scale("mm")
+scale["factor"]                  # the median
+scale["statistics"]["disagrees"]  # past disagreement_percent, 5
+for f in scale["factors"]:       # index, stated, scene_distance, factor, deviation_percent
+    ...
+for e in scale["excluded"]:      # index, reason (a sentence)
+    ...
+```
+
+In [`reconstruction/measurement_scale.rs`](../../../crates/sfmtool-py/src/reconstruction/measurement_scale.rs),
+a method of `SfmrReconstruction` beside `resolve_distance_measurements`, since
+it reads the reconstruction's own measurements. It resolves their endpoints
+with the default options, as that method does, and calls this operation on
+them, so a Python caller holds no readings to pair with the measurements and
+cannot meet `ReadingCountMismatch`. It returns a dict of the result's fields:
+`unit`, `factor`, `factors`, `excluded` with each reason as its `Display`
+sentence, and `statistics` with `disagreement_percent`, the
+`SCALE_DISAGREEMENT_PERCENT` that `disagrees` is measured against. The unit is
+given by name (`"mm"`, `"cm"`, `"m"`, `"in"` or `"ft"`). An unknown unit, no
+stored distance measurement and no usable one raise `ValueError` with the
+error's sentence. Its tests are in
+[`test_measurement_scale_rust_bindings.py`](../../../tests/rust_bindings/reconstruction/test_measurement_scale_rust_bindings.py),
+on the demo scene's measurement of its cube's 1 m edge: its factor in two
+units, the same edge stated three times with one 20% long giving the shorter
+two's factor and a 20% deviation, and the three errors.
 
 ## Theory
 

@@ -13,6 +13,11 @@
 //! three halves at once: the transformed value, the transformed bench, and the
 //! identity.
 //!
+//! Scale to Median Measurement shares the bake's push: it writes the uniform
+//! scale a reconstruction's distance measurements imply into its value, keeps
+//! the display transform the node has, and leaves the 3D view where it is
+//! (`specs/gui/edits/scale-to-median-measurement.md`).
+//!
 //! Four of the ways to set a transform read the focused item's patch
 //! ([`PatchReframe`]), which the 3D viewport's context menu and the wire both
 //! offer. The arithmetic is here, apart from either, so the menu, the wire and
@@ -25,7 +30,7 @@ use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 use sfmtool_core::bench::{Bench, BenchItem, EditableTrack, Stage};
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::readable::Readable;
-use sfmtool_core::{EditedReconstruction, RotQuaternion, Se3Transform};
+use sfmtool_core::{EditedReconstruction, LengthUnit, RotQuaternion, Se3Transform};
 
 use crate::action_log::{version_step_text, Kind};
 use crate::document::PointMap;
@@ -308,9 +313,26 @@ fn magnitude_text(transform: &Se3Transform) -> String {
     text
 }
 
-/// Why `transform` cannot be `node`'s display transform, or `None` when it can.
+/// Why `transform` cannot be `node`'s display transform, or `None` when it can:
+/// it carries the node out of range ([`out_of_range`]).
+fn out_of_range_refusal(
+    node: &crate::scene::SceneNode,
+    transform: &Se3Transform,
+) -> Option<String> {
+    out_of_range(node, transform).map(|far| {
+        format!(
+            "Cannot set the transform of {}: it moves the reconstruction out to {} scene \
+             units, too far for its distances to be measured.",
+            node.label,
+            Readable(far)
+        )
+    })
+}
+
+/// How far `transform` carries `node` when that is out of range, or `None`
+/// when it is not.
 ///
-/// Refused when it carries the node's bounds -- the box around its finite
+/// Out of range when it carries the node's bounds -- the box around its finite
 /// points, its camera centres and its own origin -- to a place whose squared
 /// distance from the world's origin is not a finite number. Framing, picking
 /// and the scene's bounds all square distances, so a node put there would be
@@ -318,10 +340,7 @@ fn magnitude_text(transform: &Se3Transform) -> String {
 /// scene units`. The check is on the box's eight corners, which bound every
 /// point inside it under a rotation, a uniform scale and a translation. Points
 /// at infinity take only the rotation and cannot overflow.
-fn out_of_range_refusal(
-    node: &crate::scene::SceneNode,
-    transform: &Se3Transform,
-) -> Option<String> {
+fn out_of_range(node: &crate::scene::SceneNode, transform: &Se3Transform) -> Option<f64> {
     let edited = node.edited();
     let finite_points = edited
         .live_indexes()
@@ -352,12 +371,7 @@ fn out_of_range_refusal(
         };
         let moved = transform.apply_to_point(&Point3::new(pick(0), pick(1), pick(2)));
         if !moved.coords.norm_squared().is_finite() {
-            return Some(format!(
-                "Cannot set the transform of {}: it moves the reconstruction out to {} scene \
-                 units, too far for its distances to be measured.",
-                node.label,
-                Readable(moved.coords.amax())
-            ));
+            return Some(moved.coords.amax());
         }
     }
     None
@@ -570,6 +584,43 @@ impl AppState {
             .expect("the refusal above covers a node that is gone");
         let node = &self.scene[index];
         let transform = node.transform().clone();
+        let text = format!(
+            "Baked transform of {}: {}",
+            node.label,
+            magnitude_text(&transform)
+        );
+        Ok(self.push_similarity(
+            index,
+            &transform,
+            Se3Transform::identity(),
+            None,
+            &text,
+            collector,
+        ))
+    }
+
+    /// Put node `index`'s value and bench through `similarity` and push the
+    /// result as one version stating every half: the transformed value, with
+    /// `unit` as its `world_space_unit` when one is given, the transformed
+    /// bench, and `transform` as the display transform. Returns the Action
+    /// Log's sentence, `text` with the version transition.
+    ///
+    /// The one place a whole-value similarity reaches a history, shared by the
+    /// bake and Scale to Median Measurement, so both fold an overlay, move the
+    /// bench and map the rows the same way. The row map is the identity:
+    /// `apply_se3_transform` maps the point vector in place, keeping its count,
+    /// its order and its ids.
+    fn push_similarity(
+        &mut self,
+        index: usize,
+        similarity: &Se3Transform,
+        transform: Se3Transform,
+        unit: Option<LengthUnit>,
+        text: &str,
+        collector: &Collector,
+    ) -> String {
+        let node = &self.scene[index];
+        let id = node.id;
 
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, which the transform can read directly.
@@ -581,40 +632,122 @@ impl AppState {
             let (value, map) = edited.materialize();
             (Some(value), Some(PointMap::Rows(map)))
         };
-        let (baked, bench) = {
+        let (mut moved, bench) = {
             let _phase = collector.phase("transform");
             let source = materialised.as_ref().unwrap_or(&edited.base);
             (
-                source.apply_se3_transform(&transform),
-                bake_bench(node.history.current_bench(), &transform),
+                source.apply_se3_transform(similarity),
+                bake_bench(node.history.current_bench(), similarity),
             )
         };
+        if let Some(unit) = unit {
+            moved.metadata.world_space_unit = Some(unit.name().to_string());
+        }
         let identity = PointMap::Removed(Vec::new());
         let map = match mat_map {
             Some(folded) => PointMap::Chain(vec![folded, identity]),
             None => identity,
         };
 
-        let text = format!(
-            "Baked transform of {}: {}",
-            node.label,
-            magnitude_text(&transform)
-        );
         let node = &mut self.scene[index];
         let serial = {
             let _phase = collector.phase("push version");
             node.history.push_pair(
-                Some(EditedReconstruction::new(Arc::new(baked))),
+                Some(EditedReconstruction::new(Arc::new(moved))),
                 Arc::new(bench),
-                Some(Se3Transform::identity()),
+                Some(transform),
                 map,
-                text.clone(),
+                text,
                 None,
             )
         };
         let parent = version_before(node, serial);
         self.follow_selection_forward(id);
-        Ok(version_step_text(&text, parent, serial))
+        version_step_text(text, parent, serial)
+    }
+
+    /// Scale `id` to `unit` by the median of the factors its stored distance
+    /// measurements imply, as one version: `Scale to Median Measurement...`.
+    ///
+    /// A **bulk edit** through `SfmrReconstruction::apply_se3_transform` with
+    /// the uniform scale the measurements give
+    /// ([`crate::measurement_scale_prompt::node_scale`], read from the node's
+    /// cached readings), its `world_space_unit` set to `unit`, and the bench's
+    /// patch frames put through the same scale, in one version that states
+    /// every half, the display transform being the one the node already has,
+    /// so an undo puts back the value and the bench together.
+    ///
+    /// Nothing of the view is touched: the camera stays where it is, and the
+    /// scene is drawn the factor times larger from it.
+    ///
+    /// Refused on a busy node, on one a camera model proposal is open on, on
+    /// one no longer loaded, where the measurements give no scale in `unit`,
+    /// and where the scale would carry the node out of range. Records its own
+    /// outcome, as an `Edit` from the instant below.
+    pub(crate) fn scale_node_to_median_measurement(
+        &mut self,
+        id: ReconId,
+        unit: LengthUnit,
+    ) -> Result<(), String> {
+        let started = Instant::now();
+        let collector = Collector::new(self.action_log.detailed_timing());
+        match self.scale_node_inner(id, unit, &collector) {
+            Ok(text) => {
+                self.action_log
+                    .record_done(Kind::Edit, started, text, collector.take());
+                Ok(())
+            }
+            Err(why) => {
+                self.action_log.fail(Kind::Edit, why.clone());
+                Err(why)
+            }
+        }
+    }
+
+    /// The scale itself: `Ok` carries the Action Log's sentence, `Err` the
+    /// refusal's.
+    fn scale_node_inner(
+        &mut self,
+        id: ReconId,
+        unit: LengthUnit,
+        collector: &Collector,
+    ) -> Result<String, String> {
+        if let Some(why) = self.edit_refusal(id) {
+            return Err(why);
+        }
+        let index = self.node_index(id)?;
+        let node = &self.scene[index];
+        // The menu entry's gate and then the dialog's `Apply`, in their words,
+        // so the entry, the button and a call that asks anyway give one answer.
+        if let Some(why) = crate::measurement_scale_prompt::refusal(node) {
+            return Err(why);
+        }
+        let scale = crate::measurement_scale_prompt::node_scale(node, unit)
+            .map_err(crate::measurement_scale_prompt::sentence)?;
+        let factor = scale.factor();
+        let similarity = Se3Transform::new(RotQuaternion::identity(), Vector3::zeros(), factor);
+        // Both the value's own coordinates and where the node is drawn, under
+        // the transform it keeps.
+        let drawn = similarity.compose(node.transform());
+        if let Some(far) = out_of_range(node, &similarity).or_else(|| out_of_range(node, &drawn)) {
+            return Err(format!(
+                "Cannot scale {} to {}: it moves the reconstruction out to {} scene units, too \
+                 far for its distances to be measured.",
+                node.label,
+                unit.name(),
+                Readable(far)
+            ));
+        }
+        let transform = node.transform().clone();
+        let count = scale.statistics.count;
+        let text = format!(
+            "Scaled {} to {} by the median of {count} distance measurement{}: x{}",
+            node.label,
+            unit.name(),
+            if count == 1 { "" } else { "s" },
+            crate::measurement_scale_prompt::number_text(factor)
+        );
+        Ok(self.push_similarity(index, &similarity, transform, Some(unit), &text, collector))
     }
 }
 

@@ -124,8 +124,8 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and seventeen tools. Twenty-four read -- twenty-three that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- eighty-five
+One hundred and nineteen tools. Twenty-five read -- twenty-four that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- eighty-six
 write, six send input, one writes a file, and one quits the viewer. `get_widgets`
 and the six input tools, `click`, `hover`, `drag`, `scroll`, `press_key` and
 `type_text`, read and press the viewer's widgets the way a person's eyes, mouse
@@ -143,6 +143,7 @@ Quit does (§ "`quit`").
 | `get_point` | read | One 3D point: position, colour, RMS reprojection error (`rms_error_px`), patch frame, full track, and the viewed track's evaluation for the viewed point |
 | `find_points` | read | The points of one reconstruction that pass bounds on the track table's columns, optionally only those one camera image sees, sorted by a column, a page at a time with the values asked for; computes the columns it lacks with *Find points*, on a worker thread |
 | `list_measurements` | read | Every measurement one reconstruction stores, each with the reading its Scene tree row shows |
+| `get_measurement_scale` | read | The scale one reconstruction's distance measurements give it in a physical unit, as the Scale to Median Measurement dialog shows it: the median factor, its statistics, each measurement's factor, and the ones that give none |
 | `get_measurement` | read | One measurement whole, as Measurement View shows it: each endpoint's resolution with every candidate or its refusal, the result, and the median line; or a measurement item on the bench, read live |
 | `get_measurement_endpoint_views` | read | The other images that show the place one endpoint of a measurement item names, as Measurement View's *Switch image…* popup lists them |
 | `get_point_reference_pixel` | read | A 3D point's reference pixel, the image and keypoint of its reference observation, which the 3D view's *New Measurement from Here* starts a measurement at and its *Set Endpoint A Here* and *Set Endpoint B Here* set a measurement endpoint to where the right-click was not on the point's drawn patch |
@@ -168,6 +169,7 @@ Quit does (§ "`quit`").
 | `set_reconstruction_transform` | write | Set one reconstruction's display transform outright, the identity included |
 | `set_reconstruction_transform_from_patch` | write | Set it from the focused item's patch, in one of the four ways the viewport's patch menu offers |
 | `bake_reconstruction_transform` | write | Write the display transform into the reconstruction and return it to its own frame, as one version |
+| `scale_reconstruction_to_median_measurement` | write | Scale the reconstruction to a physical unit by the median of its distance measurements' factors, as one version, leaving the 3D view where it is |
 | `solo_reconstruction` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
@@ -252,8 +254,8 @@ Quit does (§ "`quit`").
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
-Every tool is annotated: the twenty-three reads and `screenshot` carry
-`readOnlyHint: true`, the eighty-five writes `destructiveHint: false` (none of
+Every tool is annotated: the twenty-four reads and `screenshot` carry
+`readOnlyHint: true`, the eighty-six writes `destructiveHint: false` (none of
 them deletes or overwrites a file the person made: `close_reconstruction`
 unloads, it does not delete; `set_window_layout` changes the window and the
 dock, not the layout file the menu saves; an **edit** makes a new version of a
@@ -1732,6 +1734,56 @@ patch is, `set_reconstruction_transform_from_patch` moves the world onto it,
 `get_scene` reports the transform that resulted, `screenshot` shows it, and
 `bake_reconstruction_transform` followed by `save_reconstruction` keeps it.
 `undo` steps back out of any of them, the transform included.
+
+### `get_measurement_scale` / `scale_reconstruction_to_median_measurement`
+
+```jsonc
+get_measurement_scale { "reconstruction_label": "dino", "unit": "mm" }
+scale_reconstruction_to_median_measurement { "reconstruction_label": "dino", "unit": "mm" }
+```
+
+The Scene panel's `Scale to Median Measurement...` and the dialog it opens
+([edits/scale-to-median-measurement.md](edits/scale-to-median-measurement.md)).
+`unit` is one of `mm`, `cm`, `m`, `in` and `ft`; omitted, it is the unit the
+dialog opens on: the file's `world_space_unit`, or where it declares none the
+unit most of the usable measurements are stated in, a tie going to the first
+of that list. The read's `reconstruction_label` defaults to the selected
+reconstruction; the write's is required, as on every tool that pushes a
+version.
+
+`get_measurement_scale` is what the dialog shows, read from the node's cached
+readings as the dialog reads them: the reconstruction's `world_space_unit`, the
+`unit`, `factor` (the median per-measurement factor, what the write multiplies
+every coordinate by) and `scale_text` (`1 scene unit = 1020 mm`), and where the
+file declares a unit `correction`, the measurements' scale relative to that
+unit, which is not the multiplier, and `correction_text` (`The file declares m.
+By these measurements its scale is off by +2.00% (×1.020).`); `statistics` (`count`
+and `total`, `median`, `mean`, `sample_std` and `sample_std_percent`,
+`median_absolute_deviation`, `min`, `max`, `max_abs_deviation_percent` and
+`disagrees`), with `disagreement_percent`, the bar `disagrees` is measured
+against; `factors`, one per usable measurement with its `measurement_kind`,
+`measurement_index`, `label`, `stated_distance` and `stated_unit`, the stated
+distance in the unit (`stated_in_unit`), `scene_distance`, `factor` and the
+signed `deviation_percent`; and `excluded`, each measurement that gives no
+factor with its `reason` sentence. Where the measurements give no scale in the
+unit, `refusal` is the sentence the dialog shows, `factor`, `statistics` and
+the texts are null, and `excluded` lists every measurement when none was
+usable. `apply_refusal` is why the write would be refused right now, in the
+words of the greyed `Apply` button, and null when it would run.
+
+`scale_reconstruction_to_median_measurement` is the dialog's `Apply`, through
+the same `AppState` call. It leaves the 3D view's camera, the scene scale and
+the node's display transform as they are, so the reconstruction is drawn the
+factor times larger from the same camera, and a `set_view` with `fit` frames it
+again. It replies in the shape
+of an edit (§ "Editing reconstruction data"), records `Kind::Edit`, and is
+refused while a background task holds the node, on a node that stores no
+distance measurement, and on one none of whose measurements gives a factor,
+in the words the greyed menu entry carries. A camera held in hand on the node
+is ended first and an open camera model proposal applied, as for every edit.
+No tool opens the dialog itself, as none opens the Bundle Adjust dialog: a
+`click` with `mouse_button: "right"` on the reconstruction's row and a `click`
+on the entry put it up for a screenshot.
 
 ### `solo_reconstruction`
 
@@ -4182,8 +4234,9 @@ to the base slot it replaced, and a point new to the base follows the last
 surviving base point ([document-model.md](document-model.md) § "Two kinds of
 edit"). The fold moves no image index. So `move_camera_image`, `switch_camera_model`,
 `add_camera_image_to_tracks`, `retriangulate_all_points`, `refit_all_points`,
-`refine_all_normals`, `convert_to_embedded_patches` and
-`bake_reconstruction_transform`, which move no
+`refine_all_normals`, `convert_to_embedded_patches`,
+`bake_reconstruction_transform` and
+`scale_reconstruction_to_median_measurement`, which move no
 index of their own, renumber points whenever a point edit is pending, and
 renumber nothing otherwise. `move_camera_image` and `switch_camera_model` are
 with the renumbering edits in what the drain forgets afterwards either way: the
@@ -7259,7 +7312,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and seventeen tools**, twenty-four of them reads, six of the
+- **The catalog is one hundred and nineteen tools**, twenty-five of them reads, six of the
   `Input` kind, one of the `Save` kind and one of the `Quit` kind, those eight
   carrying `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

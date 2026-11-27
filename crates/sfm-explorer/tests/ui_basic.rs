@@ -1643,6 +1643,7 @@ fn the_reconstruction_rows_context_menu_lists_every_entry() {
             ("Align to", false),
             ("Reset Transform", false),
             ("Bake Transform", false),
+            ("Scale to Median Measurement...", true),
             ("Tint", true),
             ("Bundle Adjust...", true),
             ("Retriangulate All Points", true),

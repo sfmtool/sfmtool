@@ -4562,3 +4562,147 @@ fn a_right_click_on_a_measurement_row_selects_nothing() {
     }
     assert_eq!(panel.take_measurement_open(), None);
 }
+
+// ── Scale to Median Measurement... ──────────────────────────────────────
+
+/// `Scale to Median Measurement...` is live on a node whose measurements give
+/// a scale, sits directly under `Bake Transform`, and reports the node it was
+/// opened on rather than the selection.
+#[test]
+fn the_scale_to_median_measurement_entry_is_live_on_a_measured_node() {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    state.append_node(file_node("/runs/run_b.sfmr", 8, "IMG"));
+    let other = state.scene[1].id;
+    state.selected_recon = Some(other);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let entry = panel
+        .hit_rect(row_id(id, "scale_to_median_measurement"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the reconstruction row's menu offered no {}",
+                super::menus::SCALE_TO_MEDIAN_MEASUREMENT
+            )
+        });
+    let bake = panel
+        .hit_rect(row_id(id, "bake_transform"))
+        .expect("the bake entry");
+    assert!(
+        entry.top() >= bake.bottom() - 1.0 && entry.top() - bake.bottom() < entry.height(),
+        "the entry is not directly under Bake Transform: {bake:?} then {entry:?}"
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "scale_to_median_measurement"),
+    );
+    assert_eq!(
+        response.scale_to_median_measurement,
+        Some(id),
+        "the entry reported the selection rather than the row it was opened on"
+    );
+}
+
+/// Open the reconstruction row's menu on `id`, and give back what a click on
+/// `Scale to Median Measurement...` reported and the texts painted with the
+/// pointer resting on it.
+fn scale_entry_refused(
+    state: &mut AppState,
+    id: crate::scene::ReconId,
+) -> (Option<crate::scene::ReconId>, Vec<String>) {
+    let (mut panel, ctx) = settled(state);
+    open_context_menu(&mut panel, &ctx, state, row_id(id, "node_label"));
+    let at = panel
+        .hit_rect(row_id(id, "scale_to_median_measurement"))
+        .expect("the entry was hidden rather than greyed")
+        .center();
+    let hovered = hover_texts_after_a_click(&mut panel, &ctx, state, at);
+    let response = click(
+        &mut panel,
+        &ctx,
+        state,
+        row_id(id, "scale_to_median_measurement"),
+    );
+    (response.scale_to_median_measurement, hovered)
+}
+
+#[test]
+fn the_scale_entry_is_greyed_on_a_node_with_no_measurements() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let why = crate::measurement_scale_prompt::refusal(state.node(id).unwrap())
+        .expect("the demo stores no measurement");
+    let (clicked, hovered) = scale_entry_refused(&mut state, id);
+    assert_eq!(clicked, None, "the greyed entry ran");
+    assert!(
+        hovered.contains(&why),
+        "{why:?} was not hovered: {hovered:?}"
+    );
+}
+
+#[test]
+fn the_scale_entry_is_greyed_where_no_measurement_gives_a_factor() {
+    let recon = crate::measurements::fixture::keeping(
+        crate::measurements::fixture::measured_reconstruction(Some("m")),
+        &[2, 3],
+    );
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/measured.sfmr"),
+        recon,
+    ));
+    let why = crate::measurement_scale_prompt::refusal(state.node(id).unwrap())
+        .expect("neither measurement gives a factor");
+    assert!(
+        why.starts_with("None of the 2 distance measurements"),
+        "{why}"
+    );
+    let (clicked, hovered) = scale_entry_refused(&mut state, id);
+    assert_eq!(clicked, None, "the greyed entry ran");
+    assert!(
+        hovered.contains(&why),
+        "{why:?} was not hovered: {hovered:?}"
+    );
+}
+
+#[test]
+fn the_scale_entry_is_greyed_while_the_node_is_busy() {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let why = state.busy_refusal(id).expect("busy");
+    let (clicked, hovered) = scale_entry_refused(&mut state, id);
+    assert_eq!(clicked, None, "the entry was live on a busy node");
+    assert!(
+        hovered.contains(&why),
+        "{why:?} was not hovered: {hovered:?}"
+    );
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_tasks();
+}
+
+#[test]
+fn the_scale_entry_is_greyed_while_a_camera_model_proposal_is_open() {
+    let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let (clicked, hovered) = scale_entry_refused(&mut state, id);
+    assert_eq!(clicked, None, "the entry was live under a proposal");
+    let why = crate::camera_model_proposal::PROPOSAL_OPEN_HINT.to_string();
+    assert!(
+        hovered.contains(&why),
+        "{why:?} was not hovered: {hovered:?}"
+    );
+}

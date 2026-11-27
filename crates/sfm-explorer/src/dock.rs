@@ -1467,6 +1467,11 @@ impl TabContext<'_> {
                 self.forget_recon(id);
             }
         }
+        // A question first: the dialog it opens scales the node on `Apply`
+        // (see `app/modals.rs`).
+        if let Some(id) = response.scale_to_median_measurement {
+            self.state.open_measurement_scale(id);
+        }
         // A question first rather than a worker: the dialog it opens starts
         // the solve on `Run` (see `app/modals.rs`).
         if let Some(id) = response.bundle_adjust {

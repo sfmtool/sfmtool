@@ -33,6 +33,7 @@ impl Command {
             Command::GetIntrinsicAdjustments { .. } => "get_intrinsic_adjustments",
             Command::GetPoint { .. } => "get_point",
             Command::ListMeasurements { .. } => "list_measurements",
+            Command::GetMeasurementScale { .. } => "get_measurement_scale",
             Command::GetMeasurement { .. } => "get_measurement",
             Command::GetMeasurementEndpointViews { .. } => "get_measurement_endpoint_views",
             Command::GetPointReferencePixel { .. } => "get_point_reference_pixel",
@@ -52,6 +53,9 @@ impl Command {
                 "set_reconstruction_transform_from_patch"
             }
             Command::BakeReconstructionTransform { .. } => "bake_reconstruction_transform",
+            Command::ScaleReconstructionToMedianMeasurement { .. } => {
+                "scale_reconstruction_to_median_measurement"
+            }
             Command::SoloReconstruction { .. } => "solo_reconstruction",
             Command::GetImageDetailDisplay => "get_image_detail_display",
             Command::SetImageDetailDisplay { .. } => "set_image_detail_display",
@@ -214,6 +218,12 @@ impl Command {
             | Command::BakeReconstructionTransform {
                 reconstruction_label,
             }
+            // Moves every camera centre, so a camera held in hand would be
+            // left standing at a pose of the old scale.
+            | Command::ScaleReconstructionToMedianMeasurement {
+                reconstruction_label,
+                ..
+            }
             | Command::ConvertToEmbeddedPatches {
                 reconstruction_label,
             }
@@ -304,6 +314,11 @@ impl Command {
             | Command::BakeReconstructionTransform {
                 reconstruction_label,
             }
+            // The bake's case: a whole new base, nothing renumbered.
+            | Command::ScaleReconstructionToMedianMeasurement {
+                reconstruction_label,
+                ..
+            }
             | Command::MoveCameraImage {
                 reconstruction_label,
                 ..
@@ -385,6 +400,7 @@ impl Command {
             | Command::GetIntrinsicAdjustments { .. }
             | Command::GetPoint { .. }
             | Command::ListMeasurements { .. }
+            | Command::GetMeasurementScale { .. }
             | Command::GetMeasurement { .. }
             | Command::GetMeasurementEndpointViews { .. }
             | Command::GetPointReferencePixel { .. }
@@ -425,6 +441,7 @@ impl Command {
             | Command::SwitchCameraModel { .. }
             | Command::ApplyCameraModelProposal { .. }
             | Command::BakeReconstructionTransform { .. }
+            | Command::ScaleReconstructionToMedianMeasurement { .. }
             | Command::ConvertToEmbeddedPatches { .. }
             // The two bench steps whose row is an `Edit`, because each is one
             // (`specs/gui/edits/commit-track.md`, `specs/gui/measurement-view.md`).
