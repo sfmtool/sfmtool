@@ -188,3 +188,73 @@ fn the_workspace_file_is_read_once_per_root_and_again_when_it_changes() {
     cache.get_many(&paths, &Progress::none()).unwrap();
     assert_eq!((reads(), cache.stats().decodes), (3, 10));
 }
+
+#[test]
+fn a_layout_read_notes_the_first_large_photograph_of_a_workspace_without_mipmap_options() {
+    let long = DEFAULT_OUT_OF_CORE_LONG_SIDE;
+    let without = tempfile::tempdir().unwrap();
+    write_workspace(without.path(), "{}", 1);
+    let at_threshold = write_png(without.path(), "at.png", long, 1);
+    let a = write_png(without.path(), "a.png", 1, long + 1);
+    let b = write_png(without.path(), "b.png", long + 1, 1);
+    let cache = PhotographCache::new(with_budget(GIB));
+
+    cache.request_layout(&at_threshold);
+    assert_eq!(cache.large_photograph_without_mipmap_options(), None);
+    cache.request_layout(&a);
+    assert_eq!(
+        cache.large_photograph_without_mipmap_options(),
+        Some(a.as_path())
+    );
+    // The first one found stays the answer, and the blocking read notes it too.
+    cache.read_layout(&b).unwrap();
+    cache.clear();
+    assert_eq!(
+        cache.large_photograph_without_mipmap_options(),
+        Some(a.as_path())
+    );
+    let blocking = PhotographCache::new(with_budget(GIB));
+    blocking.read_layout(&b).unwrap();
+    assert_eq!(
+        blocking.large_photograph_without_mipmap_options(),
+        Some(b.as_path())
+    );
+
+    // A workspace whose file has the object, even one whose threshold keeps
+    // the photograph in core, is not one without it, and a photograph in no
+    // workspace is not one either.
+    let with = tempfile::tempdir().unwrap();
+    write_workspace(with.path(), &valid(4096), 1);
+    let c = write_png(with.path(), "c.png", long + 1, 1);
+    let outside = tempfile::tempdir().unwrap();
+    let d = write_png(outside.path(), "d.png", long + 1, 1);
+    let cache = PhotographCache::new(with_budget(GIB));
+    for path in [&c, &d] {
+        cache.request_layout(path);
+        cache.read_layout(path).unwrap();
+    }
+    assert_eq!(cache.large_photograph_without_mipmap_options(), None);
+}
+
+#[test]
+fn a_decode_alone_notes_a_large_photograph_of_a_workspace_without_mipmap_options() {
+    let long = DEFAULT_OUT_OF_CORE_LONG_SIDE;
+    let dir = tempfile::tempdir().unwrap();
+    write_workspace(dir.path(), "{}", 1);
+    let a = write_png(dir.path(), "a.png", long + 1, 1);
+    let b = write_png(dir.path(), "b.png", long + 1, 1);
+
+    let by_get = PhotographCache::new(with_budget(GIB));
+    by_get.get(&a, &Progress::none()).unwrap();
+    assert_eq!(
+        by_get.large_photograph_without_mipmap_options(),
+        Some(a.as_path())
+    );
+    let by_get_many = PhotographCache::new(with_budget(GIB));
+    let (got, _) = by_get_many.get_many(&[&b], &Progress::none()).unwrap();
+    assert!(got[0].is_some());
+    assert_eq!(
+        by_get_many.large_photograph_without_mipmap_options(),
+        Some(b.as_path())
+    );
+}

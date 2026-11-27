@@ -247,6 +247,12 @@ impl App {
         if self.state.drive_thumbnail_fills() {
             self.egui_ctx.request_repaint();
         }
+        // A read of the photograph cache off the GUI thread (an open's
+        // render, a step's read, a panel's layout read) may have found a large
+        // photograph its workspace decodes whole; the notice saying so is
+        // written before the drain, so an agent's read in this frame sees it
+        // (`crate::state::photograph_tier_notice`).
+        self.state.give_photograph_tier_notice();
         // The bench's live evaluation lands here too, for the same reason
         // (`specs/gui/bench.md` § "Live evaluation").
         if self.state.drive_bench_evaluation() {

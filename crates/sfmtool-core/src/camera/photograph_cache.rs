@@ -36,13 +36,16 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use rayon::prelude::*;
 
 use crate::camera::image::{image_dimensions, ImageU8};
-use crate::camera::mipmap::{MipmapOptions, PyramidLayout, MAX_JPEG_SIDE, PHOTOGRAPH_TILE_SIZE};
+use crate::camera::mipmap::{
+    MipmapOptions, PyramidLayout, DEFAULT_OUT_OF_CORE_LONG_SIDE, MAX_JPEG_SIDE,
+    PHOTOGRAPH_TILE_SIZE,
+};
 use crate::camera::tiled_photograph::{
     cut_image, tile_count, CutImage, PhotographReadError, PhotographTile, TileKey, TiledPhotograph,
 };
@@ -436,26 +439,6 @@ fn unreadable(path: &Path, e: ::image::ImageError) -> GetError {
         }
         e => GetError::Unreadable(format!("{}: {e}", path.display())),
     }
-}
-
-/// The photograph's size from its header, refused as [`GetError::Workspace`]
-/// while `setting`, its workspace's, cannot be read, and as
-/// [`GetError::TooLarge`] with a side over [`MAX_JPEG_SIDE`]: the header and
-/// the setting decide the refusal, so a photograph is never decoded only to
-/// be refused.
-fn header(path: &Path, setting: &WorkspaceSetting) -> Result<(u32, u32), GetError> {
-    let (width, height) = image_dimensions(path).map_err(|e| unreadable(path, e))?;
-    if let Err(e) = &setting.options {
-        return Err(GetError::Workspace(e.clone()));
-    }
-    if width > MAX_JPEG_SIDE || height > MAX_JPEG_SIDE {
-        return Err(GetError::TooLarge {
-            path: path.to_path_buf(),
-            width,
-            height,
-        });
-    }
-    Ok((width, height))
 }
 
 /// The workspace setting a photograph is read under: its workspace root and
@@ -1056,6 +1039,11 @@ struct Shared {
     /// current, which a check of the coarsest file alone does not show
     /// ([`files::Stale`]). Its lock is taken with no other lock held.
     stale: Mutex<HashMap<PathBuf, files::Stale>>,
+    /// The first photograph whose header a layout read, decode or build of
+    /// this cache read with a side over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in
+    /// a workspace whose file has no `mipmap_options`, kept for the cache's
+    /// life.
+    large_in_core: OnceLock<PathBuf>,
     /// How many times a workspace file has been read for its
     /// `mipmap_options`.
     #[cfg(test)]
@@ -1162,6 +1150,7 @@ impl PhotographCache {
                 sources: Mutex::new(HashMap::new()),
                 not_written: Mutex::new(HashMap::new()),
                 stale: Mutex::new(HashMap::new()),
+                large_in_core: OnceLock::new(),
                 #[cfg(test)]
                 workspace_reads: AtomicU64::new(0),
                 #[cfg(test)]
@@ -1594,6 +1583,62 @@ impl PhotographCache {
         lock_ignoring_poison(&self.shared.not_written).clear();
     }
 
+    /// The first photograph a read of this cache found, from its header,
+    /// with a side over [`DEFAULT_OUT_OF_CORE_LONG_SIDE`] in a workspace whose file has
+    /// no `mipmap_options`, so that it is decoded whole where a new
+    /// workspace would read it a tile at a time; `None` until a read finds
+    /// one. The header of every layout read ([`Self::request_layout`],
+    /// [`Self::read_layout`]) and of every decode or build of [`Self::get`],
+    /// [`Self::get_many`], the tile requests and [`Self::build_mipmaps`] is
+    /// looked at, so a photograph decoded before any layout is asked for is
+    /// found too. A photograph in no workspace is not one, since there is no
+    /// workspace file to add the object to. Reads nothing and takes no lock,
+    /// so the viewer asks every frame; neither [`Self::forget`] nor
+    /// [`Self::clear`] drops it.
+    pub fn large_photograph_without_mipmap_options(&self) -> Option<&Path> {
+        self.shared.large_in_core.get().map(PathBuf::as_path)
+    }
+
+    /// The photograph's size from its header, refused as [`GetError::Workspace`]
+    /// while `setting`, its workspace's, cannot be read, and as
+    /// [`GetError::TooLarge`] with a side over [`MAX_JPEG_SIDE`]: the header and
+    /// the setting decide the refusal, so a photograph is never decoded only to
+    /// be refused. Every layout read, decode and build in the cache reads its
+    /// header here, so it is where
+    /// [`Self::large_photograph_without_mipmap_options`]' note is taken,
+    /// whichever of them first meets the photograph. The header reads that
+    /// only size a decode ([`Self::builds_that_fit`], a miss of
+    /// [`Self::get_many`]) or check the mipmap of a photograph in a workspace
+    /// with the object read it directly and take no note.
+    fn header(&self, path: &Path, setting: &WorkspaceSetting) -> Result<(u32, u32), GetError> {
+        let (width, height) = image_dimensions(path).map_err(|e| unreadable(path, e))?;
+        if let Err(e) = &setting.options {
+            return Err(GetError::Workspace(e.clone()));
+        }
+        if width > MAX_JPEG_SIDE || height > MAX_JPEG_SIDE {
+            return Err(GetError::TooLarge {
+                path: path.to_path_buf(),
+                width,
+                height,
+            });
+        }
+        self.note_large_in_core(path, setting, width, height);
+        Ok((width, height))
+    }
+
+    /// Keep `path` as [`Self::large_photograph_without_mipmap_options`]'
+    /// answer when it is the first such photograph: `width` x `height` read
+    /// under `setting`.
+    fn note_large_in_core(&self, path: &Path, setting: &WorkspaceSetting, width: u32, height: u32) {
+        if setting.root.is_some()
+            && matches!(setting.options, Ok(None))
+            && width.max(height) > DEFAULT_OUT_OF_CORE_LONG_SIDE
+            && self.shared.large_in_core.get().is_none()
+        {
+            let _ = self.shared.large_in_core.set(path.to_path_buf());
+        }
+    }
+
     /// Tiles, file entries and bytes kept, the budget, the hit, miss and
     /// decode counters, the build budget and the bytes reserved on the build
     /// count.
@@ -1694,7 +1739,7 @@ impl PhotographCache {
 
     /// Decode `path` and cut its tiles, polling `progress` between the two:
     /// [`GetError::Cancelled`] when it was cancelled during the decode.
-    /// Reads the header first, refusing the photograph as [`header`] does
+    /// Reads the header first, refusing the photograph as [`Self::header`] does
     /// under `setting`, its workspace's, and, when `share` holds nothing,
     /// reserves the decode with [`Self::reserve_builds`] before reading the
     /// pixels.
@@ -1720,7 +1765,7 @@ impl PhotographCache {
         share: &mut Share<'r>,
         setting: &WorkspaceSetting,
     ) -> Result<CutImage, GetError> {
-        let (width, height) = header(path, setting)?;
+        let (width, height) = self.header(path, setting)?;
         if let Share::None = share {
             *share = Share::Own(self.reserve_builds(whole_decode_bytes(width, height), 1));
         }

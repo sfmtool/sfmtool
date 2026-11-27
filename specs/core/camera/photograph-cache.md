@@ -210,6 +210,14 @@ impl PhotographCache {
     /// and mipmaps-made counters, the build budget and the bytes reserved on
     /// the build count.
     pub fn stats(&self) -> PhotographCacheStats;
+
+    /// The first photograph whose header a read of the cache read (a layout
+    /// read, or the decode or build of a `get`, `get_many`, tile request or
+    /// `build_mipmaps`) with a side over `DEFAULT_OUT_OF_CORE_LONG_SIDE`
+    /// in a workspace whose file has no `mipmap_options`, kept for the
+    /// cache's life; reads nothing and takes no lock (§ "A changed file and
+    /// remembered failures").
+    pub fn large_photograph_without_mipmap_options(&self) -> Option<&Path>;
 }
 
 /// Decodes reserved on one cache's build count, each of the same estimated
@@ -798,6 +806,21 @@ answered as `PhotographReadError::Unreadable` naming the photograph. A
 photograph outside every workspace has no setting. The setting also decides
 which photographs are out of core, and so how each is read (§ "Out-of-core
 photographs"); a workspace without the object reads every photograph in core.
+The first photograph whose header the cache reads with a side over
+`DEFAULT_OUT_OF_CORE_LONG_SIDE` (1536) in such a workspace is noted. Every
+layout read (`request_layout`, `read_layout`) and every decode or build of
+`get`, `get_many`, the tile requests and `build_mipmaps` reads its header
+through one function, which takes the note, so a photograph decoded before
+any layout of it is asked for, as an open's render of the patch bitmaps
+decodes them, is found too; the header reads that only size a decode or
+check the mipmap of a photograph in a workspace with the object take none.
+`large_photograph_without_mipmap_options` answers it for the cache's life,
+`forget` and `clear` leaving it: a photograph a new workspace would read a
+tile at a time and this one decodes whole, which the viewer's notice is given
+for (§ "In the viewer"). A photograph outside every workspace
+is not one, since there is no workspace file to add the object to, and
+neither is one of a workspace whose object has a threshold that keeps it in
+core.
 
 ## Out-of-core photographs
 
@@ -1159,6 +1182,17 @@ reconstruction's photographs goes through it except the ones under
   names the file and the key; the other panels draw it as an unreadable
   photograph. Nothing else is asked for and nothing repaints while the file
   stays as it is.
+- **The notice that a workspace decodes large photographs whole.** Once a
+  frame, before the MCP drain, `AppState::give_photograph_tier_notice` in
+  [photograph_tier_notice.rs](../../../crates/sfm-explorer/src/state/photograph_tier_notice.rs)
+  asks `large_photograph_without_mipmap_options`, which reads nothing, and
+  the first time in the session it answers a photograph writes the viewer's
+  Action Log row saying so ([action-log.md](../../gui/action-log.md) §
+  "What gets logged"). The read that finds the photograph runs off the GUI
+  thread: an open's render of the patch bitmaps or its thumbnails, a
+  background step's `get_many`, or a panel's `request_layout` on the rayon
+  pool, so the notice is given at the open of such a file when the open
+  reads its photographs, and otherwise the first time a panel shows one.
 - **The image menu** asks only whether each photograph is decoded, with
   `keeps_every_tile`, and reads no pixel. The scene graph lays the menu out
   for every node on every frame, so the question allocates nothing and is no
@@ -1319,7 +1353,15 @@ reopening the same file reuses the pixels, and the budget bounds the memory
   answered before, its tiles dropped; and the workspace file read once for
   five photographs of one root, once more when it is written again with the
   same object, which decodes nothing again, and once more for another
-  object, under which every photograph is decoded again.
+  object, under which every photograph is decoded again; and
+  `large_photograph_without_mipmap_options` answering nothing after a layout
+  read of a photograph whose longer side is 1536 px, the first photograph
+  over it that `request_layout` reads in a workspace without the object,
+  still that one after `read_layout` of a second and a `clear`, the one a
+  `read_layout` reads in a cache of its own, and nothing for a photograph of
+  a workspace whose object keeps it in core or for one in no workspace; and
+  a `get`, and a `get_many` in a cache of its own, each noting the
+  photograph it decodes with no layout read.
 - [photograph_cache/mipmap_tests.rs](../../../crates/sfmtool-core/src/camera/photograph_cache/mipmap_tests.rs),
   on 300 x 200 synthetic JPEGs in a temporary workspace with a threshold of
   64 and tiles of 32, their mipmaps made with `build_mipmaps`: every tile,
