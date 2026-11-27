@@ -464,6 +464,11 @@ tree ([panel-layout.md](panel-layout.md) § "Home positions"). The singular
 it is refused with the unknown-panel message, which lists `background_tasks`
 ([panel-layout.md](panel-layout.md) § "Vocabulary").
 
+The panel shows the photograph cache's statistics (`PhotographCache::stats`,
+[core/camera/photograph-cache.md](../core/camera/photograph-cache.md)) in a
+tooltip, so its budgets can be tuned on real captures
+([drafts/photograph-cache-stats-tooltip-amendment.md](../drafts/photograph-cache-stats-tooltip-amendment.md)).
+
 ### A line per queue, and one phase list
 
 ```

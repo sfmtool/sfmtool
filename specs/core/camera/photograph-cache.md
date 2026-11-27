@@ -1660,6 +1660,4 @@ reopening the same file reuses the pixels, and the budget bounds the memory
 
 - Whether the budget should be a setting in the viewer's UI.
 - Whether the MCP surface should report the cache's `stats`, for example in
-  `get_scene`, beyond the phase notes, and whether the Background Tasks
-  panel should show them, for example in a tooltip, so the budgets can be
-  tuned on real captures.
+  `get_scene`, beyond the phase notes.
