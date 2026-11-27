@@ -4375,7 +4375,28 @@ in core. Step 17 turns the tier on.
       new workspace's object back as `NEW_WORKSPACE_MIPMAP_OPTIONS`; a
       workspace `sfm ws init` makes for each of the three tools has the
       object with 1536, 95 and 95, and the command prints it.
-    - **17b, `sfm ws mipmaps --enable`.** `sfm ws mipmaps --enable PATH`
+    - **17b, `sfm ws mipmaps --enable`.** **Built**
+      ([mipmap_options.rs](../../crates/sfmtool-core/src/workspace/mipmap_options.rs),
+      [ws.py](../../src/sfmtool/_commands/ws.py),
+      [_undistort_images.py](../../src/sfmtool/_undistort_images.py),
+      [ws-mipmaps-command.md § Turning the tier on](../cli/workspace/ws-mipmaps-command.md#turning-the-tier-on)),
+      as planned here, with these choices the plan left open. The object is
+      added as the file's last key by inserting its text before the closing
+      brace, so the rest of the file keeps its bytes, and a file
+      `json.dump(..., indent=2)` wrote reads as the one it would write with
+      the object last; it is written through a temporary file and a rename.
+      The values are checked by `parse_mipmap_options`, the reader's check
+      made public, which the binding calls on the Python integers before
+      converting them, so a quality of 300 gets the reader's message, not an
+      `OverflowError`. `WorkspaceConfigError` gains `MipmapOptionsPresent`
+      and `Version`: a file whose `version` is not 2 is refused, since the
+      object is a key of a version 2 file. `--enable` takes exactly one
+      `PATH`, and `--enable` with `--check` or `--prune`, or one of the
+      three values without `--enable`, is a usage error. `sfm undistort`
+      reads the source's object through a new binding,
+      `sfmtool.workspace.read_mipmap_options`, before any image is
+      undistorted. The plan as written:
+      `sfm ws mipmaps --enable PATH`
       adds the object to the workspace at or above `PATH`, with
       `--out-of-core-long-side`, `--jpeg-quality` and
       `--full-resolution-jpeg-quality` defaulting to

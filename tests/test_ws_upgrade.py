@@ -13,6 +13,7 @@ tests check what the command adds. Its refusal of a version 1 workspace is in
 `tests/test_version_1_workspace.py`.
 """
 
+import json
 import shutil
 from pathlib import Path
 
@@ -91,6 +92,28 @@ def test_run_asks_for_a_back_up_first_then_reports_each_file(workspace: Path):
     )
     assert lines[-1] == "Nothing to do: no file is left to convert."
     assert _snapshot(workspace) == before
+
+
+@pytest.mark.parametrize("with_the_object", [False, True])
+def test_the_upgrade_leaves_mipmap_options_as_it_finds_them(
+    tmp_path: Path, with_the_object: bool
+):
+    """A workspace file without `mipmap_options` is left without it, since
+    adding it changes which pixels are read, and one with it keeps it: the
+    file is not written."""
+    config = {"version": 2, "feature_tool": "sfmtool"}
+    if with_the_object:
+        config["mipmap_options"] = {
+            "out_of_core_long_side": 2048,
+            "jpeg_quality": 90,
+            "full_resolution_jpeg_quality": 98,
+        }
+    path = tmp_path / ".sfm-workspace.json"
+    path.write_text(json.dumps(config, indent=2))
+    before = path.read_bytes()
+    result = _upgrade(tmp_path)
+    assert result.exit_code == 0, result.output
+    assert path.read_bytes() == before
 
 
 def test_no_workspace_is_an_error(tmp_path: Path):

@@ -9,7 +9,8 @@
 //! [`feature_options`] holds the rules of the feature options a
 //! `.sfm-workspace.json` records: each feature tool's grey conversion and the
 //! name of the folder a new record's `.sift` files go in. [`mipmap_options`] reads and
-//! validates the file's `mipmap_options` object ([`read_mipmap_options`]).
+//! validates the file's `mipmap_options` object ([`read_mipmap_options`]),
+//! and adds one to a file that has none ([`enable_mipmap_options`]).
 //! [`find_workspace_for_path`], the
 //! upward search for `.sfm-workspace.json`, is `sfmtool-archive-io`'s, re-exported
 //! here; reading the rest of that file is the caller's (see `specs/workspace/workspace.md`).
@@ -36,7 +37,8 @@ pub use marker::{
     NEW_WORKSPACE_DOUBLE_IMAGE_BELOW_LONG_SIDE,
 };
 pub use mipmap_options::{
-    mipmap_options_json, read_mipmap_options, WorkspaceConfigError, NEW_WORKSPACE_MIPMAP_OPTIONS,
+    enable_mipmap_options, mipmap_options_json, parse_mipmap_options, read_mipmap_options,
+    InvalidMipmapOptions, WorkspaceConfigError, NEW_WORKSPACE_MIPMAP_OPTIONS,
 };
 pub use named_image_lists::{
     is_named_image_list_name, split_named_image_list_value, DuplicateMatch, NamedImageList,

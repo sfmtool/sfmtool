@@ -142,9 +142,12 @@ qualities, read and validated by `read_mipmap_options`
 optional: a file without it, such as one made before `sfm ws init` wrote it,
 decodes every photograph whole, and `sfm ws upgrade` leaves it absent, since
 adding it changes which pixels the kernels read for every photograph over
-the threshold. `sfm ws mipmaps --enable`, which adds it to an existing
-workspace, is planned in step 17b of
-[out-of-core-photograph-pyramid.md](../drafts/out-of-core-photograph-pyramid.md).
+the threshold. `sfm ws mipmaps --enable` adds it to an existing workspace,
+as the file's last key, keeping the rest of the file
+([ws-mipmaps-command.md § Turning the tier on](../cli/workspace/ws-mipmaps-command.md#turning-the-tier-on)),
+and `sfm undistort` copies the source workspace's object, when it has one,
+into the workspace it writes
+([undistort-command.md](../cli/image-processing/undistort-command.md#workspace-config-sfm-workspacejson)).
 The key needs no new version of the file: version 2 readers read it, and a
 reader that does not know it, as sfmtool 0.4.1's does not, reads every
 photograph whole, which misreads nothing the file holds.

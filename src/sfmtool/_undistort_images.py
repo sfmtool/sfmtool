@@ -9,7 +9,8 @@ For each image in a reconstruction, this module:
 2. Transforms .sift feature positions and affine shapes
 3. Remaps tracks (dropping features outside the pinhole frame)
 4. Assembles a new .sfmr reconstruction with pinhole cameras
-5. Writes a version 2 workspace config (.sfm-workspace.json)
+5. Writes a version 2 workspace config (.sfm-workspace.json), with the
+   source workspace's ``mipmap_options`` when it has one
 
 The workspace and the ``.sift`` files it writes are version 2. Their
 ``image_to_gray`` is the source's conversion, as its record states it
@@ -268,6 +269,7 @@ def undistort_reconstruction_images(
     from .sift import image_readings_from_rgb
     from .workspace import (
         feature_prefix_dir as named_feature_prefix_dir,
+        read_mipmap_options,
         recorded_image_to_gray,
     )
     from ._workspace import require_version_2_workspace
@@ -276,6 +278,9 @@ def undistort_reconstruction_images(
     # before any work.
     workspace_dir = Path(recon.workspace_dir)
     require_version_2_workspace(workspace_dir)
+    # The output workspace keeps the source's mipmap_options, or has none
+    # when the source has none; read, and checked, before any work.
+    mipmap_options = read_mipmap_options(workspace_dir)
 
     recon = materialize_infinity_for_export(recon, "Undistortion")
 
@@ -676,6 +681,8 @@ def undistort_reconstruction_images(
         "feature_options": undistort_feature_options,
         "feature_prefix_dir": feature_prefix_dir,
     }
+    if mipmap_options is not None:
+        workspace_config["mipmap_options"] = mipmap_options
 
     config_path = output_dir / ".sfm-workspace.json"
     with open(config_path, "w") as f:

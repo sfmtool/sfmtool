@@ -417,6 +417,38 @@ class TestUndistortWorkspace:
         # The workspace loads under the version 2 rules.
         assert load_workspace_config(output_dir) == config
 
+    def test_the_output_keeps_the_source_s_mipmap_options_or_has_none(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        """The output workspace's file has the source's `mipmap_options`,
+        unchanged and after `feature_prefix_dir`, and none when the source's
+        file has none. One image is undistorted each time."""
+        sfmr_path = seoul_bull_workspace
+        config_path = sfmr_path.parent / ".sfm-workspace.json"
+        config = json.loads(config_path.read_text())
+        # Values unlike those of a new workspace, which the fixture has.
+        options = {
+            "out_of_core_long_side": 2048,
+            "jpeg_quality": 90,
+            "full_resolution_jpeg_quality": 98,
+        }
+        config["mipmap_options"] = options
+        config_path.write_text(json.dumps(config))
+        _, output_dir, _, _ = _run_undistort(sfmr_path, tmp_path / "with", images=[0])
+        out_config = json.loads((output_dir / ".sfm-workspace.json").read_text())
+        assert list(out_config.items())[-2:] == [
+            ("feature_prefix_dir", out_config["feature_prefix_dir"]),
+            ("mipmap_options", options),
+        ]
+
+        del config["mipmap_options"]
+        config_path.write_text(json.dumps(config))
+        _, output_dir, _, _ = _run_undistort(
+            sfmr_path, tmp_path / "without", images=[0]
+        )
+        out_config = json.loads((output_dir / ".sfm-workspace.json").read_text())
+        assert "mipmap_options" not in out_config
+
     def test_reads_the_features_the_reconstruction_was_built_from(
         self, seoul_bull_workspace, tmp_path
     ):
