@@ -124,8 +124,8 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and nineteen tools. Twenty-five read -- twenty-four that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- eighty-six
+One hundred and twenty-one tools. Twenty-six read -- twenty-five that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- eighty-seven
 write, six send input, one writes a file, and one quits the viewer. `get_widgets`
 and the six input tools, `click`, `hover`, `drag`, `scroll`, `press_key` and
 `type_text`, read and press the viewer's widgets the way a person's eyes, mouse
@@ -230,11 +230,13 @@ Quit does (§ "`quit`").
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `put_measurement_on_bench` | write | Put a stored measurement on the bench and focus it, or focus the item already there |
-| `create_bench_measurement` | write | Start a new measurement item on the bench with endpoint A at a pixel of a camera image, and focus it |
+| `create_bench_measurement` | write | Start a new measurement item on the bench with endpoint A at a pixel of a camera image, and focus it, appending it as a new row in the same version while Auto-Commit is ticked |
+| `get_measurement_auto_commit` | read | Whether Measurement View's Auto-Commit is ticked, which commits each step on a measurement item with it |
+| `set_measurement_auto_commit` | write | Tick or clear Measurement View's Auto-Commit; a tick commits what the focused measurement item holds uncommitted |
 | `commit_bench_measurement` | write | Write a measurement item into the reconstruction, replacing its row or appending one |
-| `set_bench_measurement_label` | write | Set a measurement item's own label, as a bench step |
-| `set_bench_measurement_distance` | write | Set a measurement item's stated distance from a number with an optional unit, as a bench step |
-| `set_bench_measurement_endpoint` | write | Move one endpoint of a measurement item to a pixel of a camera image, as a bench step |
+| `set_bench_measurement_label` | write | Set a measurement item's own label, as a bench step, committed with it while Auto-Commit is ticked |
+| `set_bench_measurement_distance` | write | Set a measurement item's stated distance from a number with an optional unit, as a bench step, committed with it while Auto-Commit is ticked |
+| `set_bench_measurement_endpoint` | write | Move one endpoint of a measurement item to a pixel of a camera image, as a bench step, committed with it while Auto-Commit is ticked |
 | `fit_bench_track` | write | Localize, re-triangulate and re-render the bitmap of a bench track, then read it back, on a worker thread |
 | `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated from a row of fitted pieces along each axis, from the plane through a grid of fitted pieces, from one plane grown and fitted to the photographs, or from the optical flow between pairs of its views, keeping its centre, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
@@ -254,8 +256,8 @@ Quit does (§ "`quit`").
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
-Every tool is annotated: the twenty-four reads and `screenshot` carry
-`readOnlyHint: true`, the eighty-six writes `destructiveHint: false` (none of
+Every tool is annotated: the twenty-five reads and `screenshot` carry
+`readOnlyHint: true`, the eighty-seven writes `destructiveHint: false` (none of
 them deletes or overwrites a file the person made: `close_reconstruction`
 unloads, it does not delete; `set_window_layout` changes the window and the
 dock, not the layout file the menu saves; an **edit** makes a new version of a
@@ -5410,9 +5412,8 @@ outside `[0, width) x [0, height)` of the image, in the commit's sentence. The
 reply names the `item` and carries `camera_image` and `pixel`.
 `set_bench_measurement_label` takes `reconstruction_label`, `item` (the
 focused item where it names none) and `label`, and is Measurement View's label
-field: one bench version, `Set the label of distance #2 to "paw width"`,
-which leaves the reconstruction alone. The reply names the `item` and carries
-`measurement_label`. `set_bench_measurement_distance` takes
+field: one bench version, `Set the label of distance #2 to "paw width"`. The
+reply names the `item` and carries `measurement_label`. `set_bench_measurement_distance` takes
 `reconstruction_label`, `item` and `distance`, a string such as `"12in"` or
 `"30.48 cm"` or a JSON number, and is the stated distance field: the text is
 read by core's `parse_stated_distance`, a bare number in the reconstruction's
@@ -5429,7 +5430,7 @@ stated distance").
 `set_bench_measurement_endpoint` takes `reconstruction_label`, `item` (the
 focused item where it names none), `endpoint` (`a` or `b`), `camera_image`
 (an index or a name) and `pixel`, and moves that endpoint there in one bench
-version that leaves the reconstruction alone: `Moved endpoint A of distance #2
+version: `Moved endpoint A of distance #2
 to IMG_0004.jpg (412.3, 230.5)`, or `Set endpoint B of distance #2 to ...` for
 an endpoint not placed. Any pixel inside the image is taken, not only one
 `get_measurement_endpoint_views` offers, and no tool sets an endpoint's point,
@@ -5451,6 +5452,37 @@ a view-only bench the put is allowed and the commit refused. `get_bench`
 lists a measurement item with `kind: "measurement"`, its `measurement_kind`,
 its `origin` (`{ "measurement_index": n }` or null), its `label` and
 `counts.endpoints`, and `get_measurement` with `item` reads it whole.
+
+**The four steps follow Measurement View's Auto-Commit**
+([measurement-view.md](measurement-view.md) § "Auto-Commit"), which is ticked
+at launch. While it is ticked, `create_bench_measurement` and the three
+`set_bench_measurement_*` tools commit the item with the step, in the same
+version, as `commit_bench_measurement` would: one `Edit` version labelled with
+both, `Set the label of distance #2 to "paw width" and committed distance #2
+in dino`, or `Put distance from IMG_0042@142,198 on the bench and added
+distance #5 in dino`, so one `undo` takes back both. While it is clear they
+are bench versions that leave the reconstruction alone until
+`commit_bench_measurement`. Each reply carries `auto_commit`, the setting;
+`committed`, the row the item was committed under, as
+`commit_bench_measurement`'s `measurement` names it (`measurement_kind`,
+`measurement_index`, `replaced`), or `null` where the setting is clear or the
+step changed nothing; and, where the commit was refused and the step stands on
+the bench alone, `commit_refused`, the sentence. A step after which the row
+already holds the item answers `committed` with that row and no second
+version. The commit is refused while a camera model proposal is open on the
+node, which none of the four ends, unlike `commit_bench_measurement`.
+
+`get_measurement_auto_commit` reads the setting and `set_measurement_auto_commit
+{ "enabled": false }` sets it, as `get_timing_detail` and `set_timing_detail`
+do the Action Log's checkbox (§ "`get_timing_detail`, `set_timing_detail`").
+Both answer `{ "measurement_auto_commit": { "enabled": true } }`, and the set
+adds `committed`. Setting it is the checkbox's call
+(`AppState::set_measurement_auto_commit`): one `Display` row, `Auto-Commit on`
+or `Auto-Commit off`, only when the value changes; and a tick commits the
+focused measurement item at once where it holds what its row does not and its
+commit is not refused, writing that commit's own `Edit` row, whose row
+`committed` names, or `null` where nothing was committed. The setting lives for
+the session.
 
 **A `sift_files` node's bench is view-only.** `create_bench_track` puts a
 point on it and every read works, but every tool that edits an item, and
@@ -7324,7 +7356,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and nineteen tools**, twenty-five of them reads, six of the
+- **The catalog is one hundred and twenty-one tools**, twenty-six of them reads, six of the
   `Input` kind, one of the `Save` kind and one of the `Quit` kind, those eight
   carrying `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

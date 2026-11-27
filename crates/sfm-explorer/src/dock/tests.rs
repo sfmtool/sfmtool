@@ -542,6 +542,8 @@ fn the_measurement_header_fields_reach_their_steps() {
 fn a_switch_popup_row_reaches_its_step() {
     use crate::measurements::{EndpointSide, MeasurementRef};
     let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 1))
         .unwrap();
@@ -582,6 +584,8 @@ fn the_endpoint_fields_reach_their_step() {
     use crate::bench::measurement::EndpointSet;
     use crate::measurements::{EndpointSide, MeasurementRef};
     let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 0))
         .unwrap();

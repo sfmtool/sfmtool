@@ -1074,6 +1074,13 @@ impl TabContext<'_> {
                 self.state.action_log.fail(Kind::Bench, why);
             }
         }
+        // A tick commits what the focused item holds uncommitted, in its own
+        // row, or nothing where that commit is refused.
+        if let Some(on) = response.set_auto_commit {
+            if let Some(Err(why)) = self.state.set_measurement_auto_commit(on) {
+                self.state.action_log.fail(Kind::Edit, why);
+            }
+        }
         if let Some((id, label)) = response.commit {
             if let Err(why) = self.state.commit_bench_measurement(id, &label) {
                 self.state.action_log.fail(Kind::Edit, why);

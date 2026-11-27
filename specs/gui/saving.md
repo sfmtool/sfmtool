@@ -255,7 +255,9 @@ leaves the cursor off the disk version and the node clean all the same, because
 a save of any of them would write the same bytes and the bench is not written at
 all; each version records which version it shares its document half with, and
 that is what the two are compared by. A commit, the one bench step that writes
-the reconstruction, makes the node dirty like any other edit.
+the reconstruction, makes the node dirty like any other edit, and so does a
+measurement step that Measurement View's Auto-Commit commits in the same
+version.
 
 A node is **not** dirty until something is done to it: its disk serial starts
 on its first version, and a file nobody has touched, demo data included, is not

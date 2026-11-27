@@ -124,8 +124,9 @@ pub(crate) enum Kind {
     /// or renamed, and every step on one. See [`crate::bench`].
     ///
     /// A kind of its own rather than an [`Kind::Edit`] because nothing here
-    /// touches the file: the one bench step that does is the commit, and its
-    /// row is an `Edit` like any other.
+    /// touches the file: the bench step that does is the commit, and its row
+    /// is an `Edit` like any other, as is the row of a measurement step that
+    /// Auto-Commit commits with it.
     Bench,
     /// Where the 3D camera is looking.
     View,

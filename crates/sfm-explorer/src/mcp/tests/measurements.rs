@@ -399,6 +399,8 @@ fn a_track_tool_naming_a_measurement_says_what_it_is() {
 #[test]
 fn set_bench_measurement_label_sets_the_focused_item_s_label() {
     let (mut state, id, mut viewer) = measured();
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     call(
         &mut state,
         &mut viewer,
@@ -446,6 +448,8 @@ fn set_bench_measurement_label_sets_the_focused_item_s_label() {
 #[test]
 fn set_bench_measurement_distance_reads_text_and_numbers() {
     let (mut state, id, mut viewer) = measured();
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     call(
         &mut state,
         &mut viewer,
@@ -511,6 +515,8 @@ fn set_bench_measurement_distance_reads_text_and_numbers() {
 #[test]
 fn an_endpoint_switched_over_the_wire_lands_on_the_same_point() {
     let (mut state, id, mut viewer) = measured();
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     call(
         &mut state,
         &mut viewer,
@@ -717,6 +723,8 @@ fn get_point_reference_pixel_gives_the_pixel_the_point_menu_takes() {
 #[test]
 fn create_bench_measurement_starts_an_item_the_other_tools_finish() {
     let (mut state, id) = crate::measurements::fixture::measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     let mut viewer = Viewer3D::new();
     state.hide_panel(crate::dock::Tab::MeasurementView);
     let made = call(
@@ -995,5 +1003,158 @@ fn scaling_to_the_median_measurement_leaves_the_camera_and_the_transform_alone()
     assert_eq!(
         (&after.rotation, after.translation, after.scale),
         (&transform.rotation, transform.translation, transform.scale)
+    );
+}
+
+/// The step tools follow Measurement View's Auto-Commit, which
+/// `get_measurement_auto_commit` reads ticked at launch: ticked, a step and
+/// its commit are one version and the reply names the row; cleared through
+/// `set_measurement_auto_commit`, the step stays on the bench and the reply
+/// names none; ticked again, what the item holds is committed at once and the
+/// reply names that row.
+#[test]
+fn the_step_tools_follow_auto_commit() {
+    let (mut state, id, mut viewer) = measured();
+    let read = call(
+        &mut state,
+        &mut viewer,
+        "get_measurement_auto_commit",
+        json!({}),
+    );
+    assert_eq!(
+        read,
+        json!({ "measurement_auto_commit": { "enabled": true } })
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "put_measurement_on_bench",
+        json!({ "reconstruction_label": "measured", "measurement_index": 2 }),
+    );
+    let row = json!({
+        "measurement_kind": "distance",
+        "measurement_index": 2,
+        "replaced": true,
+    });
+    let set = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_label",
+        json!({ "reconstruction_label": "measured", "label": "paw width" }),
+    );
+    assert_eq!(set["auto_commit"], true, "{set}");
+    assert_eq!(set["committed"], row, "{set}");
+    assert!(set.get("commit_refused").is_none(), "{set}");
+    assert_eq!(
+        set["label"],
+        "Set the label of distance #2 to \"paw width\" and committed distance #2 in measured"
+    );
+    assert_eq!(
+        crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())[2]
+            .label,
+        "paw width"
+    );
+
+    let cleared = call(
+        &mut state,
+        &mut viewer,
+        "set_measurement_auto_commit",
+        json!({ "enabled": false }),
+    );
+    assert_eq!(
+        cleared,
+        json!({ "measurement_auto_commit": { "enabled": false }, "committed": null })
+    );
+    let set = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_distance",
+        json!({ "reconstruction_label": "measured", "distance": "42 cm" }),
+    );
+    assert_eq!(set["auto_commit"], false, "{set}");
+    assert_eq!(set["committed"], Value::Null, "{set}");
+    assert_eq!(
+        set["label"],
+        "Set the stated distance of distance #2 to 42 cm"
+    );
+
+    let ticked = call(
+        &mut state,
+        &mut viewer,
+        "set_measurement_auto_commit",
+        json!({ "enabled": true }),
+    );
+    assert_eq!(ticked["measurement_auto_commit"]["enabled"], true);
+    assert_eq!(ticked["committed"], row, "{ticked}");
+    let stored =
+        crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements());
+    assert_eq!(stored[2].stated, Some(42.0));
+
+    let moved = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_endpoint",
+        json!({
+            "reconstruction_label": "measured",
+            "endpoint": "b",
+            "camera_image": 1,
+            "pixel": [300.0, 200.5],
+        }),
+    );
+    assert_eq!(moved["committed"], row, "{moved}");
+}
+
+/// `create_bench_measurement` follows Auto-Commit too: ticked, the new item
+/// is appended as a row in the same version, which the reply names; with the
+/// commit refused, the reply says why and the item stays on the bench alone.
+#[test]
+fn create_bench_measurement_appends_its_row_or_says_why_not() {
+    let (mut state, id, mut viewer) = measured();
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_measurement",
+        json!({
+            "reconstruction_label": "measured",
+            "camera_image": 1,
+            "pixel": [141.6, 198.4],
+        }),
+    );
+    assert_eq!(made["auto_commit"], true, "{made}");
+    assert_eq!(
+        made["committed"],
+        json!({ "measurement_kind": "distance", "measurement_index": 5, "replaced": false }),
+        "{made}"
+    );
+    assert_eq!(
+        made["label"],
+        "Put distance from image_001@142,198 on the bench and added distance #5 in measured"
+    );
+
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    state.settle_camera_model_proposal_job();
+    let refused = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_measurement_distance",
+        json!({
+            "reconstruction_label": "measured",
+            "item": "distance from image_001@142,198",
+            "distance": "42 cm",
+        }),
+    );
+    assert_eq!(refused["changed"], true, "{refused}");
+    assert_eq!(refused["committed"], Value::Null, "{refused}");
+    assert_eq!(
+        refused["commit_refused"],
+        crate::camera_model_proposal::PROPOSAL_OPEN_HINT,
+        "{refused}"
+    );
+    assert_eq!(
+        crate::measurements::distance_rows(state.node(id).unwrap().edited().measurements())[5]
+            .stated,
+        None
     );
 }

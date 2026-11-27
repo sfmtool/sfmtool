@@ -367,6 +367,8 @@ fn ticking_the_edit_box_asks_to_edit_the_selected_measurement() {
 #[test]
 fn the_edited_mode_shows_the_item_s_live_readings() {
     let (mut state, id) = measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     state
         .put_measurement_on_bench(MeasurementRef::distance(id, 0))
         .unwrap();
@@ -1285,9 +1287,12 @@ fn the_endpoint_fields_are_greyed_while_a_step_would_be_refused() {
 #[test]
 fn a_new_measurement_says_how_to_finish_it() {
     let (mut state, id) = measured_state(Some("m"));
+    // Auto-Commit cleared: each step stays on the bench until a commit.
+    state.measurement_auto_commit = false;
     let label = state
         .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
-        .unwrap();
+        .unwrap()
+        .label;
     let (mut panel, ctx) = settled(&state);
     let texts = painted(&mut panel, &ctx, &state);
     let instruction = place_instruction(EndpointSide::B);
@@ -1398,7 +1403,8 @@ fn a_field_takes_typing_while_the_window_lacks_focus() {
     let (mut state, id) = measured_state(Some("m"));
     let label = state
         .start_measurement(ImageRef::new(id, 0), [100.0, 50.0])
-        .unwrap();
+        .unwrap()
+        .label;
     let (mut panel, ctx) = settled(&state);
     let unfocused = |panel: &mut MeasurementView, events: Vec<egui::Event>| {
         let mut response = None;
@@ -1538,4 +1544,76 @@ fn the_panel_and_the_drawing_share_one_item_reading() {
     state.measurement_layer(false);
     run_frame(&mut panel, &ctx, &state, Vec::new());
     assert_eq!(state.scene[0].item_resolutions(), 2);
+}
+
+// ── Auto-Commit ──────────────────────────────────────────────────────────
+
+/// With Auto-Commit ticked, as it is at launch, the toolbar draws the box,
+/// *Discard* and *Rename*, and no *Commit* while the item's row holds it; a
+/// click on the box asks for it to be cleared, and with it cleared *Commit* is
+/// back.
+#[test]
+fn auto_commit_hides_commit_while_the_row_holds_the_item() {
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 0))
+        .unwrap();
+    let (mut panel, ctx) = settled(&state);
+    let toolbar: Vec<&str> = panel.toolbar().iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(toolbar, ["Discard", "Rename"]);
+    assert_eq!(panel.refusal_line(), None);
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == crate::bench::measurement::AUTO_COMMIT_LABEL),
+        "{texts:?}"
+    );
+    let at = panel.auto_commit_box().expect("the box was drawn").center();
+    let responses = clicks(
+        &mut panel,
+        &ctx,
+        &state,
+        at,
+        egui::PointerButton::Primary,
+        1,
+    );
+    assert!(
+        responses.iter().any(|r| r.set_auto_commit == Some(false)),
+        "the box was not cleared"
+    );
+
+    state.set_measurement_auto_commit(false);
+    let (panel, _ctx) = settled(&state);
+    let toolbar: Vec<&str> = panel.toolbar().iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(toolbar, ["Commit", "Discard", "Rename"]);
+}
+
+/// With Auto-Commit ticked and a step's commit refused, the panel shows
+/// *Commit* greyed with the refusal, and the line under the toolbar says it.
+#[test]
+fn a_refused_auto_commit_shows_its_refusal_under_the_toolbar() {
+    use crate::camera_model_proposal::PROPOSAL_OPEN_HINT;
+    let (mut state, id) = measured_state(Some("m"));
+    state
+        .put_measurement_on_bench(MeasurementRef::distance(id, 2))
+        .unwrap();
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    state.settle_camera_model_proposal_job();
+    state.focus_bench_item(id, "distance #2").unwrap();
+    state
+        .set_bench_measurement_label(id, "distance #2", "paw width")
+        .unwrap();
+    assert!(state.camera_model_proposal_on(id).is_some());
+    let (mut panel, ctx) = settled(&state);
+    let line = format!("Not committed: {PROPOSAL_OPEN_HINT}");
+    assert_eq!(panel.refusal_line(), Some(line.as_str()));
+    assert_eq!(
+        panel.toolbar()[0],
+        ("Commit".to_string(), Some(PROPOSAL_OPEN_HINT.to_string()))
+    );
+    let texts = painted(&mut panel, &ctx, &state);
+    assert!(texts.contains(&line), "{texts:?}");
 }

@@ -17,7 +17,9 @@ endpoint comes from
 A measurement is edited on the bench, as a track is ([bench.md](bench.md)): a
 double-click on its row puts it on the bench as an item and focuses it, the
 panel's **Edit** box shows that item with its readings taken live from it, and
-*Commit* writes it back into the file in one step. The edited mode's header
+*Commit* writes it back into the file in one step. While the toolbar's
+**Auto-Commit** is ticked, as it is at launch, each step is committed with it
+instead, in the same version (§ "Auto-Commit"). The edited mode's header
 sets the item's label and its stated distance, and each endpoint block sets
 its endpoint's image and pixel in fields or switches it to another photograph
 that shows the same place. Image Detail's context menu and the 3D view's point
@@ -90,9 +92,10 @@ impl AppState {
     pub(crate) fn put_measurement_on_bench(&mut self, measurement: MeasurementRef)
         -> Result<PutMeasurement, String>;
     /// A new item with endpoint A at `pixel` of `image`, focused
-    /// (§ "Creating a measurement"); its label comes back.
+    /// (§ "Creating a measurement"); its label, and what became of the commit
+    /// Auto-Commit makes with it, come back.
     pub(crate) fn start_measurement(&mut self, image: ImageRef, pixel: [f64; 2])
-        -> Result<String, String>;
+        -> Result<MeasurementStarted, String>;
     /// Image Detail's New Measurement from Here: the start, then Measurement
     /// View raised beside `from`; a refusal one failed row.
     pub(crate) fn start_measurement_here(&mut self, image: ImageRef, pixel: [f64; 2],
@@ -105,9 +108,17 @@ impl AppState {
         -> Result<(), String>;
     pub(crate) fn commit_bench_measurement(&mut self, id: ReconId, label: &str)
         -> Result<MeasurementCommitted, String>;
+    /// The toolbar's Auto-Commit box, and the wire's
+    /// set_measurement_auto_commit (§ "Auto-Commit"): a tick's commit comes
+    /// back.
+    pub(crate) fn set_measurement_auto_commit(&mut self, on: bool)
+        -> Option<Result<MeasurementCommitted, String>>;
+    /// Whether the item holds what its row does not: what shows Commit while
+    /// Auto-Commit is ticked.
+    pub(crate) fn measurement_uncommitted(&self, id: ReconId, label: &str) -> bool;
     /// The header's fields (§ "The label and the stated distance").
     pub(crate) fn set_bench_measurement_label(&mut self, id: ReconId, label: &str,
-                                              to: &str) -> Result<bool, String>;
+                                              to: &str) -> Result<MeasurementStep, String>;
     pub(crate) fn set_bench_measurement_distance(&mut self, id: ReconId, label: &str,
                                                  text: &str)
         -> Result<StatedDistanceSet, String>;
@@ -118,7 +129,7 @@ impl AppState {
     pub(crate) fn set_bench_measurement_endpoint(&mut self, id: ReconId, label: &str,
                                                  side: EndpointSide, image: u32,
                                                  pixel: [f64; 2], how: EndpointMove)
-        -> Result<bool, String>;
+        -> Result<MeasurementStep, String>;
     /// The fields and Image Detail's Set Endpoint … Here: the step with
     /// `EndpointMove::Set`, a refusal one failed row.
     pub(crate) fn set_endpoint(&mut self, set: &EndpointSet);
@@ -163,7 +174,20 @@ pub(crate) fn texel_under_ray(patch_frame: &OrientedPatch, origin: Point3<f64>,
                               direction: Vector3<f64>, surfel_scale: f64)
     -> Option<[f64; 2]>;
 
+// on AppState: Measurement View's Auto-Commit, ticked at launch
+pub(crate) measurement_auto_commit: bool,
+
 // bench/measurement.rs
+/// What became of the commit Auto-Commit makes with a step (§ "Auto-Commit").
+pub(crate) enum AutoCommit {
+    NotAsked,                         // the box clear, or the step pushed no version
+    Committed(MeasurementCommitted),  // the row the item was committed under
+    Refused(String),                  // the step stands on the bench alone
+}
+/// What a step on a measurement item left; `StatedDistanceSet` carries the
+/// same `commit` beside the distance it set.
+pub(crate) struct MeasurementStep { pub(crate) changed: bool, pub(crate) commit: AutoCommit }
+pub(crate) struct MeasurementStarted { pub(crate) label: String, pub(crate) commit: AutoCommit }
 /// What a gesture that sets an endpoint outright asks for.
 pub(crate) struct EndpointSet {
     pub(crate) node: ReconId,
@@ -647,11 +671,16 @@ selecting any other measurement, or anything on another node, unfocuses it
 
 With the box ticked the panel shows the focused item:
 
-- **The toolbar**: *Commit* (§ "The commit"), greyed with the refusal the step
-  would give; *Discard*, which takes the item off the bench in one version;
+- **The toolbar**: the **Auto-Commit** checkbox (§ "Auto-Commit"); *Commit*
+  (§ "The commit"), greyed with the refusal the step would give, and, while
+  Auto-Commit is ticked, shown only where the item holds what its stored row
+  does not; *Discard*, which takes the item off the bench in one version;
   and *Rename*, which opens a field in place and commits on Enter or *Set*, as
   Track View's do. *Discard* and *Rename* are greyed only while a background
-  task holds the node.
+  task holds the node. While Auto-Commit is ticked and the item holds what its
+  row does not because its commit is refused, a line under the toolbar says
+  so in the error colour: `Not committed: Apply or cancel the camera model
+  proposal first.`
 - **The header**: the item's label on the bench and its node; where it came
   from, `From Distance #2: Commit replaces it`, or `From no stored row: Commit
   adds it as a new row` where its origin resolves to none; the measurement's
@@ -693,9 +722,10 @@ from one `EditableMeasurement` to the next
 ([core/bench/editable-measurement.md](../core/bench/editable-measurement.md) §
 "The label and the stated distance"), which replaces the item's `Arc` under
 the same `ItemId`: one version through `History::push_bench`, listed in the
-Edit History and undone by `Ctrl+Z`, with one `Bench` row. Neither changes the
-reconstruction or marks the node dirty; the stored row changes only when the
-item is committed.
+Edit History and undone by `Ctrl+Z`, with one `Bench` row. With Auto-Commit
+clear, neither changes the reconstruction or marks the node dirty, and the
+stored row changes only when the item is committed; with it ticked, the item
+is committed in the same version (§ "Auto-Commit").
 
 | Step | Label in the Edit History |
 |---|---|
@@ -780,7 +810,9 @@ step's words.
 "Setting an endpoint"): one version through `History::push_bench`, which
 replaces the item's `Arc` under the same `ItemId`, listed in the Edit History
 and undone by `Ctrl+Z`, with one `Bench` row, leaving the reconstruction alone
-and the node clean. It sets the image and the pixel only; the point and the
+and the node clean while Auto-Commit is clear, and committing the item in the
+same version while it is ticked (§ "Auto-Commit"). It sets the image and the
+pixel only; the point and the
 texel the endpoint resolves to there are the row's, unless the row is marked.
 
 | Step | Label in the Edit History |
@@ -976,6 +1008,93 @@ endpoint's image past the image set or its pixel outside its image
 commit, since the file stores them as absent, and an endpoint the resolver
 refuses does not either, since the pixel is what the file stores.
 
+### Auto-Commit
+
+A person who changes a measurement wants the file to hold the change, and a
+separate *Commit* after each step is a click that says nothing new. So the
+toolbar's **Auto-Commit** checkbox, ticked at launch, commits the item with
+each step on it. It is one setting for the viewer,
+`AppState::measurement_auto_commit`, kept for the session only, as the other
+panels' checkboxes are (Image Detail's and the 3D view's *Show all
+measurements*, the Action Log's *Detailed timing*, Track View's *Lock*), and
+held on `AppState` rather than in the panel because the wire's steps follow
+it too (§ "MCP"). Changing it writes one `Display` row, `Auto-Commit on` or
+`Auto-Commit off`, and is no step: it pushes no version.
+
+**The steps it commits** are every step that changes what the item would
+store: setting the label and the stated distance (the header's fields);
+setting an endpoint's image and pixel (the block's drop-down and pixel fields,
+*Set Endpoint A Here* and *Set Endpoint B Here* in Image Detail's menu and the
+3D view's point menu, and a handle drag in Image Detail); *Switch image…*;
+and starting a measurement with *New Measurement from Here*, whose commit
+appends the new row at once (§ "Creating a measurement"). Each goes through
+the one call that pushes a measurement step's version, so the gestures and
+the wire's tools (`set_bench_measurement_label`,
+`set_bench_measurement_distance`, `set_bench_measurement_endpoint`,
+`create_bench_measurement`) cannot differ. *Rename*, *Discard*, putting a
+measurement on the bench and focusing an item change nothing the row holds,
+and are not followed by a commit. Nor is *Duplicate*: the copy has no origin,
+so its commit would store the same measurement twice. Track items have no
+Auto-Commit.
+
+**A step and its commit are one version.** The item as the step leaves it is
+committed by core's `commit_measurement`, as *Commit* commits it, and the
+step's bench and the commit's value are pushed together through
+`History::push_pair`, the version *Commit* itself pushes, so `History` needs
+nothing new. A person made one change, so one `Ctrl+Z` takes back both the
+step on the bench and the row, and a redo puts back both. The version has one
+`Edit` row and the node is marked dirty. Its label is the step's followed by
+the commit's:
+
+| Step, with Auto-Commit ticked | Label in the Edit History and the Action Log |
+|---|---|
+| Set the label | `Set the label of distance #2 to "paw width" and committed distance #2 in dino` |
+| Set the stated distance | `Set the stated distance of distance #2 to 4.2 cm and committed distance #2 in dino` |
+| Set an endpoint | `Moved endpoint A of distance #2 to IMG_0004.jpg (412.3, 230.5) and committed distance #2 in dino` |
+| Switch an endpoint's image | `Moved endpoint A of distance #2 from IMG_0004.jpg to IMG_0011.jpg and committed distance #2 in dino` |
+| Start a measurement | `Put distance from IMG_0042@142,198 on the bench and added distance #5 in dino` |
+| Any step on an item whose row was deleted | `Set the stated distance of distance #2 to 4.2 cm and added distance #4 in dino` |
+
+The item's origin is re-seated on the row written, at the version the commit
+was computed from, and the row is selected, as after *Commit*. A step that
+pushes no version (the no-effect row) commits nothing. A step that brings the
+item back to exactly what its row holds is pushed alone, as a bench version,
+since the commit would write nothing.
+
+**A refused commit leaves the step on the bench.** Busy and view-only nodes
+refuse the step itself, and core's refusals do not follow an allowed step on
+an item put on from a stored row or started in the viewer: the label step
+refuses an empty label, the endpoint steps and the start refuse an image past
+the image set and a pixel outside the image, and a row read from a file holds
+neither, since the format refuses both. What is left is a camera model
+proposal open on the node, which refuses a commit but no bench step. Then the
+step is pushed alone, a bench version with its `Bench` row, and the panel
+shows *Commit* greyed with the refusal and the line under the toolbar, `Not
+committed: Apply or cancel the camera model proposal first.` Once the
+proposal is applied or cancelled the line goes and *Commit* is enabled; a
+click on it, or the next step, commits the item.
+
+**While Auto-Commit is ticked, *Commit* is shown only where the item holds
+what its row does not** (`AppState::measurement_uncommitted`, which asks
+core's `commit_measurement` whether it would write): after a refused commit,
+after the stored row is deleted, after an undo back across a commit made with
+the box clear, and after an image delete drops the row. Elsewhere it is
+hidden, since it would do nothing. *Discard* and *Rename* stay.
+
+**Ticking the box commits what the focused item holds uncommitted**, at once,
+in its own version (`Committed distance #2 in dino`), as a click on *Commit*
+would, so that a ticked box means the row holds what the panel shows. Where
+that commit would be refused, nothing is committed and the line says why.
+Clearing the box commits nothing: steps then stay on the bench until *Commit*,
+as with no Auto-Commit at all.
+
+**Undo, Discard and Delete stay as they were.** An undo of a step's version
+takes back the item and the row together. *Discard* takes the item off the
+bench in a bench version and leaves the committed row. Deleting the stored
+row is a direct edit that leaves the item with no row (§ "Deleting a
+measurement"); *Commit* is then shown, and it or the item's next step adds
+the row back as a new one, as committing an item with no origin does.
+
 ## Creating a measurement
 
 A new measurement is started where its first endpoint is named, in the two
@@ -998,9 +1117,14 @@ bench`), puts a new measurement item on the node's bench with endpoint A at
 that pixel and nothing else (`AppState::start_measurement`, which calls core's
 `start_measurement`), focuses it, and raises Measurement View beside the panel
 the gesture was made in, through `show_panel_beside` (G9): where Measurement
-View is a tab behind that panel, it stays behind. The item has no origin, so
-focusing it clears the selected measurement, and the header says `From no
-stored row: Commit adds it as a new row`. Its bench label is minted in core
+View is a tab behind that panel, it stays behind. With Auto-Commit ticked, the
+same version appends the item as a new row, with endpoint B and the stated
+distance absent (`Put distance from IMG_0042@142,198 on the bench and added
+distance #5 in dino`, one `Edit` row), which its origin then names and which
+is selected; the header says `From Distance #5: Commit replaces it`. With the
+box clear, the item has no origin, so focusing it clears the selected
+measurement, and the header says `From no stored row: Commit adds it as a new
+row`. Its bench label is minted in core
 from where it started, the image stem and the rounded pixel after `distance
 from `, `distance from IMG_0042@142,198`, with the bench's collision suffix
 (`distance from IMG_0042@142,198 (2)`) where another item holds that
@@ -1028,12 +1152,14 @@ says what the step would.
 mode"), and *Set Endpoint B Here* in either menu places it (`Set endpoint B of
 distance from IMG_0042@142,198 to IMG_0050.jpg (88.0, 301.5)`). The stated
 distance and the label are typed into the header's fields. Each is a bench
-step, so a mistake is undone like any other, and a half-made measurement waits
-on the bench, in the Scene tree's Bench Measurements group, until it is
-finished or discarded. *Commit* is not greyed for what is missing: it appends
-the measurement as a new row (`Added distance #5 in dino`) with endpoint B and
-the stated distance absent where they are not given yet, as it does for any
-item whose origin resolves to none (§ "The commit"). With both endpoints
+step, so a mistake is undone like any other. With Auto-Commit ticked, each is
+committed into the new row as it is made. With the box clear, a half-made
+measurement waits on the bench, in the Scene tree's Bench Measurements group,
+until it is finished or discarded, and *Commit* is not greyed for what is
+missing: it appends the measurement as a new row (`Added distance #5 in
+dino`) with endpoint B and the stated distance absent where they are not given
+yet, as it does for any item whose origin resolves to none (§ "The commit").
+With both endpoints
 placed and no stated distance the item reads the reconstruction's distance,
 a ruler's reading.
 
@@ -1046,7 +1172,8 @@ dino`), one `Edit` row, the node marked dirty. The rows after it move down by
 one; the selected measurement follows, and every measurement item's origin
 follows through the version graph. An item whose origin was the deleted row
 stays on the bench with no row to replace, so committing it adds the
-measurement back as a new row.
+measurement back as a new row; with Auto-Commit ticked, *Commit* is shown for
+it, and its next step adds the row back too (§ "Auto-Commit").
 
 ## Drawing measurements
 
@@ -1222,6 +1349,12 @@ The panel's content is reachable over MCP ([mcp-server.md](mcp-server.md)):
   `set_bench_measurement_distance` are the header's two fields, and
   `commit_bench_measurement` is *Commit*, each on the item named or the focused
   one; `delete_measurement` is *Delete*.
+- `get_measurement_auto_commit` and `set_measurement_auto_commit` read and set
+  *Auto-Commit*, the set through the checkbox's own call, so a tick commits
+  what the focused item holds uncommitted. `create_bench_measurement` and the
+  three `set_bench_measurement_*` tools follow it, and each reply carries
+  `auto_commit`, `committed` (the row the item was committed under, or null)
+  and, where the commit was refused, `commit_refused` (§ "Auto-Commit").
 - `get_measurement_endpoint_views` gives the offers of an endpoint's *Switch
   image…* popup, refused in the button's words, and
   `set_bench_measurement_endpoint` moves an endpoint to any pixel inside an
@@ -1487,18 +1620,41 @@ at-infinity case is covered by the Rust tests.
   spot's pixel resolving to its point at its texel, and the reference pixel
   where the texel's place is off the reference image, on a square facing away
   from its camera, and outside the square, with the three refusals kept.
+- **Auto-Commit** (`bench/measurement/tests.rs`): the box ticked at launch;
+  with it ticked, the label, the stated distance and an endpoint each
+  committed with the step as one version labelled with both, one `Edit` row,
+  the node dirty and the row selected, one undo taking back the item and the
+  row together and a redo putting back both; *New Measurement from Here*
+  appending its row in the same version, which the next step replaces, and its
+  undo; with it cleared, a step a bench version with its `Bench` row and the
+  node clean; a tick writing its `Display` row and committing what the item
+  holds, the same value writing none, and a tick over an item its row holds
+  committing nothing; a commit refused by an open camera model proposal
+  leaving the step on the bench alone, a step that brings the item back to its
+  row then pushed alone and naming the row, and the next step committing once
+  the proposal is cancelled; and a step adding a deleted row back, then a discard
+  leaving it. (`measurement_view/tests.rs`): the toolbar with the box ticked
+  and no *Commit* while the row holds the item, a click on the box asking to
+  clear it, *Commit* back with it cleared, and a refused commit's greyed
+  *Commit* and line. (`mcp/tests/measurements.rs`):
+  `get_measurement_auto_commit` reading it ticked, the step tools'
+  `auto_commit` and `committed` ticked and cleared, `set_measurement_auto_commit`
+  committing what the item holds on a tick, `create_bench_measurement`'s
+  appended row, and `commit_refused` under an open proposal.
 - **`ui_basic`**: the panel opens from the Panels menu; a double-click on a
   Measurements row puts the measurement on the bench and raises Measurement
-  View on the item, with its image drop-down and pixel fields, and after its
-  row is deleted a click on *Commit* adds it back as a new row, on a measured
-  copy of the seoul bull ground truth; an endpoint switched to another
-  photograph through *Switch image…* and its popup, then committed into its
-  row; *Set Endpoint B Here* chosen from a right-click on the photograph in
-  Image Detail, moving endpoint B to that photograph at the pixel clicked; and
-  a measurement made from Image Detail's menu, *New Measurement from Here*
-  raising Measurement View on an item whose block for B says how to place it,
-  *Set Endpoint B Here* on another photograph, a distance typed into its field
-  and Enter, and *Commit* adding a third row.
+  View on the item, with *Auto-Commit* ticked, no *Commit*, and its image
+  drop-down and pixel fields, and after its row is deleted *Commit* is offered
+  and a click on it adds it back as a new row, on a measured copy of the seoul
+  bull ground truth; an endpoint switched to another photograph through
+  *Switch image…* and its popup, committed into its row in the same version;
+  *Set Endpoint B Here* chosen from a right-click on the photograph in Image
+  Detail, moving endpoint B of the item and its row to that photograph at the
+  pixel clicked; and a measurement made from Image Detail's menu, *New
+  Measurement from Here* adding a third row and raising Measurement View on an
+  item whose block for B says how to place it, *Set Endpoint B Here* on
+  another photograph, and a distance typed into its field and Enter, each
+  written into that row.
 - **Drawing** (`measurement_marks/tests.rs`): with the option off only the
   selected measurement, with it on every one, the selected one wider and the
   others dimmer; a hidden reconstruction none either way, and the focused item

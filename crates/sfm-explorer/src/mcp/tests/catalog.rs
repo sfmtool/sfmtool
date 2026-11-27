@@ -205,6 +205,8 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
                 "pixel": [12.5, 40.0],
             }),
         ),
+        ("get_measurement_auto_commit", json!({})),
+        ("set_measurement_auto_commit", json!({ "enabled": false })),
         (
             "commit_bench_measurement",
             json!({ "reconstruction_label": "alpha" }),
@@ -1344,21 +1346,22 @@ fn only_the_reads_are_annotated_read_only() {
             "get_reconstruction_history",
             "get_bench",
             "get_bench_track",
+            "get_measurement_auto_commit",
             "get_background_tasks",
             "screenshot",
             "get_widgets",
         ]
     );
-    // Twenty-four JSON reads, the one read that hands back a picture,
-    // eighty-six writes, six input tools, the one that writes a file, and the
-    // one that quits.
-    assert_eq!(catalog.len(), 119, "the catalog has grown or shrunk");
+    // Twenty-five JSON reads, the one read that hands back a picture,
+    // eighty-seven writes, six input tools, the one that writes a file, and
+    // the one that quits.
+    assert_eq!(catalog.len(), 121, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        86
+        87
     );
     // One tool can overwrite a file by name, six can press what a person can
     // press, File ▸ Save included, and one ends the viewer, losing what is not
@@ -1595,7 +1598,7 @@ fn spelled(n: usize) -> String {
         20..=99 if n.is_multiple_of(10) => TENS[n / 10].to_string(),
         20..=99 => format!("{}-{}", TENS[n / 10], UNITS[n % 10]),
         100 => "one hundred".to_string(),
-        101..=119 => format!("one hundred and {}", UNITS[n - 100]),
+        101..=199 => format!("one hundred and {}", spelled(n - 100)),
         _ => panic!("no word for {n}: the spec would not spell it out either"),
     }
 }

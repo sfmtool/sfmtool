@@ -126,6 +126,8 @@ impl Command {
             Command::CommitBenchTrack { .. } => "commit_bench_track",
             Command::PutMeasurementOnBench { .. } => "put_measurement_on_bench",
             Command::CreateBenchMeasurement { .. } => "create_bench_measurement",
+            Command::GetMeasurementAutoCommit => "get_measurement_auto_commit",
+            Command::SetMeasurementAutoCommit { .. } => "set_measurement_auto_commit",
             Command::CommitBenchMeasurement { .. } => "commit_bench_measurement",
             Command::SetBenchMeasurementLabel { .. } => "set_bench_measurement_label",
             Command::SetBenchMeasurementDistance { .. } => "set_bench_measurement_distance",
@@ -412,6 +414,7 @@ impl Command {
             | Command::GetViewer3dDisplay
             | Command::GetTrackTableQuery
             | Command::GetTimingDetail
+            | Command::GetMeasurementAutoCommit
             | Command::GetReconstructionHistory { .. }
             | Command::GetBackgroundTasks { .. }
             | Command::GetBench { .. }
@@ -523,7 +526,10 @@ impl Command {
             | Command::SetImageDetailView { .. }
             | Command::SetViewer3dDisplay { .. }
             | Command::SetTrackTableQuery { .. }
-            | Command::SetTimingDetail { .. } => Kind::Display,
+            | Command::SetTimingDetail { .. }
+            // The checkbox's own row is a `Display` row, as Detailed timing's
+            // is; a commit its tick makes writes its own `Edit` row.
+            | Command::SetMeasurementAutoCommit { .. } => Kind::Display,
             // A proposal is viewer state, as a camera held in hand is; its
             // rows are `View` rows until Apply writes an `Edit`.
             Command::SetView { .. }
@@ -655,6 +661,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
         Command::GetViewer3dDisplay => "get_viewer_3d_display".to_string(),
         Command::GetTrackTableQuery => "get_track_table_query".to_string(),
         Command::GetTimingDetail => "get_timing_detail".to_string(),
+        Command::GetMeasurementAutoCommit => "get_measurement_auto_commit".to_string(),
         Command::GetReconstructionHistory {
             reconstruction_label,
         } => format!("get_reconstruction_history {reconstruction_label}"),

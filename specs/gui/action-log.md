@@ -476,8 +476,9 @@ pub(crate) enum Kind {
     /// `specs/gui/document-model.md`.
     Edit,
     /// A step on the bench beside a reconstruction. A kind of its own because
-    /// nothing here touches the file: the one bench step that does is the
-    /// commit, whose row is an `Edit`. See `specs/gui/bench.md`.
+    /// nothing here touches the file: the bench step that does is the
+    /// commit, whose row is an `Edit`, as is the row of a measurement step
+    /// that Auto-Commit commits with it. See `specs/gui/bench.md`.
     Bench,
     Selection,
     View,

@@ -435,6 +435,11 @@ pub(crate) fn parse(
             camera_image: args.camera_image("camera_image")?,
             pixel: args.required_pixel_f64("pixel")?,
         },
+        "get_measurement_auto_commit" => Command::GetMeasurementAutoCommit,
+        // Required rather than a toggle, as `set_timing_detail` takes it.
+        "set_measurement_auto_commit" => Command::SetMeasurementAutoCommit {
+            enabled: args.required_bool("enabled")?,
+        },
         "commit_bench_measurement" => Command::CommitBenchMeasurement {
             reconstruction_label: args.required_string("reconstruction_label")?,
             item: args.optional_string("item")?,
